@@ -12,7 +12,7 @@ import LinearGradient from 'react-native-linear-gradient';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { FeatureCard } from '../components';
 import { RootStackParamList } from '../navigation/types';
-import { usePinpointer } from '../hooks/usePinpointer';
+import { usePinpointerShared } from '../hooks/PinpointerContext';
 
 type HomeScreenProps = {
   navigation: StackNavigationProp<RootStackParamList, 'Home'>;
@@ -29,7 +29,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation, onCloseDrawe
     totalImages,
     docSyncCount,
     totalDocs,
-  } = usePinpointer();
+  } = usePinpointerShared();
 
   // --- Loading UI Animations ---
   const syncProgress = useRef(new Animated.Value(0)).current;
@@ -109,17 +109,6 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ navigation, onCloseDrawe
                 iconStyle={{ includeFontPadding: false, transform: [{ translateY: -3 }] }}
                 style={{ flex: 1 }}
                 onPress={() => { if (onCloseDrawer) onCloseDrawer(); navigation.navigate('SmartClipboard'); }}
-              />
-            </View>
-            <View style={{ flex: 1, marginLeft: 6 }}>
-              <FeatureCard
-                title="Read Aloud"
-                subtitle="Text to Speech"
-                icon="☊"
-                iconSize={32}
-                iconStyle={{ includeFontPadding: false, transform: [{ translateY: -3 }] }}
-                style={{ flex: 1 }}
-                onPress={() => { if (onCloseDrawer) onCloseDrawer(); navigation.navigate('TextToSpeech'); }}
               />
             </View>
           </View>

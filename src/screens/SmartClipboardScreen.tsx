@@ -14,11 +14,9 @@ import {
     Vibration,
     Platform,
     Modal,
-    NativeModules,
 } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
-import RNFS from 'react-native-fs';
-import { RunAnywhere } from '@runanywhere/core';
+
 import { launchCamera, launchImageLibrary } from 'react-native-image-picker';
 import Svg, { Path, Rect, Circle } from 'react-native-svg';
 import { AppColors } from '../theme';
@@ -28,8 +26,6 @@ import { indexDocument } from '../Database';
 import Clipboard from '@react-native-clipboard/clipboard';
 import { RouteProp, useRoute, useNavigation } from '@react-navigation/native';
 import { RootStackParamList } from '../navigation/types';
-
-const { NativeAudioModule } = NativeModules;
 
 // ─── Clipboard Icon Component ────────────────────────────────────────────────
 const ClipboardIcon: React.FC<{ size?: number; color?: string }> = ({
@@ -43,36 +39,6 @@ const ClipboardIcon: React.FC<{ size?: number; color?: string }> = ({
     </Svg>
 );
 
-// ─── Modern Speaker Icon (SVG) ───────────────────────────────────────────────
-const SpeakerIconSVG: React.FC<{ size?: number; color?: string }> = ({
-    size = 22,
-    color = '#00D9FF',
-}) => (
-    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-        <Path
-            d="M11 5L6 9H2V15H6L11 19V5Z"
-            stroke={color}
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-        />
-        <Path
-            d="M15.54 8.46a5 5 0 0 1 0 7.07"
-            stroke={color}
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            opacity="0.5"
-        />
-        <Path
-            d="M19.07 4.93a10 10 0 0 1 0 14.14"
-            stroke={color}
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-        />
-    </Svg>
-);
 
 // ─── Clipboard History Item ──────────────────────────────────────────────────
 interface ClipboardItem {
@@ -100,10 +66,7 @@ export const SmartClipboardScreen: React.FC = () => {
 
     const [isImageModalVisible, setImageModalVisible] = useState(false);
 
-    // Audio TTS state
-    const [isSynthesizing, setIsSynthesizing] = useState(false);
-    const [isPlaying, setIsPlaying] = useState(false);
-    const [currentAudioPath, setCurrentAudioPath] = useState<string | null>(null);
+
 
     // Animations
     const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -176,18 +139,6 @@ export const SmartClipboardScreen: React.FC = () => {
         }
     }, [isProcessing, pulseAnim]);
 
-    // Cleanup helper for audio
-    const stopTTSAndAudio = () => {
-        if (isSynthesizing) {
-            RunAnywhere.stopSynthesis().catch(() => { });
-            setIsSynthesizing(false);
-        }
-        if (isPlaying && NativeAudioModule) {
-            NativeAudioModule.stopPlayback().catch(() => { });
-            setIsPlaying(false);
-        }
-    };
-
     // Auto-scan from route parameters (Deep Link from Pinpointer)
     useEffect(() => {
         if (route.params?.scanUri) {
@@ -205,7 +156,6 @@ export const SmartClipboardScreen: React.FC = () => {
     // ─── Actions ─────────────────────────────────────────────────────────────
 
     const processImage = async (uri: string) => {
-        stopTTSAndAudio();
         setImageUri(uri);
         setIsProcessing(true);
         setExtractedText('');
@@ -311,7 +261,6 @@ export const SmartClipboardScreen: React.FC = () => {
     };
 
     const handleReset = () => {
-        stopTTSAndAudio();
         setImageUri(null);
         setExtractedText('');
         setEditedText('');
@@ -322,69 +271,6 @@ export const SmartClipboardScreen: React.FC = () => {
         Clipboard.setString(text);
         Vibration.vibrate(30);
         showToast('copy');
-    };
-
-    // Cleanup audio on unmount or blur
-    useEffect(() => {
-        const unsubscribe = navigation.addListener('blur', () => {
-            stopTTSAndAudio();
-        });
-
-        return () => {
-            unsubscribe();
-            stopTTSAndAudio();
-        };
-    }, [navigation, isPlaying, isSynthesizing]);
-
-    const handleSpeakText = async () => {
-        if (!editedText.trim()) return;
-
-        // Toggle stop if already playing
-        if (isPlaying && NativeAudioModule) {
-            NativeAudioModule.stopPlayback().catch(() => { });
-            setIsPlaying(false);
-            return;
-        }
-
-        setIsSynthesizing(true);
-        try {
-            const result = await RunAnywhere.synthesize(editedText.trim(), {
-                voice: 'default',
-                rate: 1.0,
-                pitch: 1.0,
-                volume: 1.0,
-            });
-
-            const tempPath = await RunAnywhere.Audio.createWavFromPCMFloat32(
-                result.audio,
-                result.sampleRate || 22050
-            );
-
-            setCurrentAudioPath(tempPath);
-            setIsSynthesizing(false);
-            setIsPlaying(true);
-
-            if (NativeAudioModule) {
-                try {
-                    const playResult = await NativeAudioModule.playAudio(tempPath);
-                    setTimeout(() => {
-                        setIsPlaying(false);
-                        setCurrentAudioPath(null);
-                        RNFS.unlink(tempPath).catch(() => { });
-                    }, (result.duration + 0.5) * 1000);
-                } catch (playError) {
-                    console.error('[SmartClipboard] Playback error:', playError);
-                    setIsPlaying(false);
-                }
-            } else {
-                setIsPlaying(false);
-            }
-        } catch (error) {
-            console.error('[SmartClipboard] TTS error:', error);
-            setIsSynthesizing(false);
-            setIsPlaying(false);
-            Alert.alert("Speech Error", "Could not generate speech right now.");
-        }
     };
 
     // ─── Render: Landing State ────────────────────────────────────────────────
@@ -485,18 +371,6 @@ export const SmartClipboardScreen: React.FC = () => {
             <View style={styles.textCard}>
                 <View style={styles.textCardHeader}>
                     <Text style={styles.textCardTitle}>Extracted Text</Text>
-                    <TouchableOpacity
-                        style={styles.speakerButton}
-                        activeOpacity={0.7}
-                        onPress={handleSpeakText}
-                        disabled={isSynthesizing}
-                    >
-                        {isSynthesizing ? (
-                            <ActivityIndicator size="small" color={AppColors.accentCyan} />
-                        ) : (
-                            <SpeakerIconSVG color={isPlaying ? AppColors.accentPink : AppColors.accentCyan} />
-                        )}
-                    </TouchableOpacity>
                 </View>
 
                 <View style={styles.textEditorContainer}>
@@ -895,13 +769,6 @@ const styles = StyleSheet.create({
         fontSize: 16,
         fontWeight: '700',
         color: AppColors.textPrimary,
-    },
-    speakerButton: {
-        padding: 8,
-        borderRadius: 10,
-        backgroundColor: AppColors.accentCyan + '15',
-        borderWidth: 1,
-        borderColor: AppColors.accentCyan + '30',
     },
     charCountContainer: {
         paddingHorizontal: 16,

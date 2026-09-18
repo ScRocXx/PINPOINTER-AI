@@ -9,68 +9,30 @@ import {
     Animated,
     ActivityIndicator,
     Vibration,
-    NativeModules,
 } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
-import RNFS from 'react-native-fs';
 import { launchCamera, launchImageLibrary } from 'react-native-image-picker';
-import { RunAnywhere } from '@runanywhere/core';
 import { AppColors } from '../theme';
-import { useModelService } from '../services/ModelService';
-import { ModelLoaderWidget } from '../components';
 import { analyzeImage } from '../utils/VisionPipeline';
-
-// Native Audio Module — same as TextToSpeechScreen
-const { NativeAudioModule } = NativeModules;
 
 // ─── Status Types ────────────────────────────────────────────────────────────
 type ScreenPhase =
     | 'idle'        // waiting for user to take photo
     | 'scanning'    // OCR in progress
-    | 'speaking'    // TTS playing
-    | 'done'        // finished speaking, showing text
+    | 'done'        // finished OCR, showing text
     | 'no-text';    // no text detected
 
 // ─── Screen ──────────────────────────────────────────────────────────────────
 
 export const PointAndSpeakScreen: React.FC = () => {
-    const modelService = useModelService();
-
     // State
     const [phase, setPhase] = useState<ScreenPhase>('idle');
     const [imageUri, setImageUri] = useState<string | null>(null);
     const [detectedText, setDetectedText] = useState('');
-    const [currentAudioPath, setCurrentAudioPath] = useState<string | null>(null);
-    const [isGeneratingAudio, setIsGeneratingAudio] = useState(false);
-
-    const activeRequestId = useRef<number>(0);
-
     // Animations
     const pulseAnim = useRef(new Animated.Value(1)).current;
     const fadeAnim = useRef(new Animated.Value(0)).current;
     const waveAnim = useRef(new Animated.Value(0)).current;
-    const glowAnim = useRef(new Animated.Value(0)).current;
-
-    // Track latest audio path for unmount cleanup
-    const lastAudioPath = useRef<string | null>(null);
-    useEffect(() => {
-        lastAudioPath.current = currentAudioPath;
-    }, [currentAudioPath]);
-
-    // Cleanup on unmount
-    useEffect(() => {
-        return () => {
-            if (NativeAudioModule) {
-                NativeAudioModule.stopPlayback().catch(() => { });
-            }
-            if (lastAudioPath.current) {
-                RNFS.unlink(lastAudioPath.current).catch(() => { });
-            }
-
-            // LAZY UNLOADING: Free up RAM by unloading the TTS model when exiting this screen
-            modelService.unloadTTSModel();
-        };
-    }, []);
 
     // Pulse animation for the main button
     useEffect(() => {
@@ -94,28 +56,6 @@ export const PointAndSpeakScreen: React.FC = () => {
         }
     }, [phase, pulseAnim]);
 
-    // Glow animation for speaking state
-    useEffect(() => {
-        if (phase === 'speaking') {
-            const glow = Animated.loop(
-                Animated.sequence([
-                    Animated.timing(glowAnim, {
-                        toValue: 1,
-                        duration: 600,
-                        useNativeDriver: true,
-                    }),
-                    Animated.timing(glowAnim, {
-                        toValue: 0.3,
-                        duration: 600,
-                        useNativeDriver: true,
-                    }),
-                ]),
-            );
-            glow.start();
-            return () => glow.stop();
-        }
-    }, [phase, glowAnim]);
-
     // Wave animation for scanning
     useEffect(() => {
         if (phase === 'scanning') {
@@ -133,71 +73,6 @@ export const PointAndSpeakScreen: React.FC = () => {
 
     // ─── Core Pipeline ───────────────────────────────────────────────────────
 
-    const speakText = async (text: string) => {
-        const reqId = Date.now();
-        activeRequestId.current = reqId;
-
-        setPhase('speaking');
-        setIsGeneratingAudio(true);
-        try {
-            const result = await RunAnywhere.synthesize(text, {
-                voice: 'default',
-                rate: 0.9,  // slightly slower for accessibility
-                pitch: 1.0,
-                volume: 1.0,
-            });
-
-            if (activeRequestId.current !== reqId) return; // aborted
-
-            const tempPath = await RunAnywhere.Audio.createWavFromPCMFloat32(
-                result.audio,
-                result.sampleRate || 22050,
-            );
-
-            if (activeRequestId.current !== reqId) {
-                RNFS.unlink(tempPath).catch(() => { });
-                return; // aborted
-            }
-
-            setCurrentAudioPath(tempPath);
-            setIsGeneratingAudio(false);
-
-            if (NativeAudioModule) {
-                const playResult = await NativeAudioModule.playAudio(tempPath);
-
-                if (activeRequestId.current !== reqId) {
-                    NativeAudioModule.stopPlayback().catch(() => { });
-                    RNFS.unlink(tempPath).catch(() => { });
-                    return; // aborted
-                }
-
-                // Fallback duration if result.duration is undefined
-                const durationSeconds = result.duration || playResult?.duration || 5;
-
-                console.log(`[PointAndSpeak] Audio duration: ${durationSeconds}s`);
-
-                // We previously used a timeout here based on durationSeconds, 
-                // but Piper TTS duration estimations are sometimes too short.
-                // Playback will finish organically on the native side.
-                // We just update the UI state after a generous buffer.
-                setTimeout(() => {
-                    if (activeRequestId.current === reqId) {
-                        setPhase((prev) => prev === 'speaking' ? 'done' : prev);
-                        setCurrentAudioPath(null);
-                        RNFS.unlink(tempPath).catch(() => { });
-                    }
-                }, (durationSeconds + 2.5) * 1000);
-            } else {
-                setPhase('done');
-            }
-        } catch (error) {
-            console.error('[PointAndSpeak] TTS error:', error);
-            if (activeRequestId.current === reqId) setPhase('done');
-        } finally {
-            if (activeRequestId.current === reqId) setIsGeneratingAudio(false);
-        }
-    };
-
     const scanAndSpeak = async (uri: string) => {
         setImageUri(uri);
         setPhase('scanning');
@@ -213,6 +88,7 @@ export const PointAndSpeakScreen: React.FC = () => {
             }
 
             setDetectedText(result.raw_text);
+            setPhase('done');
             Vibration.vibrate(50); // single short buzz = success
 
             // Animate text in
@@ -224,9 +100,6 @@ export const PointAndSpeakScreen: React.FC = () => {
             }).start();
 
             console.log('[PointAndSpeak] Extracted raw text, length:', result.raw_text.length);
-
-            // Auto-speak the raw text
-            await speakText(result.raw_text);
         } catch (error) {
             console.error('[PointAndSpeak] Pipeline error:', error);
             setPhase('no-text');
@@ -267,51 +140,11 @@ export const PointAndSpeakScreen: React.FC = () => {
         }
     };
 
-    const handleReplay = () => {
-        if (detectedText) {
-            speakText(detectedText);
-        }
-    };
-
-    const handleStop = async () => {
-        activeRequestId.current = Date.now(); // invalidate any pending speech
-        setIsGeneratingAudio(false);
-
-        if (NativeAudioModule) {
-            try {
-                await NativeAudioModule.stopPlayback();
-            } catch (_) { }
-        }
-        if (currentAudioPath) {
-            RNFS.unlink(currentAudioPath).catch(() => { });
-            setCurrentAudioPath(null);
-        }
-        setPhase((prev) => prev === 'speaking' ? 'done' : prev); // ONLY if speaking
-    };
-
-    const handleReset = async () => {
-        await handleStop();
+    const handleReset = () => {
         setPhase('idle');
         setImageUri(null);
         setDetectedText('');
     };
-
-    // ─── TTS Model Gate ──────────────────────────────────────────────────────
-
-    if (!modelService.isTTSLoaded) {
-        return (
-            <ModelLoaderWidget
-                title="Voice Model Required"
-                subtitle="Download the text-to-speech model to enable Point & Speak"
-                icon="volume"
-                accentColor={AppColors.accentGreen}
-                isDownloading={modelService.isTTSDownloading}
-                isLoading={modelService.isTTSLoading}
-                progress={modelService.ttsDownloadProgress}
-                onLoad={modelService.downloadAndLoadTTS}
-            />
-        );
-    }
 
     // ─── Render: Idle State ──────────────────────────────────────────────────
 
@@ -409,55 +242,20 @@ export const PointAndSpeakScreen: React.FC = () => {
         </View>
     );
 
-    // ─── Render: Speaking / Done State ───────────────────────────────────────
+    // ─── Render: Done State ──────────────────────────────────────────────────
 
-    const renderSpeaking = () => (
-        <Animated.View style={[styles.speakingContainer, { opacity: fadeAnim }]}>
+    const renderDone = () => (
+        <Animated.View style={[styles.doneContainer, { opacity: fadeAnim }]}>
             {/* Image */}
             {imageUri && (
                 <Image source={{ uri: imageUri }} style={styles.resultImage} resizeMode="cover" />
             )}
 
             {/* Detected Text Card */}
-            <View style={[
-                styles.textResultCard,
-                phase === 'speaking' && styles.textResultCardActive,
-            ]}>
+            <View style={styles.textResultCard}>
                 <View style={styles.textResultHeader}>
-                    <Text style={styles.textResultTitle}>
-                        {phase === 'speaking'
-                            ? (isGeneratingAudio ? '⏳ Generating Audio...' : '🔊 Reading Aloud...')
-                            : '✅ Finished'}
-                    </Text>
+                    <Text style={styles.textResultTitle}>✅ Detected Text</Text>
                 </View>
-
-                {/* Sound Waves during speaking */}
-                {phase === 'speaking' && !isGeneratingAudio && (
-                    <View style={styles.soundWaves}>
-                        {[...Array(9)].map((_, i) => (
-                            <Animated.View
-                                key={i}
-                                style={[
-                                    styles.soundBar,
-                                    {
-                                        height: 12 + Math.random() * 28,
-                                        opacity: glowAnim.interpolate({
-                                            inputRange: [0.3, 1],
-                                            outputRange: [0.4, 1],
-                                        }),
-                                    },
-                                ]}
-                            />
-                        ))}
-                    </View>
-                )}
-
-                {/* Loading indicator during generating */}
-                {phase === 'speaking' && isGeneratingAudio && (
-                    <View style={[styles.soundWaves, { paddingVertical: 10 }]}>
-                        <ActivityIndicator size="small" color={AppColors.accentGreen} />
-                    </View>
-                )}
 
                 <ScrollView style={styles.textResultScroll} nestedScrollEnabled>
                     <Text style={styles.textResultContent}>{detectedText}</Text>
@@ -466,38 +264,15 @@ export const PointAndSpeakScreen: React.FC = () => {
 
             {/* Controls */}
             <View style={styles.controls}>
-                {phase === 'speaking' ? (
-                    <TouchableOpacity onPress={handleStop} activeOpacity={0.8}>
-                        <LinearGradient
-                            colors={[AppColors.error, '#DC2626']}
-                            style={styles.controlButton}
-                        >
-                            <Text style={styles.controlIcon}>⏹️</Text>
-                            <Text style={styles.controlLabel}>Stop</Text>
-                        </LinearGradient>
-                    </TouchableOpacity>
-                ) : (
-                    <View style={styles.controlRow}>
-                        <TouchableOpacity onPress={handleReplay} activeOpacity={0.8} style={{ flex: 1 }}>
-                            <LinearGradient
-                                colors={[AppColors.accentGreen, '#059669']}
-                                style={styles.controlButton}
-                            >
-                                <Text style={styles.controlIcon}>🔄</Text>
-                                <Text style={styles.controlLabel}>Replay</Text>
-                            </LinearGradient>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity
-                            onPress={handleReset}
-                            activeOpacity={0.8}
-                            style={[styles.controlButtonOutline, { flex: 1 }]}
-                        >
-                            <Text style={styles.controlIcon}>📸</Text>
-                            <Text style={styles.controlLabelOutline}>New Scan</Text>
-                        </TouchableOpacity>
-                    </View>
-                )}
+                <TouchableOpacity onPress={handleReset} activeOpacity={0.8}>
+                    <LinearGradient
+                        colors={[AppColors.accentGreen, '#059669']}
+                        style={styles.controlButton}
+                    >
+                        <Text style={styles.controlIcon}>📸</Text>
+                        <Text style={styles.controlLabel}>New Scan</Text>
+                    </LinearGradient>
+                </TouchableOpacity>
             </View>
         </Animated.View>
     );
@@ -536,9 +311,8 @@ export const PointAndSpeakScreen: React.FC = () => {
                 return renderIdle();
             case 'scanning':
                 return renderScanning();
-            case 'speaking':
             case 'done':
-                return renderSpeaking();
+                return renderDone();
             case 'no-text':
                 return renderNoText();
         }
@@ -715,8 +489,8 @@ const styles = StyleSheet.create({
         marginTop: 6,
     },
 
-    // ─── Speaking / Done ────────────────────────────────────
-    speakingContainer: {
+    // ─── Done ───────────────────────────────────────────────
+    doneContainer: {
         flex: 1,
     },
     resultImage: {
@@ -735,15 +509,6 @@ const styles = StyleSheet.create({
         overflow: 'hidden',
         marginBottom: 20,
     },
-    textResultCardActive: {
-        borderColor: AppColors.accentGreen + '80',
-        borderWidth: 2,
-        shadowColor: AppColors.accentGreen,
-        shadowOffset: { width: 0, height: 0 },
-        shadowOpacity: 0.2,
-        shadowRadius: 16,
-        elevation: 6,
-    },
     textResultHeader: {
         padding: 16,
         paddingBottom: 0,
@@ -752,19 +517,6 @@ const styles = StyleSheet.create({
         fontSize: 16,
         fontWeight: '700',
         color: AppColors.accentGreen,
-    },
-    soundWaves: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        height: 50,
-        paddingHorizontal: 16,
-        gap: 4,
-    },
-    soundBar: {
-        width: 5,
-        backgroundColor: AppColors.accentGreen,
-        borderRadius: 3,
     },
     textResultScroll: {
         maxHeight: 200,
@@ -779,10 +531,6 @@ const styles = StyleSheet.create({
     // ─── Controls ───────────────────────────────────────────
     controls: {
         marginTop: 4,
-    },
-    controlRow: {
-        flexDirection: 'row',
-        gap: 12,
     },
     controlButton: {
         flexDirection: 'row',
@@ -804,21 +552,6 @@ const styles = StyleSheet.create({
         fontSize: 16,
         fontWeight: '700',
         color: '#FFFFFF',
-    },
-    controlButtonOutline: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        paddingVertical: 16,
-        borderRadius: 16,
-        borderWidth: 1.5,
-        borderColor: AppColors.textMuted + '50',
-        gap: 8,
-    },
-    controlLabelOutline: {
-        fontSize: 16,
-        fontWeight: '600',
-        color: AppColors.textSecondary,
     },
 
     // ─── No Text ────────────────────────────────────────────

@@ -1,164 +1,37 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   Text,
   TouchableOpacity,
   ScrollView,
   StyleSheet,
-  NativeModules,
-  Alert,
-  Platform,
-  PermissionsAndroid,
 } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
-import { RunAnywhere } from '@runanywhere/core';
 import { AppColors } from '../theme';
-import { useModelService } from '../services/ModelService';
-import { ModelLoaderWidget, AudioVisualizer } from '../components';
+import { AudioVisualizer } from '../components';
+import { useVoiceRecording } from '../hooks/useVoiceRecording';
 
-// Native Audio Module - records in WAV format (16kHz mono) optimal for Whisper STT
-const { NativeAudioModule } = NativeModules;
-
+/**
+ * SpeechToTextScreen — uses sherpa-onnx Whisper (on-device STT) via the useVoiceRecording hook.
+ * 100% offline, on-device. No internet needed, no RunAnywhere dependency.
+ */
 export const SpeechToTextScreen: React.FC = () => {
-  const modelService = useModelService();
-  const [isRecording, setIsRecording] = useState(false);
-  const [isTranscribing, setIsTranscribing] = useState(false);
   const [transcription, setTranscription] = useState('');
   const [transcriptionHistory, setTranscriptionHistory] = useState<string[]>([]);
-  const [audioLevel, setAudioLevel] = useState(0);
-  const [recordingDuration, setRecordingDuration] = useState(0);
-  const recordingPathRef = useRef<string | null>(null);
-  const audioLevelIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const recordingStartRef = useRef<number>(0);
 
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (audioLevelIntervalRef.current) {
-        clearInterval(audioLevelIntervalRef.current);
-      }
-      if (isRecording && NativeAudioModule) {
-        NativeAudioModule.cancelRecording().catch(() => {});
-      }
-    };
-  }, [isRecording]);
+  const handleTranscription = useCallback((text: string) => {
+    setTranscription(text);
+    setTranscriptionHistory(prev => [text, ...prev].slice(0, 100));
+  }, []);
 
-  const startRecording = async () => {
-    try {
-      // Check if native module is available
-      if (!NativeAudioModule) {
-        console.error('[STT] NativeAudioModule not available');
-        Alert.alert('Error', 'Native audio module not available. Please rebuild the app.');
-        return;
-      }
-
-      // Request microphone permission on Android
-      if (Platform.OS === 'android') {
-        const granted = await PermissionsAndroid.request(
-          PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
-          {
-            title: 'Microphone Permission',
-            message: 'This app needs access to your microphone for speech recognition.',
-            buttonNeutral: 'Ask Me Later',
-            buttonNegative: 'Cancel',
-            buttonPositive: 'OK',
-          }
-        );
-        if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
-          Alert.alert('Permission Denied', 'Microphone permission is required for speech recognition.');
-          return;
-        }
-      }
-
-      console.warn('[STT] Starting native recording...');
-      const result = await NativeAudioModule.startRecording();
-      
-      recordingPathRef.current = result.path;
-      recordingStartRef.current = Date.now();
-      setIsRecording(true);
-      setTranscription('');
-      setRecordingDuration(0);
-
-      // Poll for audio levels
-      audioLevelIntervalRef.current = setInterval(async () => {
-        try {
-          const levelResult = await NativeAudioModule.getAudioLevel();
-          setAudioLevel(levelResult.level || 0);
-          setRecordingDuration(Date.now() - recordingStartRef.current);
-        } catch (e) {
-          // Ignore errors during polling
-        }
-      }, 100);
-
-      console.warn('[STT] Recording started at:', result.path);
-    } catch (error) {
-      console.error('[STT] Recording error:', error);
-      Alert.alert('Recording Error', `Failed to start recording: ${error}`);
-    }
-  };
-
-  const stopRecordingAndTranscribe = async () => {
-    try {
-      // Clear audio level polling
-      if (audioLevelIntervalRef.current) {
-        clearInterval(audioLevelIntervalRef.current);
-        audioLevelIntervalRef.current = null;
-      }
-
-      if (!NativeAudioModule) {
-        throw new Error('NativeAudioModule not available');
-      }
-
-      console.warn('[STT] Stopping recording...');
-      const result = await NativeAudioModule.stopRecording();
-      setIsRecording(false);
-      setAudioLevel(0);
-      setIsTranscribing(true);
-
-      // Get the base64 audio data directly from native module (bypasses RNFS sandbox issues)
-      const audioBase64 = result.audioBase64;
-      if (!audioBase64) {
-        throw new Error('No audio data received from recording');
-      }
-
-      console.warn('[STT] Recording stopped, audio base64 length:', audioBase64.length, 'file size:', result.fileSize);
-
-      if (result.fileSize < 1000) {
-        throw new Error('Recording too short - please speak longer');
-      }
-
-      // Check if STT model is loaded
-      const isModelLoaded = await RunAnywhere.isSTTModelLoaded();
-      if (!isModelLoaded) {
-        throw new Error('STT model not loaded. Please download and load the model first.');
-      }
-
-      // Transcribe using base64 audio data directly from native module
-      console.warn('[STT] Starting transcription...');
-      const transcribeResult = await RunAnywhere.transcribe(audioBase64, {
-        sampleRate: 16000,
-        language: 'en',
-      });
-
-      console.warn('[STT] Transcription result:', transcribeResult);
-
-      if (transcribeResult.text) {
-        setTranscription(transcribeResult.text);
-        setTranscriptionHistory(prev => [transcribeResult.text, ...prev]);
-      } else {
-        setTranscription('(No speech detected)');
-      }
-
-      recordingPathRef.current = null;
-      setIsTranscribing(false);
-    } catch (error) {
-      console.error('[STT] Transcription error:', error);
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      setTranscription(`Error: ${errorMessage}`);
-      Alert.alert('Transcription Error', errorMessage);
-      setIsTranscribing(false);
-    }
-  };
+  const {
+    isRecording,
+    isTranscribing,
+    audioLevel,
+    recordingDuration,
+    startListening,
+    stopListening,
+  } = useVoiceRecording(handleTranscription);
 
   const handleClearHistory = () => {
     setTranscriptionHistory([]);
@@ -171,21 +44,6 @@ export const SpeechToTextScreen: React.FC = () => {
     const seconds = totalSeconds % 60;
     return `${minutes}:${seconds.toString().padStart(2, '0')}`;
   };
-
-  if (!modelService.isSTTLoaded) {
-    return (
-      <ModelLoaderWidget
-        title="STT Model Required"
-        subtitle="Download and load the speech recognition model"
-        icon="mic"
-        accentColor={AppColors.accentViolet}
-        isDownloading={modelService.isSTTDownloading}
-        isLoading={modelService.isSTTLoading}
-        progress={modelService.sttDownloadProgress}
-        onLoad={modelService.downloadAndLoadSTT}
-      />
-    );
-  }
 
   return (
     <View style={styles.container}>
@@ -218,7 +76,7 @@ export const SpeechToTextScreen: React.FC = () => {
                 <Text style={styles.micIcon}>🎤</Text>
               </View>
               <Text style={styles.statusTitle}>Tap to Record</Text>
-              <Text style={styles.statusSubtitle}>On-device speech recognition (WAV 16kHz)</Text>
+              <Text style={styles.statusSubtitle}>On-device speech recognition</Text>
             </>
           )}
         </View>
@@ -245,7 +103,7 @@ export const SpeechToTextScreen: React.FC = () => {
               </TouchableOpacity>
             </View>
             {transcriptionHistory.map((item, index) => (
-              <View key={index} style={styles.historyItem}>
+              <View key={`stt-${index}-${item.slice(0, 12)}`} style={styles.historyItem}>
                 <Text style={styles.historyText}>{item}</Text>
               </View>
             ))}
@@ -256,7 +114,7 @@ export const SpeechToTextScreen: React.FC = () => {
       {/* Record Button */}
       <View style={styles.buttonContainer}>
         <TouchableOpacity
-          onPress={isRecording ? stopRecordingAndTranscribe : startRecording}
+          onPress={isRecording ? stopListening : startListening}
           disabled={isTranscribing}
           activeOpacity={0.8}
         >

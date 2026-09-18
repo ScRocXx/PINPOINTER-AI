@@ -1,6 +1,7 @@
 import TextRecognition, { TextRecognitionScript } from '@react-native-ml-kit/text-recognition';
 import ImageLabeling from '@react-native-ml-kit/image-labeling';
 import ImageResizer from 'react-native-image-resizer';
+import RNFS from 'react-native-fs';
 import { soundexAll } from './Soundex';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -108,45 +109,57 @@ export const analyzeImage = async (originalUri: string): Promise<VisionResult> =
         console.warn('[VisionPipeline] Resize failed, using full resolution:', resizeError);
     }
 
-    // ── Step 1: OCR ────────────────────────────────────────────────────────────
-    const { latin, hindi } = await runOCR(processUri);
-    const combinedText = [latin, hindi].filter(Boolean).join(' ').trim();
+    // H5 fix: wrap in try/finally to clean up resized temp file
+    try {
+        // ── Step 1: OCR ────────────────────────────────────────────────────────────
+        const { latin, hindi } = await runOCR(processUri);
+        const combinedText = [latin, hindi].filter(Boolean).join(' ').trim();
 
-    // ── Step 2: Early exit if CLEAN text found ──────────────────────────────
-    if (combinedText.length >= MIN_TEXT_LENGTH && !isGarbageText(combinedText)) {
-        const words = combinedText.split(/\s+/).filter(Boolean);
-        // Soundex only makes sense for Latin/romanized words, not Devanagari
-        const latinWords = words.filter(w => /^[a-zA-Z]+$/.test(w));
-        const soundexCodes = soundexAll(latinWords.join(' '));
+        // ── Step 2: Early exit if CLEAN text found ──────────────────────────────
+        if (combinedText.length >= MIN_TEXT_LENGTH && !isGarbageText(combinedText)) {
+            const words = combinedText.split(/\s+/).filter(Boolean);
+            // Soundex only makes sense for Latin/romanized words, not Devanagari
+            const latinWords = words.filter(w => /^[a-zA-Z]+$/.test(w));
+            const soundexCodes = soundexAll(latinWords.join(' '));
+
+            return {
+                detection_type: 'TEXT',
+                raw_text: combinedText,
+                search_index: [...words, ...soundexCodes],
+                content: [...words, ...soundexCodes].join(' '),
+                optimized_status: 'Object_Detection_Bypassed: True',
+            };
+        }
+
+        // ── Step 3: Fallback — Object/Scene Recognition ───────────────────────────
+        const labels = await runLabeling(processUri);
+
+        if (labels.length > 0) {
+            const soundexCodes = soundexAll(labels.join(' '));
+            return {
+                detection_type: 'OBJECT',
+                raw_text: labels.join(', '),
+                search_index: [...labels, ...soundexCodes],
+                content: [...labels, ...soundexCodes].join(' '),
+                optimized_status: 'Object_Detection_Bypassed: False',
+            };
+        }
 
         return {
-            detection_type: 'TEXT',
-            raw_text: combinedText,
-            search_index: [...words, ...soundexCodes],
-            content: [...words, ...soundexCodes].join(' '),
-            optimized_status: 'Object_Detection_Bypassed: True',
-        };
-    }
-
-    // ── Step 3: Fallback — Object/Scene Recognition ───────────────────────────
-    const labels = await runLabeling(processUri);
-
-    if (labels.length > 0) {
-        const soundexCodes = soundexAll(labels.join(' '));
-        return {
-            detection_type: 'OBJECT',
-            raw_text: labels.join(', '),
-            search_index: [...labels, ...soundexCodes],
-            content: [...labels, ...soundexCodes].join(' '),
+            detection_type: 'EMPTY',
+            raw_text: '',
+            search_index: [],
+            content: '',
             optimized_status: 'Object_Detection_Bypassed: False',
         };
+    } finally {
+        // H5 fix: delete ImageResizer temp file to prevent unbounded cache growth
+        if (processUri !== originalUri) {
+            try {
+                await RNFS.unlink(processUri.replace('file://', ''));
+            } catch (_) {
+                // Ignore — temp file may already be cleaned up
+            }
+        }
     }
-
-    return {
-        detection_type: 'EMPTY',
-        raw_text: '',
-        search_index: [],
-        content: '',
-        optimized_status: 'Object_Detection_Bypassed: False',
-    };
 };

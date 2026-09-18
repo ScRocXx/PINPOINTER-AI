@@ -4,17 +4,12 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator, TransitionPresets } from '@react-navigation/stack';
 import { StatusBar } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { RunAnywhere, SDKEnvironment } from '@runanywhere/core';
-
-// --- FIXED: Move these to the top to solve the "Dynamic Import" error ---
-import { ONNX } from '@runanywhere/onnx';
-
-import { ModelServiceProvider, registerDefaultModels } from './services/ModelService';
+import { ModelServiceProvider } from './services/ModelService';
+import { PinpointerProvider } from './hooks/PinpointerContext';
 import { AppColors } from './theme';
 import {
   HomeScreen,
   SpeechToTextScreen,
-  TextToSpeechScreen,
   PinpointerScreen,
   SmartClipboardScreen,
   PointAndSpeakScreen,
@@ -33,23 +28,6 @@ const App: React.FC = () => {
         // 1. Initialize Pinpoint Search Database
         setupDatabase();
 
-        // 2. Initialize RunAnywhere SDK with a race timeout
-        // (Prevents slow HTTP requests in native SDK from blocking the app startup)
-        try {
-          await Promise.race([
-            RunAnywhere.initialize({
-              environment: SDKEnvironment.Development,
-            }),
-            new Promise((resolve) => setTimeout(resolve, 1500))
-          ]);
-        } catch (initErr) {
-          console.warn('RunAnywhere.initialize caught error:', initErr);
-        }
-
-        // 3. Register backends (Now using the top-level imports)
-        ONNX.register();
-
-        await registerDefaultModels();
         console.log('All systems initialized successfully');
       } catch (error) {
         console.error('Initialization failed:', error);
@@ -66,6 +44,7 @@ const App: React.FC = () => {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <ModelServiceProvider>
+        <PinpointerProvider>
         <StatusBar barStyle="light-content" backgroundColor={AppColors.primaryDark} />
         <NavigationContainer>
           <Stack.Navigator
@@ -93,7 +72,6 @@ const App: React.FC = () => {
             <Stack.Screen name="Home" component={HomeScreen} options={{ headerShown: false }} />
             <Stack.Screen name="Gallery" component={GalleryScreen} options={{ headerShown: false }} />
             <Stack.Screen name="SpeechToText" component={SpeechToTextScreen} options={{ title: 'Speech to Text' }} />
-            <Stack.Screen name="TextToSpeech" component={TextToSpeechScreen} options={{ title: 'Read Aloud' }} />
 
             {/* New Feature Screens */}
             <Stack.Screen name="SmartClipboard" component={SmartClipboardScreen} options={{ title: 'Scan Images' }} />
@@ -101,6 +79,7 @@ const App: React.FC = () => {
             <Stack.Screen name="DocumentVault" component={DocumentVaultScreen} options={{ headerShown: false }} />
           </Stack.Navigator>
         </NavigationContainer>
+        </PinpointerProvider>
       </ModelServiceProvider>
     </GestureHandlerRootView>
   );

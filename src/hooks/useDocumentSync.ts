@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Platform, Alert, Linking, NativeModules } from 'react-native';
 import RNFS from 'react-native-fs';
-import { isFileIndexed, beginTransaction, commitTransaction } from '../Database';
+import { isFileIndexed, beginTransaction, commitTransaction, rollbackTransaction } from '../Database';
 import { processPDF } from '../utils/DocumentPipeline';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useCallback, useEffect } from 'react';
@@ -120,16 +120,19 @@ export const useDocumentSync = () => {
 
             let processed = 0;
 
-            beginTransaction();
             for (const doc of docsToProcess) {
                 if (!doc.path) continue;
 
                 // Construct a proper file URI for External Rendering
                 const fileUri = `file://${doc.path}`;
 
+                // C3 fix: Transaction-per-document with real rollback
+                // Prevents DB lock + total data loss on mid-sync errors
+                beginTransaction();
                 try {
                     // Skip if already in DB
                     if (isFileIndexed(fileUri)) {
+                        commitTransaction();
                         processed++;
                         setDocSyncCount(processed);
                         continue;
@@ -137,15 +140,16 @@ export const useDocumentSync = () => {
 
                     // Run the 5-phase PDF Intelligence Pipeline
                     await processPDF(fileUri);
+                    commitTransaction();
                     AppLogger.info('DocumentSync', `Pipeline complete for: ${doc.name}`);
                 } catch (pipelineError) {
+                    rollbackTransaction();
                     AppLogger.error('DocumentSync', `Pipeline failed for: ${doc.name}`, pipelineError);
                 } finally {
                     processed++;
                     setDocSyncCount(processed);
                 }
             }
-            commitTransaction();
         } catch (err) {
             console.error('[DocumentSync] Background crawler failed:', err);
         } finally {

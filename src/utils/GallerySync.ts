@@ -1,6 +1,6 @@
 import { CameraRoll } from "@react-native-camera-roll/camera-roll";
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { indexDocument, isFileIndexed, beginTransaction, commitTransaction } from '../Database';
+import { indexDocument, isFileIndexed, beginTransaction, commitTransaction, rollbackTransaction } from '../Database';
 import { buildIndexableContent } from './TextEnrichment';
 import { analyzeImage } from './VisionPipeline';
 import { AppLogger } from './AppLogger';
@@ -69,7 +69,6 @@ export const performQuickSync = async (
 
         if (pageResult.edges.length === 0) break;
 
-        beginTransaction();
         for (const edge of pageResult.edges) {
             if (totalProcessed >= QUICK_SYNC_LIMIT || cancelRef?.current) {
                 break;
@@ -77,11 +76,14 @@ export const performQuickSync = async (
 
             const uri = edge.node.image.uri;
             if (!isFileIndexed(uri)) {
+                beginTransaction();
                 try {
                     const vision = await analyzeImage(uri);
                     const content = await buildIndexableContent(vision.content || 'image');
                     indexDocument(null, content || vision.content || 'image', uri, 'IMAGE', vision.detection_type as 'TEXT' | 'OBJECT');
+                    commitTransaction();
                 } catch (e) {
+                    rollbackTransaction();
                     AppLogger.warn('QuickSync', `Failed to process ${uri}`, e);
                     indexDocument(null, 'image', uri, 'IMAGE', 'OBJECT');
                 }
@@ -90,7 +92,6 @@ export const performQuickSync = async (
             totalProcessed++;
             onProgress(totalProcessed);
         }
-        commitTransaction();
 
         hasNextPage = pageResult.page_info.has_next_page;
         after = pageResult.page_info.end_cursor;
@@ -173,16 +174,15 @@ export const performFullGallerySync = async (
 
             if (pageResult.edges.length === 0) break;
 
-            beginTransaction();
             for (const edge of pageResult.edges) {
                 if (cancelRef?.current) {
-                    commitTransaction();
                     await saveCursor(after);
                     return { processed: totalProcessed, wasCancelled: true };
                 }
 
                 const uri = edge.node.image.uri;
                 if (!isFileIndexed(uri)) {
+                    beginTransaction();
                     try {
                         const vision = await analyzeImage(uri);
                         const rawText = vision.content;
@@ -194,7 +194,9 @@ export const performFullGallerySync = async (
                             content = await buildIndexableContent(rawText);
                         }
                         indexDocument(null, content, uri, 'IMAGE', vision.detection_type as 'TEXT' | 'OBJECT');
+                        commitTransaction();
                     } catch (e) {
+                        rollbackTransaction();
                         AppLogger.warn('DeepSync', `Failed to process ${uri}`, e);
                         indexDocument(null, 'image', uri, 'IMAGE', 'OBJECT');
                     }
@@ -203,7 +205,6 @@ export const performFullGallerySync = async (
                 totalProcessed++;
                 onProgress(totalProcessed, uri);
             }
-            commitTransaction();
 
             hasNextPage = pageResult.page_info.has_next_page;
             after = pageResult.page_info.end_cursor;

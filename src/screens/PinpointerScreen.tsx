@@ -35,7 +35,7 @@ import {
 } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import { AppColors } from '../theme';
-import { usePinpointer } from '../hooks/usePinpointer';
+import { usePinpointerShared } from '../hooks/PinpointerContext';
 import { HomeScreen } from '../screens/HomeScreen';
 
 const { StorageModule } = NativeModules;
@@ -63,7 +63,7 @@ export const PinpointerScreen: React.FC = () => {
         isSyncing, isPaused, isDeepSync, syncCount, totalImages, lastSyncTime,
         isSyncingDocs, docSyncCount, totalDocs, lastDocSyncTime, handleDocumentSync,
         searchHistory, handleSelectHistory, handleDeleteHistory, handleClearHistory,
-    } = usePinpointer();
+    } = usePinpointerShared();
 
     // --- Loading UI Animations ---
     const syncProgress = useRef(new Animated.Value(0)).current;

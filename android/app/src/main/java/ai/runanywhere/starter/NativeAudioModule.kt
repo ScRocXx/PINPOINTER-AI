@@ -12,29 +12,36 @@ import com.facebook.react.bridge.*
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
-import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.concurrent.thread
 
-class NativeAudioModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
+class NativeAudioModule(reactContext: ReactApplicationContext) :
+    ReactContextBaseJavaModule(reactContext) {
 
     override fun getName(): String = "NativeAudioModule"
 
+    // ─── Recording State ───────────────────────────────────────────────
     private var audioRecord: AudioRecord? = null
-    private var isRecording = false
+    @Volatile private var isRecording = false
     private var recordingThread: Thread? = null
     private var recordedData: ByteArrayOutputStream? = null
     private var recordingFilePath: String? = null
 
+    // ─── Playback State ────────────────────────────────────────────────
     private var audioTrack: AudioTrack? = null
     private var isPlaying = false
+
 
     companion object {
         const val SAMPLE_RATE = 16000
         const val CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO
         const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
     }
+
+    // ════════════════════════════════════════════════════════════════════
+    // ─── RECORDING METHODS (unchanged from original) ───────────────────
+    // ════════════════════════════════════════════════════════════════════
 
     @ReactMethod
     fun startRecording(promise: Promise) {
@@ -65,6 +72,8 @@ class NativeAudioModule(reactContext: ReactApplicationContext) : ReactContextBas
             )
 
             if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
+                audioRecord?.release()
+                audioRecord = null
                 promise.reject("INIT_FAILED", "Failed to initialize AudioRecord")
                 return
             }
@@ -79,8 +88,9 @@ class NativeAudioModule(reactContext: ReactApplicationContext) : ReactContextBas
                 while (isRecording) {
                     val bytesRead = audioRecord?.read(buffer, 0, buffer.size) ?: 0
                     if (bytesRead > 0) {
-                        synchronized(recordedData!!) {
-                            recordedData?.write(buffer, 0, bytesRead)
+                        val data = recordedData ?: return@thread
+                        synchronized(data) {
+                            data.write(buffer, 0, bytesRead)
                         }
                     }
                 }
@@ -187,6 +197,10 @@ class NativeAudioModule(reactContext: ReactApplicationContext) : ReactContextBas
         }
     }
 
+    // ════════════════════════════════════════════════════════════════════
+    // ─── PLAYBACK METHODS (unchanged from original) ────────────────────
+    // ════════════════════════════════════════════════════════════════════
+
     @ReactMethod
     fun playAudioBase64(base64String: String, sampleRate: Int, promise: Promise) {
         try {
@@ -290,17 +304,51 @@ class NativeAudioModule(reactContext: ReactApplicationContext) : ReactContextBas
         }
     }
 
+    // ════════════════════════════════════════════════════════════════════
+    // ─── UTILITY METHODS (unchanged from original) ─────────────────────
+    // ════════════════════════════════════════════════════════════════════
+
     @ReactMethod
-    fun speak(text: String, promise: Promise) {
-        // Simple TTS using Android's built-in TTS (fallback)
-        promise.reject("NOT_IMPLEMENTED", "Use RunAnywhere.synthesize() instead")
+    fun checkMicrophonePermission(promise: Promise) {
+        val granted = ActivityCompat.checkSelfPermission(
+            reactApplicationContext,
+            Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+        promise.resolve(granted)
     }
 
     @ReactMethod
-    fun stopSpeaking(promise: Promise) {
-        stopPlaybackInternal()
-        promise.resolve(true)
+    fun getRecordingFilePath(promise: Promise) {
+        promise.resolve(recordingFilePath)
     }
+
+    @ReactMethod
+    fun deleteRecordingFile(promise: Promise) {
+        try {
+            recordingFilePath?.let { path ->
+                val file = File(path)
+                if (file.exists()) file.delete()
+            }
+            recordingFilePath = null
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("DELETE_ERROR", "Failed to delete recording: ${e.message}", e)
+        }
+    }
+
+    @ReactMethod
+    fun isCurrentlyRecording(promise: Promise) {
+        promise.resolve(isRecording)
+    }
+
+    @ReactMethod
+    fun isCurrentlyPlaying(promise: Promise) {
+        promise.resolve(isPlaying)
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // ─── WAV HELPER (unchanged) ────────────────────────────────────────
+    // ════════════════════════════════════════════════════════════════════
 
     private fun createWavFromPcm(pcmData: ByteArray, sampleRate: Int, channels: Int, bitsPerSample: Int): ByteArray {
         val byteRate = sampleRate * channels * bitsPerSample / 8

@@ -9,6 +9,7 @@ const path = require('path');
  */
 const config = {
   resolver: {
+    blockList: [/.*[/\\]android[/\\].*/, /.*[/\\]\.cxx[/\\].*/],
     // Replace react-native-screens with our mock on iOS
     // This fixes crashes with New Architecture in RN 0.83
     resolveRequest: (context, moduleName, platform) => {

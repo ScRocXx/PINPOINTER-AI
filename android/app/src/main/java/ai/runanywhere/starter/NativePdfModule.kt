@@ -33,18 +33,24 @@ class NativePdfModule(reactContext: ReactApplicationContext) :
                 return
             }
 
-            val fd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
-            val renderer = PdfRenderer(fd)
-            val pageCount = renderer.pageCount
-            renderer.close()
-            fd.close()
+            // H6 fix: use try/finally to prevent FD leak on error
+            var fd: ParcelFileDescriptor? = null
+            var renderer: PdfRenderer? = null
+            try {
+                fd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+                renderer = PdfRenderer(fd)
+                val pageCount = renderer.pageCount
 
-            val result = Arguments.createMap().apply {
-                putInt("pageCount", pageCount)
-                putDouble("fileSize", file.length().toDouble())
-                putString("fileName", file.name)
+                val result = Arguments.createMap().apply {
+                    putInt("pageCount", pageCount)
+                    putDouble("fileSize", file.length().toDouble())
+                    putString("fileName", file.name)
+                }
+                promise.resolve(result)
+            } finally {
+                try { renderer?.close() } catch (_: Exception) {}
+                try { fd?.close() } catch (_: Exception) {}
             }
-            promise.resolve(result)
         } catch (e: Exception) {
             promise.reject("PDF_INFO_ERROR", "Failed to read PDF info: ${e.message}", e)
         }
@@ -67,49 +73,56 @@ class NativePdfModule(reactContext: ReactApplicationContext) :
                 return
             }
 
-            val fd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
-            val renderer = PdfRenderer(fd)
-            val totalPages = renderer.pageCount
-            val pagesToRender = minOf(maxPages, totalPages)
+            var fd: ParcelFileDescriptor? = null
+            var renderer: PdfRenderer? = null
+            try {
+                fd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+                renderer = PdfRenderer(fd)
+                val totalPages = renderer.pageCount
+                val pagesToRender = minOf(maxPages, totalPages)
 
-            // Output directory: app cache for auto-cleanup
-            val outDir = File(reactApplicationContext.cacheDir, "pdf_pages")
-            if (!outDir.exists()) outDir.mkdirs()
+                // Output directory: app cache for auto-cleanup
+                val outDir = File(reactApplicationContext.cacheDir, "pdf_pages")
+                if (!outDir.exists()) outDir.mkdirs()
 
-            val resultPaths = Arguments.createArray()
+                val resultPaths = Arguments.createArray()
 
-            for (i in 0 until pagesToRender) {
-                val page = renderer.openPage(i)
+                for (i in 0 until pagesToRender) {
+                    val page = renderer.openPage(i)
+                    var bitmap: Bitmap? = null
+                    try {
+                        // H6 fix: cap scale by total pixels to prevent OOM on oversized pages
+                        val totalPixels = page.width.toLong() * page.height.toLong()
+                        val scale = if (totalPixels > 4_000_000) 1 else 2
 
-                // 2x scale for sharp OCR (typical PDF page is 612x792 pts → 1224x1584 px)
-                val scale = 2
-                val bitmap = Bitmap.createBitmap(
-                    page.width * scale,
-                    page.height * scale,
-                    Bitmap.Config.ARGB_8888
-                )
+                        bitmap = Bitmap.createBitmap(
+                            page.width * scale,
+                            page.height * scale,
+                            Bitmap.Config.ARGB_8888
+                        )
 
-                // Render with white background (important — transparent bg breaks OCR)
-                val canvas = android.graphics.Canvas(bitmap)
-                canvas.drawColor(android.graphics.Color.WHITE)
-                page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                page.close()
+                        val canvas = android.graphics.Canvas(bitmap)
+                        canvas.drawColor(android.graphics.Color.WHITE)
+                        page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
 
-                // Save as JPEG (80% quality — good balance of size vs OCR accuracy)
-                val safeFileName = file.nameWithoutExtension.replace(Regex("[^a-zA-Z0-9_-]"), "_")
-                val outFile = File(outDir, "${safeFileName}_page_${i + 1}.jpg")
-                FileOutputStream(outFile).use { fos ->
-                    bitmap.compress(Bitmap.CompressFormat.JPEG, 80, fos)
+                        val safeFileName = file.nameWithoutExtension.replace(Regex("[^a-zA-Z0-9_-]"), "_")
+                        val outFile = File(outDir, "${safeFileName}_page_${i + 1}.jpg")
+                        FileOutputStream(outFile).use { fos ->
+                            bitmap.compress(Bitmap.CompressFormat.JPEG, 80, fos)
+                        }
+
+                        resultPaths.pushString(outFile.absolutePath)
+                    } finally {
+                        bitmap?.recycle()
+                        page.close()
+                    }
                 }
-                bitmap.recycle()
 
-                resultPaths.pushString(outFile.absolutePath)
+                promise.resolve(resultPaths)
+            } finally {
+                try { renderer?.close() } catch (_: Exception) {}
+                try { fd?.close() } catch (_: Exception) {}
             }
-
-            renderer.close()
-            fd.close()
-
-            promise.resolve(resultPaths)
         } catch (e: SecurityException) {
             promise.reject("PDF_ENCRYPTED", "PDF is password-protected: ${e.message}", e)
         } catch (e: Exception) {

@@ -101,11 +101,10 @@ export const ModelDownloadSheet: React.FC<Props> = ({ visible, onClose }) => {
     const slideAnim = useRef(new Animated.Value(height)).current;
     const {
         isSTTDownloading, isSTTLoading, isSTTLoaded, sttDownloadProgress, downloadAndLoadSTT,
-        isTTSDownloading, isTTSLoading, isTTSLoaded, ttsDownloadProgress, downloadAndLoadTTS,
         downloadAndLoadAllModels,
     } = useModelService();
 
-    const allReady = isSTTLoaded && isTTSLoaded;
+    const allReady = isSTTLoaded;
 
     useEffect(() => {
         Animated.spring(slideAnim, {
@@ -149,18 +148,11 @@ export const ModelDownloadSheet: React.FC<Props> = ({ visible, onClose }) => {
                     {/* Model rows */}
                     <View style={styles.models}>
                         <ModelRow
-                            icon="🎤" name="Whisper STT" size="~75 MB"
+                            icon="🎤" name="Whisper Base STT" size="Bundled"
                             accent={AppColors.accentViolet}
                             isDownloading={isSTTDownloading} isLoading={isSTTLoading}
                             isLoaded={isSTTLoaded} progress={sttDownloadProgress}
                             onDownload={downloadAndLoadSTT}
-                        />
-                        <ModelRow
-                            icon="🔊" name="Piper TTS" size="~65 MB"
-                            accent={AppColors.accentPink}
-                            isDownloading={isTTSDownloading} isLoading={isTTSLoading}
-                            isLoaded={isTTSLoaded} progress={ttsDownloadProgress}
-                            onDownload={downloadAndLoadTTS}
                         />
                     </View>
 

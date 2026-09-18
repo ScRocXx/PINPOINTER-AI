@@ -1,7 +1,7 @@
 {
   "name": "pinpointer",
   "version": "1.0.0",
-  "description": "A comprehensive starter app demonstrating RunAnywhere SDK capabilities - on-device AI for React Native",
+  "description": "PinPointer — Privacy-first, offline search engine & intelligent media organizer",
   "main": "index.js",
   "scripts": {
     "android": "react-native run-android",
@@ -19,8 +19,7 @@
     "@react-native-ml-kit/text-recognition": "^2.0.0",
     "@react-navigation/native": "^7.1.24",
     "@react-navigation/stack": "^7.6.16",
-    "@runanywhere/core": "^0.18.1",
-    "@runanywhere/onnx": "^0.18.1",
+
     "react": "19.2.0",
     "react-native": "0.83.1",
     "react-native-document-picker": "^9.3.1",
@@ -30,8 +29,7 @@
     "react-native-image-picker": "^5.4.0",
     "react-native-image-resizer": "^1.4.5",
     "react-native-linear-gradient": "^2.8.3",
-    "react-native-live-audio-stream": "^1.1.1",
-    "react-native-nitro-modules": "^0.31.10",
+
     "react-native-pdf-light": "^2.4.2",
     "react-native-quick-sqlite": "^8.2.7",
     "react-native-safe-area-context": "~5.6.2",

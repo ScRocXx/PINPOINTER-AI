@@ -20,11 +20,13 @@ class MainApplication : Application(), ReactApplication {
       object : DefaultReactNativeHost(this) {
         override fun getPackages(): List<ReactPackage> =
             PackageList(this).packages.apply {
-              // Add our custom NativeAudioModule for STT/TTS audio recording and playback
+              // Add our custom NativeAudioModule for audio recording and playback
               add(NativeAudioPackage())
               add(OCRPackage())
               add(StoragePackage())
               add(NativePdfPackage())
+              // sherpa-onnx powered on-device STT + TTS
+              add(SherpaOnnxPackage())
             }
 
         override fun getJSMainModuleName(): String = "index"

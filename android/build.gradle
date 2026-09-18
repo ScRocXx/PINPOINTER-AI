@@ -52,16 +52,18 @@ if (!file(nodePath).exists()) {
     }
 }
 
-// Set NODE_BINARY globally so React Native gradle plugin can find it
-ext.NODE_BINARY = nodePath
+if (file(nodePath).exists()) {
+    // Set NODE_BINARY globally so React Native gradle plugin can find it
+    ext.NODE_BINARY = nodePath
 
-// Fix PATH for codegen tasks using taskGraph
-gradle.taskGraph.whenReady { taskGraph ->
-    def fullPath = "${nodeDir}:/usr/local/bin:/usr/bin:" + (System.getenv("PATH") ?: "")
-    taskGraph.allTasks.each { task ->
-        if (task instanceof Exec) {
-            task.environment("PATH", fullPath)
-            task.environment("NODE_BINARY", nodePath)
+    // Fix PATH for codegen tasks using taskGraph
+    gradle.taskGraph.whenReady { taskGraph ->
+        def fullPath = "${nodeDir}:/usr/local/bin:/usr/bin:" + (System.getenv("PATH") ?: "")
+        taskGraph.allTasks.each { task ->
+            if (task instanceof Exec) {
+                task.environment("PATH", fullPath)
+                task.environment("NODE_BINARY", nodePath)
+            }
         }
     }
 }

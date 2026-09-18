@@ -1,5 +1,6 @@
 import { open } from 'react-native-quick-sqlite';
 import { soundex } from './utils/Soundex';
+import { maskSensitiveData } from './utils/DataMasking';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -133,6 +134,9 @@ export const indexDocument = (
   type: 'IMAGE' | 'DOCUMENT',
   detection_type: 'TEXT' | 'OBJECT'
 ) => {
+  // C2 fix: Mask PII (Aadhaar/PAN/phone) at the single chokepoint so no caller can bypass it
+  content = maskSensitiveData(content ?? '');
+
   if (!content.trim() && !title?.trim()) {
     console.log('[DB] Skipped empty indexing for:', filePath);
     return;

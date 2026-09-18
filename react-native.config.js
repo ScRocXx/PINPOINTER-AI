@@ -1,5 +1,5 @@
 /**
- * React Native configuration for RunAnywhere
+ * React Native configuration for Pinpointer
  */
 module.exports = {
   project: {

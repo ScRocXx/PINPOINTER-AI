@@ -51,6 +51,10 @@
 	<string>This app needs microphone access for speech recognition and voice agent features</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>This app uses on-device speech recognition to transcribe your voice</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>PinPointer indexes your photos on-device so you can search them offline. Nothing leaves your phone.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>PinPointer saves edited images back to your library.</string>
 	<key>RCTNewArchEnabled</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>
