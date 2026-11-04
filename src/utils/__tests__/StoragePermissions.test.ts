@@ -281,3 +281,68 @@ describe('document access', () => {
         expect(Linking.openSettings).toHaveBeenCalledTimes(1);
     });
 });
+
+describe('document access without All Files Access (folder picker and Share)', () => {
+    const modules = NativeModules as Record<string, unknown>;
+    let docAccess: Record<string, jest.Mock>;
+
+    beforeEach(() => {
+        docAccess = {
+            canRequestAllFilesAccess: jest.fn(async () => true),
+            listPdfFolders: jest.fn(async () => []),
+            pickPdfFolder: jest.fn(async () => ({ uri: 'content://tree/Bills', name: 'Bills' })),
+            pickPdfFiles: jest.fn(async () => ['/files/imported_pdfs/a.pdf']),
+        };
+        modules.DocumentAccessModule = docAccess;
+    });
+
+    afterEach(() => {
+        delete modules.DocumentAccessModule;
+    });
+
+    it('syncs quietly from a folder picked earlier', async () => {
+        docAccess.listPdfFolders.mockResolvedValue([{ uri: 'content://tree/Bills', name: 'Bills' }]);
+        expect(await ensureDocumentAccess()).toBe(true);
+        expect(alertSpy).not.toHaveBeenCalled();
+    });
+
+    it('offers "Choose a folder" next to "Open Settings"', async () => {
+        const result = ensureDocumentAccess();
+        await flush();
+        const buttons = (alertSpy.mock.calls[0][2] as Array<{ text: string }>).map((b) => b.text);
+        expect(buttons).toEqual(['Not now', 'Choose a folder', 'Open Settings']);
+        press('Choose a folder');
+        expect(await result).toBe(true);
+        expect(docAccess.pickPdfFolder).toHaveBeenCalledTimes(1);
+        expect(StorageModule.openAllFilesAccessSettings).not.toHaveBeenCalled();
+    });
+
+    it('returns false when the folder picker is cancelled', async () => {
+        docAccess.pickPdfFolder.mockResolvedValue(null);
+        const result = ensureDocumentAccess();
+        await flush();
+        press('Choose a folder');
+        expect(await result).toBe(false);
+    });
+
+    it('in a build without All Files Access, offers only the pickers', async () => {
+        docAccess.canRequestAllFilesAccess.mockResolvedValue(false);
+        const result = ensureDocumentAccess();
+        await flush();
+        expect(alertSpy).toHaveBeenCalledWith('Show Pinpointer your PDFs', expect.stringContaining('Share'), expect.any(Array), expect.anything());
+        const buttons = (alertSpy.mock.calls[0][2] as Array<{ text: string }>).map((b) => b.text);
+        expect(buttons).toEqual(['Not now', 'Pick PDFs', 'Choose a folder']);
+        press('Pick PDFs');
+        expect(await result).toBe(true);
+        expect(docAccess.pickPdfFiles).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns false when no PDFs were picked', async () => {
+        docAccess.canRequestAllFilesAccess.mockResolvedValue(false);
+        docAccess.pickPdfFiles.mockResolvedValue([]);
+        const result = ensureDocumentAccess();
+        await flush();
+        press('Pick PDFs');
+        expect(await result).toBe(false);
+    });
+});

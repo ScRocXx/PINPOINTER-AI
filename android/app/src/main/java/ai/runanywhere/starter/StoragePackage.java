@@ -17,6 +17,8 @@ public class StoragePackage implements ReactPackage {
 
     @Override
     public List<NativeModule> createNativeModules(ReactApplicationContext reactContext) {
-        return Arrays.<NativeModule>asList(new StorageModule(reactContext));
+        return Arrays.<NativeModule>asList(
+                new StorageModule(reactContext),
+                new DocumentAccessModule(reactContext));
     }
 }

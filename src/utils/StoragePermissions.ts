@@ -19,6 +19,7 @@
 import { Alert, AppState, AppStateStatus, Linking, NativeModules, PermissionsAndroid, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AppLogger } from './AppLogger';
+import { canRequestAllFilesAccess, isPdfImportAvailable, listPdfFolders, pickPdfFiles, pickPdfFolder } from './PdfImport';
 
 const { StorageModule } = NativeModules;
 
@@ -118,14 +119,21 @@ export const openAppSettingsAndWait = async (): Promise<PhotoAccess> => {
     return getPhotoAccess();
 };
 
-/** Alert with a Cancel and a primary button; resolves true if the primary button was tapped. */
-const ask = (title: string, message: string, primary: string, cancel = 'Not now'): Promise<boolean> =>
+/**
+ * Alert with a cancel button and up to two more; resolves with the label of
+ * the button tapped, or null for cancel / dismiss.
+ */
+const choose = (title: string, message: string, options: string[], cancel = 'Not now'): Promise<string | null> =>
     new Promise((resolve) => {
         Alert.alert(title, message, [
-            { text: cancel, style: 'cancel', onPress: () => resolve(false) },
-            { text: primary, onPress: () => resolve(true) },
-        ], { cancelable: true, onDismiss: () => resolve(false) });
+            { text: cancel, style: 'cancel', onPress: () => resolve(null) },
+            ...options.map((text) => ({ text, onPress: () => resolve(text) })),
+        ], { cancelable: true, onDismiss: () => resolve(null) });
     });
+
+/** Alert with a Cancel and a primary button; resolves true if the primary button was tapped. */
+const ask = async (title: string, message: string, primary: string, cancel = 'Not now'): Promise<boolean> =>
+    (await choose(title, message, [primary], cancel)) === primary;
 
 /**
  * Makes sure Pinpointer can read photos, guiding the user to Settings when
@@ -197,8 +205,12 @@ export const openAllFilesAccessAndWait = async (): Promise<boolean> => {
 };
 
 /**
- * Makes sure Pinpointer can read PDFs, explaining the "All files access"
- * toggle in plain steps. Resolves true when the document scan may run.
+ * Makes sure Pinpointer can read PDFs, explaining the choices in plain
+ * steps. Resolves true when the document scan may run.
+ *
+ * With "All files access" every PDF in Download/ and Documents/ is found.
+ * Without it, PDFs come from folders the user picked, PDFs picked one by
+ * one, and PDFs shared to Pinpointer (see PdfImport).
  */
 export const ensureDocumentAccess = async (): Promise<boolean> => {
     if (await hasDocumentAccess()) return true;
@@ -218,12 +230,34 @@ export const ensureDocumentAccess = async (): Promise<boolean> => {
         return hasDocumentAccess();
     }
 
-    const fix = await ask(
+    const canPickFolders = isPdfImportAvailable();
+    // Folders picked earlier are enough: sync quietly from those.
+    if (canPickFolders && (await listPdfFolders()).length > 0) return true;
+
+    const SETTINGS = 'Open Settings';
+    const FOLDER = 'Choose a folder';
+    const FILES = 'Pick PDFs';
+
+    if (!(await canRequestAllFilesAccess())) {
+        const choice = await choose(
+            'Show Pinpointer your PDFs',
+            'Choose a folder with your PDFs, or pick PDFs one by one. They never leave this phone.\n\n' +
+            'Tip: from any app you can also tap Share, then Pinpointer.',
+            [FILES, FOLDER],
+        );
+        if (choice === FOLDER) return !!(await pickPdfFolder());
+        if (choice === FILES) return (await pickPdfFiles()) > 0;
+        return false;
+    }
+
+    const choice = await choose(
         'Allow Pinpointer to find your PDFs',
         'Pinpointer searches the PDFs on this phone (for example in Downloads). They never leave the phone.\n\n' +
-        '1. Tap "Open Settings"\n2. Turn on the switch next to "Allow access to manage all files"\n3. Press Back to return here',
-        'Open Settings',
+        '1. Tap "Open Settings"\n2. Turn on the switch next to "Allow access to manage all files"\n3. Press Back to return here' +
+        (canPickFolders ? '\n\nOr tap "Choose a folder" to pick just one folder.' : ''),
+        canPickFolders ? [FOLDER, SETTINGS] : [SETTINGS],
     );
-    if (!fix) return false;
-    return openAllFilesAccessAndWait();
+    if (choice === FOLDER) return !!(await pickPdfFolder());
+    if (choice === SETTINGS) return openAllFilesAccessAndWait();
+    return false;
 };

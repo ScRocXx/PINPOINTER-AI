@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Platform } from 'react-native';
+import { useRef, useState } from 'react';
+import { Alert, Platform } from 'react-native';
 import RNFS from 'react-native-fs';
 import { isFileIndexed, beginTransaction, commitTransaction, rollbackTransaction } from '../database';
 import { processPDF } from '../utils/DocumentPipeline';
@@ -7,6 +7,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useCallback, useEffect } from 'react';
 import { AppLogger } from '../utils/AppLogger';
 import { ensureDocumentAccess } from '../utils/StoragePermissions';
+import { prepareImportedPdfs, subscribeToSharedPdfs } from '../utils/PdfImport';
 
 /**
  * Tracks document-sync state and crawls device storage for PDFs to index.
@@ -60,7 +61,8 @@ export const useDocumentSync = () => {
 
         // Target standard user-accessible directories
         const targetDirs = Platform.OS === 'android'
-            ? [RNFS.DownloadDirectoryPath, `${RNFS.ExternalStorageDirectoryPath}/Documents`]
+            // + copies of PDFs from picked folders, picked files and Share
+            ? [RNFS.DownloadDirectoryPath, `${RNFS.ExternalStorageDirectoryPath}/Documents`, ...(await prepareImportedPdfs())]
             : [RNFS.DocumentDirectoryPath];
 
         for (const dir of targetDirs) {
@@ -82,12 +84,22 @@ export const useDocumentSync = () => {
         return pdfFiles;
     };
 
-    const handleDocumentSync = async (limit?: number) => {
-        if (isSyncingDocs) return;
+    // Latest handleDocumentSync, for the Share listener below.
+    const syncRef = useRef<(limit?: number, fromShare?: boolean) => Promise<void>>(async () => {});
+    const syncingRef = useRef(false);
+    const rerunRef = useRef(false);
+
+    const handleDocumentSync = async (limit?: number, fromShare = false) => {
+        if (isSyncingDocs || syncingRef.current) {
+            if (fromShare) rerunRef.current = true; // pick the shared PDF up right after
+            return;
+        }
 
         // Check the real permission (not "the scan found no PDFs"). If it is
         // missing, explain it and wait for the user to come back from Settings.
-        if (!(await ensureDocumentAccess())) return;
+        // A shared PDF needs no permission, so don't ask then.
+        if (!fromShare && !(await ensureDocumentAccess())) return;
+        syncingRef.current = true;
 
         try {
             setIsSyncingDocs(true);
@@ -137,6 +149,7 @@ export const useDocumentSync = () => {
         } catch (err) {
             AppLogger.error('DocumentSync', 'Background crawler failed:', err);
         } finally {
+            syncingRef.current = false;
             setIsSyncingDocs(false);
             setDocSyncCount(0);
             setTotalDocs(0);
@@ -144,8 +157,23 @@ export const useDocumentSync = () => {
             const now = Date.now();
             setLastDocSyncTime(now);
             await AsyncStorage.setItem('doc_last_sync_time', now.toString());
+
+            if (rerunRef.current) {
+                rerunRef.current = false;
+                syncRef.current(undefined, true);
+            }
         }
     };
+    syncRef.current = handleDocumentSync;
+
+    // PDFs shared to Pinpointer from other apps: confirm, then index them.
+    useEffect(() => subscribeToSharedPdfs((count) => {
+        Alert.alert(
+            count === 1 ? 'PDF added' : `${count} PDFs added`,
+            `Pinpointer is reading ${count === 1 ? 'it' : 'them'} now. ${count === 1 ? 'It' : 'They'} will show up in search in a moment.`,
+        );
+        syncRef.current(undefined, true);
+    }), []);
 
     return {
         isSyncingDocs,

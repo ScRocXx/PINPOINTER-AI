@@ -11,7 +11,7 @@
  * StorageModule come from the preset / jest.setup.js stubs.
  * Platform.OS is forced to 'android' except in the iOS-specific tests.
  */
-import { Alert, AppState, Linking, NativeModules, Platform } from 'react-native';
+import { Alert, AppState, DeviceEventEmitter, Linking, NativeModules, Platform } from 'react-native';
 import RNFS from 'react-native-fs';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { act, renderHook } from '@testing-library/react-native';
@@ -724,5 +724,74 @@ describe('PDF scanner', () => {
     const readDirs = (RNFS.readDir as jest.Mock).mock.calls.map((c) => c[0] as string);
     expect(readDirs).not.toContain(DOWNLOAD);
     expect(readDirs).toContain(DOCS_DIR);
+  });
+});
+
+// ─── picked folders & Share to Pinpointer ───────────────────────────────────
+describe('PDFs from picked folders and Share', () => {
+  const modules = NativeModules as Record<string, unknown>;
+  const IMPORTED = `${RNFS.DocumentDirectoryPath}/imported_pdfs`;
+  let docAccess: Record<string, jest.Mock>;
+  let shareListeners: Array<() => void>;
+
+  beforeEach(() => {
+    shareListeners = [];
+    docAccess = {
+      canRequestAllFilesAccess: jest.fn(async () => true),
+      listPdfFolders: jest.fn(async () => [{ uri: 'content://tree/Bills', name: 'Bills' }]),
+      importPdfFolder: jest.fn(async () => 1),
+      takeSharedPdfs: jest.fn(async () => []),
+      pickPdfFolder: jest.fn(),
+      pickPdfFiles: jest.fn(),
+    };
+    modules.DocumentAccessModule = docAccess;
+    jest.spyOn(DeviceEventEmitter, 'addListener').mockImplementation(((_: string, cb: () => void) => {
+      shareListeners.push(cb);
+      return { remove: jest.fn() };
+    }) as never);
+  });
+
+  afterEach(() => {
+    delete modules.DocumentAccessModule;
+  });
+
+  test('without All Files Access, indexes the copies from a picked folder', async () => {
+    (StorageModule.hasAllFilesAccess as jest.Mock).mockResolvedValue(false);
+    (RNFS.readDir as jest.Mock).mockImplementation(async (p: string) =>
+      p === IMPORTED ? asItems([pdfFile('bill-1a2b.pdf', `${IMPORTED}/bill-1a2b.pdf`)]) : [],
+    );
+    const { result } = await renderHook(() => useDocumentSync());
+
+    await act(async () => {
+      await result.current.handleDocumentSync();
+    });
+
+    expect(alertSpy).not.toHaveBeenCalled();
+    expect(docAccess.importPdfFolder).toHaveBeenCalledWith('content://tree/Bills', 4);
+    expect(processPDF).toHaveBeenCalledWith(`file://${IMPORTED}/bill-1a2b.pdf`);
+  });
+
+  test('a shared PDF is confirmed and indexed without asking for any permission', async () => {
+    (StorageModule.hasAllFilesAccess as jest.Mock).mockResolvedValue(false);
+    docAccess.listPdfFolders.mockResolvedValue([]);
+    docAccess.takeSharedPdfs.mockResolvedValueOnce([]).mockResolvedValueOnce([`${IMPORTED}/shared-9f.pdf`]);
+    (RNFS.readDir as jest.Mock).mockImplementation(async (p: string) =>
+      p === IMPORTED ? asItems([pdfFile('shared-9f.pdf', `${IMPORTED}/shared-9f.pdf`)]) : [],
+    );
+    await renderHook(() => useDocumentSync());
+    await act(async () => {
+      await flushAll();
+    });
+    expect(processPDF).not.toHaveBeenCalled();
+
+    await act(async () => {
+      shareListeners.forEach((cb) => cb());
+      await flushAll();
+      await flushAll();
+    });
+
+    expect(alertSpy).toHaveBeenCalledWith('PDF added', expect.stringContaining('search'));
+    expect(alertSpy).not.toHaveBeenCalledWith('Allow Pinpointer to find your PDFs', expect.anything(), expect.anything(), expect.anything());
+    expect(processPDF).toHaveBeenCalledWith(`file://${IMPORTED}/shared-9f.pdf`);
   });
 });
