@@ -3,7 +3,7 @@ const sharp = require('sharp');
 const fs = require('fs');
 const path = require('path');
 
-const inputFile = path.join(__dirname, '../logo.png.png');
+const inputFile = path.join(__dirname, 'icon-source.png');
 const outDir = path.join(__dirname, '../android/app/src/main/res');
 
 const sizes = {

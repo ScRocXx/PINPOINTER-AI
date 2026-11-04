@@ -36,7 +36,11 @@ export const useVoiceRecording = (onTranscription: (text: string) => void) => {
             setIsTranscribing(false);
             recordingStartRef.current = Date.now();
 
-            // Simulate audio level updates via interval while recording
+            // Simulate audio level updates via interval while recording.
+            // Clear any previous interval first so a repeated start event can't leak one.
+            if (audioLevelInterval.current) {
+                clearInterval(audioLevelInterval.current);
+            }
             audioLevelInterval.current = setInterval(() => {
                 if (recordingStartRef.current > 0) {
                     setRecordingDuration(Date.now() - recordingStartRef.current);

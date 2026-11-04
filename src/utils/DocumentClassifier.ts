@@ -8,6 +8,8 @@
  * unhelpful (e.g., "scan_20240215.pdf" → "SBI Account Statement").
  */
 
+import { maskSensitiveData } from './DataMasking';
+
 // ─── Document Categories ────────────────────────────────────────────────────
 
 /** The 18 document categories the classifier can assign. */
@@ -411,7 +413,9 @@ export const extractSmartTitle = (
                 .find(l => l.length > 8 && l.length < 60);
 
             if (firstLine) {
-                return firstLine;
+                // The title column is stored as-is (indexDocument only masks content),
+                // so a first line like a PAN number or phone must be masked here.
+                return maskSensitiveData(firstLine);
             }
         }
     }

@@ -858,12 +858,18 @@ describe('extractSmartTitle — generic filenames get identifier-based titles', 
         expect(extractSmartTitle(content, 'scan.pdf', classification)).toBe('Account statement.');
     });
 
-    test('dashed Aadhaar number (1234-5678-9012) does not match the identifier regex -> first line', () => {
+    test('dashed Aadhaar number (1234-5678-9012) falls back to the first line, masked', () => {
         const content = 'Aadhaar 1234-5678-9012 details';
         const classification = fakeClassification('AADHAAR_CARD', 'Aadhaar Card', 60);
         expect(extractSmartTitle(content, 'scan.pdf', classification)).toBe(
-            'Aadhaar 1234-5678-9012 details',
+            'Aadhaar ****-****-9012 details',
         );
+    });
+
+    test('first-line title masks a PAN number and a phone number', () => {
+        const classification = fakeClassification('GENERAL_DOCUMENT', 'Document', 0);
+        expect(extractSmartTitle('PAN ABCDE1234F', 'scan.pdf', classification)).toBe('PAN ABCDE****F');
+        expect(extractSmartTitle('Call 9876543210 now', 'scan.pdf', classification)).toBe('Call ******3210 now');
     });
 
     test('confidence exactly 40 does NOT use the identifier path (needs > 40)', () => {

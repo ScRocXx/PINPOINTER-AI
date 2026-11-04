@@ -32,12 +32,3 @@ export const getRecentPhotos = async (): Promise<RecentPhoto[]> => {
         return [];
     }
 };
-
-/** Clear all recently viewed photos. */
-export const clearRecentPhotos = async (): Promise<void> => {
-    try {
-        await AsyncStorage.removeItem(RECENT_PHOTOS_KEY);
-    } catch (e) {
-        AppLogger.error('RecentPhotos', 'Failed to clear recent photos', e);
-    }
-};
