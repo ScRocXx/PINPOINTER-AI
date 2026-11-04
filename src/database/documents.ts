@@ -3,7 +3,7 @@
  */
 import { maskSensitiveData } from '../utils/DataMasking';
 import { AppLogger } from '../utils/AppLogger';
-import { getDb, isFtsAvailable } from './connection';
+import { getDb, isFtsAvailable, isVecAvailable } from './connection';
 import type { DocumentRecord } from './types';
 
 /** A raw row as returned by op-sqlite query results. */
@@ -68,6 +68,17 @@ export const indexDocument = (
 
   try {
     const db = getDb();
+    // Re-indexing gives the row a new id, so drop the old row's vector first;
+    // otherwise it stays in vec_index as an orphan and takes up KNN slots.
+    if (isVecAvailable()) {
+      try {
+        const existing = db.executeSync('SELECT id FROM document_index WHERE filePath = ? LIMIT 1', [filePath]);
+        const oldId = (existing?.rows?.[0] as { id?: number } | undefined)?.id;
+        if (oldId != null) db.executeSync('DELETE FROM vec_index WHERE document_id = ?', [oldId]);
+      } catch (e) {
+        AppLogger.warn('DB', 'Old vector cleanup failed:', e);
+      }
+    }
     // Always DELETE first to ensure FTS triggers fire correctly for updates
     db.executeSync('DELETE FROM document_index WHERE filePath = ?', [filePath]);
     db.executeSync(
@@ -105,6 +116,9 @@ export const clearIndex = () => {
     db.executeSync('DELETE FROM document_index');
     if (isFtsAvailable()) {
       try { db.executeSync('DELETE FROM fts_index'); } catch { }
+    }
+    if (isVecAvailable()) {
+      try { db.executeSync('DELETE FROM vec_index'); } catch { }
     }
     AppLogger.info('DB', 'Index cleared');
   } catch (e) {

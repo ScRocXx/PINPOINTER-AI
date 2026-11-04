@@ -19,9 +19,11 @@ import {
   clearSyncCursor,
   getGallerySyncLimit,
   getGalleryTotalCount,
+  backfillEmbeddings,
   QUICK_SYNC_LIMIT,
 } from '../GallerySync';
 import { analyzeImage } from '../VisionPipeline';
+import { encodeImage } from '../../services/EmbeddingService';
 import * as DatabaseDocuments from '../../database/documents';
 import * as DatabaseTransactions from '../../database/transactions';
 import * as DatabaseVectors from '../../database/vectors';
@@ -38,6 +40,12 @@ import { AppLogger } from '../AppLogger';
 jest.mock('../VisionPipeline', () => ({
   analyzeImage: jest.fn(),
 }));
+
+jest.mock('../../services/EmbeddingService', () => ({
+  encodeImage: jest.fn(),
+}));
+
+const encodeImageMock = encodeImage as jest.Mock;
 
 const getPhotosMock = CameraRoll.getPhotos as jest.Mock;
 const analyzeImageMock = analyzeImage as jest.Mock;
@@ -182,7 +190,7 @@ describe('performQuickSync', () => {
     expect(isFileIndexed(uriFor(2))).toBe(true);
   });
 
-  test('continues past per-photo failures: placeholder indexed, transaction rolled back', async () => {
+  test('continues past per-photo failures: failed photo left unindexed for retry, transaction rolled back', async () => {
     analyzeImageMock.mockImplementation(async (uri: string) => {
       if (uri === uriFor(1)) throw new Error('OCR exploded');
       return visionResult(uri);
@@ -197,9 +205,10 @@ describe('performQuickSync', () => {
     const result = await performQuickSync(jest.fn());
 
     expect(result).toEqual({ processed: 5, wasCancelled: false });
-    // every photo still ends up in the index (failed one as a placeholder)
-    expect(getIndexedCount()).toBe(5);
-    expect(indexSpy).toHaveBeenCalledWith(null, 'image', uriFor(1), 'IMAGE', 'OBJECT');
+    // the failed photo gets no placeholder row, so the next sync retries it
+    expect(getIndexedCount()).toBe(4);
+    expect(isFileIndexed(uriFor(1))).toBe(false);
+    expect(indexSpy.mock.calls.some((c) => c[2] === uriFor(1))).toBe(false);
     expect(
       indexSpy.mock.calls.find((c) => c[2] === uriFor(0))?.[1],
     ).toContain('ocr text');
@@ -383,7 +392,7 @@ describe('performFullGallerySync', () => {
     expect(getIndexedCount()).toBe(10);
   });
 
-  test('recovers from per-photo errors with a placeholder and a rolled-back transaction', async () => {
+  test('recovers from per-photo errors: rolled-back transaction, failed photo left for retry', async () => {
     analyzeImageMock.mockImplementation(async (uri: string) => {
       if (uri === uriFor(3)) throw new Error('OCR exploded');
       return visionResult(uri);
@@ -397,8 +406,9 @@ describe('performFullGallerySync', () => {
     const result = await runFullSync(jest.fn());
 
     expect(result).toEqual({ processed: 10, wasCancelled: false });
-    expect(getIndexedCount()).toBe(10);
-    expect(indexSpy).toHaveBeenCalledWith(null, 'image', uriFor(3), 'IMAGE', 'OBJECT');
+    expect(getIndexedCount()).toBe(9);
+    expect(isFileIndexed(uriFor(3))).toBe(false);
+    expect(indexSpy.mock.calls.some((c) => c[2] === uriFor(3))).toBe(false);
     expect(rollbackSpy).toHaveBeenCalledTimes(1);
     expect(commitSpy).toHaveBeenCalledTimes(9);
     expect(warnSpy).toHaveBeenCalledWith(
@@ -527,5 +537,82 @@ describe('sync limits', () => {
 
   test('QUICK_SYNC_LIMIT is 50', () => {
     expect(QUICK_SYNC_LIMIT).toBe(50);
+  });
+});
+
+describe('backfillEmbeddings', () => {
+  const vec = () => new Float32Array(512).fill(0.01);
+
+  const runBackfill = async (cancelRef?: { current: boolean }) => {
+    const p = backfillEmbeddings(cancelRef);
+    await jest.advanceTimersByTimeAsync(60_000);
+    return p;
+  };
+
+  test('adds embeddings to indexed photos that have none', async () => {
+    for (let i = 0; i < 3; i++) indexDocument(null, `photo ${i}`, uriFor(i), 'IMAGE', 'TEXT');
+    encodeImageMock.mockResolvedValue(vec());
+
+    const added = await runBackfill();
+
+    expect(added).toBe(3);
+    expect(getEmbeddingCount()).toBe(3);
+    expect(encodeImageMock).toHaveBeenCalledWith(uriFor(0));
+  });
+
+  test('skips documents (PDFs) and photos that already have a vector', async () => {
+    const withVec = indexDocument(null, 'has vector', uriFor(0), 'IMAGE', 'TEXT')!;
+    DatabaseVectors.indexEmbedding(withVec, vec());
+    indexDocument('Doc', 'pdf text', '/docs/a.pdf', 'DOCUMENT', 'TEXT');
+    indexDocument(null, 'needs vector', uriFor(1), 'IMAGE', 'TEXT');
+    encodeImageMock.mockResolvedValue(vec());
+
+    const added = await runBackfill();
+
+    expect(added).toBe(1);
+    expect(encodeImageMock).toHaveBeenCalledTimes(1);
+    expect(encodeImageMock).toHaveBeenCalledWith(uriFor(1));
+  });
+
+  test('does not loop on photos that fail to encode', async () => {
+    for (let i = 0; i < 4; i++) indexDocument(null, `photo ${i}`, uriFor(i), 'IMAGE', 'TEXT');
+    encodeImageMock.mockImplementation(async (uri: string) => (uri === uriFor(2) ? null : vec()));
+
+    const added = await runBackfill();
+
+    expect(added).toBe(3);
+    expect(encodeImageMock).toHaveBeenCalledTimes(4);
+  });
+
+  test('gives up quickly when the encoder is unavailable', async () => {
+    for (let i = 0; i < 30; i++) indexDocument(null, `photo ${i}`, uriFor(i), 'IMAGE', 'TEXT');
+    encodeImageMock.mockResolvedValue(null);
+
+    const added = await runBackfill();
+
+    expect(added).toBe(0);
+    expect(encodeImageMock).toHaveBeenCalledTimes(5);
+  });
+
+  test('stops when cancelled', async () => {
+    for (let i = 0; i < 3; i++) indexDocument(null, `photo ${i}`, uriFor(i), 'IMAGE', 'TEXT');
+    encodeImageMock.mockResolvedValue(vec());
+
+    const added = await runBackfill({ current: true });
+
+    expect(added).toBe(0);
+    expect(encodeImageMock).not.toHaveBeenCalled();
+  });
+
+  test('only one backfill runs at a time', async () => {
+    indexDocument(null, 'photo', uriFor(0), 'IMAGE', 'TEXT');
+    encodeImageMock.mockResolvedValue(vec());
+
+    const first = backfillEmbeddings();
+    const second = await backfillEmbeddings();
+    await jest.advanceTimersByTimeAsync(60_000);
+
+    expect(second).toBe(0);
+    expect(await first).toBe(1);
   });
 });

@@ -181,6 +181,10 @@ class MockDB {
       return { rows: [] };
     }
     if (/^DELETE FROM fts_index/i.test(q)) return { rows: [] }; // FTS is virtual over documents
+    if (/^DELETE FROM vec_index\s*;?\s*$/i.test(q)) {
+      this.vectors = [];
+      return { rows: [] };
+    }
     if (/^DELETE FROM vec_index WHERE document_id = \?/i.test(q)) {
       const [id] = params;
       this.vectors = this.vectors.filter((v) => v.document_id !== id);
@@ -210,6 +214,17 @@ class MockDB {
       const [id] = params;
       const hit = this.vectors.find((v) => v.document_id === id);
       return { rows: hit ? [{ document_id: hit.document_id }] : [] };
+    }
+
+    // Images without an embedding (backfill): id < ? AND id NOT IN vec_index
+    if (/WHERE type = 'IMAGE' AND id < \? AND id NOT IN \(SELECT document_id FROM vec_index\)/i.test(q)) {
+      const [beforeId, limit] = params;
+      const withVec = new Set(this.vectors.map((v) => v.document_id));
+      const rows = this.documents
+        .filter((r) => r.type === 'IMAGE' && r.id < beforeId && !withVec.has(r.id))
+        .sort((a, b) => b.id - a.id)
+        .slice(0, limit);
+      return { rows: this._project(rows, this._selectList(q)) };
     }
 
     // FTS5 MATCH (simple FTS path + hybrid WITH query)

@@ -4,7 +4,7 @@
 import { getDb, isVecAvailable } from './connection';
 import { AppLogger } from '../utils/AppLogger';
 
-/** Store a 512-dim INT8 embedding vector for a document */
+/** Store a 512-dim float32 embedding vector for a document */
 export const indexEmbedding = (documentId: number, embedding: Float32Array) => {
   if (!isVecAvailable()) return;
   try {
@@ -46,5 +46,36 @@ export const getEmbeddingCount = (): number => {
     return rows.length > 0 ? (rows[0] as { cnt: number }).cnt : 0;
   } catch {
     return 0;
+  }
+};
+
+/** An indexed image that has no embedding yet. */
+export interface MissingEmbedding {
+  id: number;
+  filePath: string;
+}
+
+/**
+ * Image rows with no vector in vec_index: photos indexed before CLIP worked,
+ * or whose encoding failed. Used by the embedding backfill.
+ * Newest first; pass the last id seen as `beforeId` to page past rows that
+ * failed to encode, so the backfill never loops on them.
+ */
+export const getImagesMissingEmbeddings = (limit = 50, beforeId = Number.MAX_SAFE_INTEGER): MissingEmbedding[] => {
+  if (!isVecAvailable()) return [];
+  try {
+    const db = getDb();
+    const result = db.executeSync(
+      `SELECT id, filePath FROM document_index
+       WHERE type = 'IMAGE' AND id < ? AND id NOT IN (SELECT document_id FROM vec_index)
+       ORDER BY id DESC
+       LIMIT ?`,
+      [beforeId, limit]
+    );
+    const rows = (result?.rows || []) as unknown as MissingEmbedding[];
+    return rows.map(r => ({ id: r.id, filePath: r.filePath }));
+  } catch (e) {
+    AppLogger.warn('DB', 'getImagesMissingEmbeddings failed:', e);
+    return [];
   }
 };

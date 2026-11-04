@@ -14,6 +14,7 @@ export {
   clearIndex,
   getAllDocuments,
 } from './documents';
-export { indexEmbedding, hasEmbedding, getEmbeddingCount } from './vectors';
+export { indexEmbedding, hasEmbedding, getEmbeddingCount, getImagesMissingEmbeddings } from './vectors';
+export type { MissingEmbedding } from './vectors';
 export { beginTransaction, commitTransaction, rollbackTransaction } from './transactions';
 export { searchDocuments, extractSnippet } from './search';

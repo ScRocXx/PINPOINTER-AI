@@ -1,17 +1,37 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { searchDocuments, DocumentRecord } from '../database';
-import { encodeText } from '../services/EmbeddingService';
+import { encodeText, warmUpText } from '../services/EmbeddingService';
 import { AppLogger } from '../utils/AppLogger';
 import {
     loadSearchHistory, saveSearch, deleteSearchItem,
     clearSearchHistory, SearchHistoryItem,
 } from '../utils/SearchHistory';
 
+const SEARCH_DEBOUNCE_MS = 200;
+const HISTORY_DEBOUNCE_MS = 800;
+const WARMUP_DELAY_MS = 1500;
+
+/**
+ * Hybrid results first, then any text-only matches (synonyms, Soundex, LIKE
+ * fallback) the hybrid query didn't return, so the semantic step only adds.
+ */
+const mergeResults = (primary: DocumentRecord[], secondary: DocumentRecord[]): DocumentRecord[] => {
+    const seen = new Set<string>();
+    const merged: DocumentRecord[] = [];
+    for (const doc of [...primary, ...secondary]) {
+        if (seen.has(doc.filePath)) continue;
+        seen.add(doc.filePath);
+        merged.push(doc);
+    }
+    return merged;
+};
+
 /**
  * useSearch — handles search text, debounced DB queries, results, and history.
  *
- * Runs the FTS + vector hybrid search 200ms after the last keystroke and
- * persists successful queries to the search history (debounced 800ms).
+ * 200ms after the last keystroke it shows text-index results immediately,
+ * then adds semantic (CLIP) matches once the query vector is ready.
+ * Queries are saved to the search history after 800ms.
  *
  * @param isDbReady Whether the SQLite database has finished initializing.
  * @returns Search state (text, results, pending flags, history) and handlers.
@@ -23,6 +43,7 @@ export const useSearch = (isDbReady: boolean) => {
     const [isSearching, setIsSearching] = useState(false);
     const [isSearchPending, setIsSearchPending] = useState(false);
     const [searchHistory, setSearchHistory] = useState<SearchHistoryItem[]>([]);
+    const lastResultRef = useRef<{ query: string; count: number } | null>(null);
 
     // Load history on mount
     useEffect(() => {
@@ -30,7 +51,18 @@ export const useSearch = (isDbReady: boolean) => {
         loadSearchHistory().then(setSearchHistory);
     }, [isDbReady]);
 
-    // Debounced search — 200ms after last keystroke
+    // Load the CLIP text encoder in the background shortly after startup, so the
+    // first search doesn't wait for the model to load.
+    useEffect(() => {
+        if (!isDbReady) return;
+        const timer = setTimeout(() => { warmUpText(); }, WARMUP_DELAY_MS);
+        return () => clearTimeout(timer);
+    }, [isDbReady]);
+
+    // Debounced search — 200ms after last keystroke.
+    // Step 1 runs the text index right away (a few ms) and shows those results.
+    // Step 2 encodes the query with CLIP and, if that works, re-runs the hybrid
+    // query to add semantic matches. Typing never waits on the encoder.
     useEffect(() => {
         if (!isDbReady || !searchText.trim()) {
             setSearchResults([]);
@@ -42,13 +74,19 @@ export const useSearch = (isDbReady: boolean) => {
         setIsSearchPending(true);
         const timer = setTimeout(async () => {
             try {
-                // Generate semantic query vector for hybrid search
-                const queryVector = await encodeText(searchText);
+                const textResults = searchDocuments(searchText);
                 if (!isCurrent) return;
-                const results = searchDocuments(searchText, queryVector ?? undefined);
-                if (!isCurrent) return;
-                setSearchResults(results);
+                lastResultRef.current = { query: searchText, count: textResults.length };
+                setSearchResults(textResults);
                 setDebouncedSearchText(searchText);
+                setIsSearchPending(false);
+
+                const queryVector = await encodeText(searchText);
+                if (!isCurrent || !queryVector) return;
+                const hybridResults = mergeResults(searchDocuments(searchText, queryVector), textResults);
+                if (!isCurrent) return;
+                lastResultRef.current = { query: searchText, count: hybridResults.length };
+                setSearchResults(hybridResults);
             } catch (e) {
                 AppLogger.error('Search', 'search error:', e);
             } finally {
@@ -56,31 +94,29 @@ export const useSearch = (isDbReady: boolean) => {
                     setIsSearchPending(false);
                 }
             }
-        }, 200);
+        }, SEARCH_DEBOUNCE_MS);
         return () => {
             isCurrent = false;
             clearTimeout(timer);
         };
     }, [searchText, isDbReady]);
 
-    // Save to history when user stops typing (debounced 800ms)
+    // Save to history when user stops typing (debounced 800ms).
+    // Reuses the result count from the search above instead of searching again.
     useEffect(() => {
         if (!searchText.trim() || !isDbReady) return;
         let isCurrent = true;
         const timer = setTimeout(async () => {
             try {
-                // Generate semantic query vector for hybrid search
-                const queryVector = await encodeText(searchText);
-                if (!isCurrent) return;
-                const results = searchDocuments(searchText, queryVector ?? undefined);
-                if (!isCurrent) return;
-                await saveSearch(searchText, results.length);
+                const last = lastResultRef.current;
+                const count = last && last.query === searchText ? last.count : 0;
+                await saveSearch(searchText, count);
                 if (!isCurrent) return;
                 setSearchHistory(await loadSearchHistory());
             } catch (e) {
                 AppLogger.error('Search', 'saveSearch error:', e);
             }
-        }, 800);
+        }, HISTORY_DEBOUNCE_MS);
         return () => {
             isCurrent = false;
             clearTimeout(timer);

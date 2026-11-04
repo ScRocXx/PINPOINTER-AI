@@ -17,7 +17,7 @@ import * as connection from '../connection';
 import { indexDocument } from '../documents';
 import { getEmbeddingCount, indexEmbedding } from '../vectors';
 import { soundex } from '../../utils/Soundex';
-import { extractSnippet, searchDocuments } from '../search';
+import { extractSnippet, searchDocuments, MAX_VECTOR_DISTANCE } from '../search';
 import type { DocumentRecord } from '../types';
 
 // Top-level import: jest's moduleNameMapper routes this to the SAME mock
@@ -251,6 +251,18 @@ describe('searchDocuments — hybrid vector path', () => {
 
   test('queryVector with no matching terms falls through gracefully to []', () => {
     expect(searchDocuments('zzz-no-match-qqq', new Float32Array(512))).toEqual([]);
+  });
+
+  test('vector matches are limited by a distance cutoff', () => {
+    const db = connection.getDb();
+    const spy = jest.spyOn(db, 'executeSync');
+    searchDocuments('aadhaar', new Float32Array(512));
+    const hybridCall = spy.mock.calls.find(([sql]) => /rrf_score/.test(String(sql)));
+    expect(hybridCall).toBeDefined();
+    expect(String(hybridCall![0])).toMatch(/WHERE distance <= \?/);
+    expect(hybridCall![1]).toEqual([expect.any(Uint8Array), MAX_VECTOR_DISTANCE, expect.any(String)]);
+    expect(MAX_VECTOR_DISTANCE).toBeGreaterThan(0);
+    expect(MAX_VECTOR_DISTANCE).toBeLessThan(Math.SQRT2); // stricter than "any non-opposite vector"
   });
 });
 

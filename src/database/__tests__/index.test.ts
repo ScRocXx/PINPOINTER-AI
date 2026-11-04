@@ -10,14 +10,14 @@
  */
 
 import * as Database from '../index';
-import * as Shim from '../../Database';
 import type { DocumentRecord } from '../index';
 // NOTE: this import goes through jest moduleNameMapper to the SAME in-memory
 // mock instance the source modules use — so __resetAll() truly resets state.
 // (jest.requireMock() double-evaluates the mock file and clears dead state.)
 import { __resetAll } from '@op-engineering/op-sqlite';
 
-// The original src/Database.ts public function API, alphabetically sorted.
+// The original src/Database.ts public function API, plus
+// getImagesMissingEmbeddings (embedding backfill), alphabetically sorted.
 // (DocumentRecord is a type-only export and does not appear at runtime.)
 const EXPECTED_EXPORTS = [
   'beginTransaction',
@@ -27,6 +27,7 @@ const EXPECTED_EXPORTS = [
   'extractSnippet',
   'getAllDocuments',
   'getEmbeddingCount',
+  'getImagesMissingEmbeddings',
   'getIndexedCount',
   'hasEmbedding',
   'indexDocument',
@@ -41,7 +42,6 @@ const EXPECTED_EXPORTS = [
 const INTERNAL_HELPERS = ['getDb', 'isFtsAvailable', 'isVecAvailable', 'processResults'];
 
 const barrelNs = Database as unknown as Record<string, unknown>;
-const shimNs = Shim as unknown as Record<string, unknown>;
 
 beforeEach(() => {
   jest.spyOn(console, 'log').mockImplementation(() => {});
@@ -59,7 +59,7 @@ afterEach(() => {
 });
 
 describe('database barrel — public API contract', () => {
-  test('exposes exactly the 15 original export names (no more, no less)', () => {
+  test('exposes exactly the 16 expected export names (no more, no less)', () => {
     expect(Object.keys(barrelNs).sort()).toEqual(EXPECTED_EXPORTS);
   });
 
@@ -81,25 +81,9 @@ describe('database barrel — public API contract', () => {
   });
 });
 
-describe('deprecated src/Database.ts shim', () => {
-  test('shim exposes the same 15 export names as the barrel', () => {
-    expect(Object.keys(shimNs).sort()).toEqual(EXPECTED_EXPORTS);
-  });
-
-  test('each shim export is the identical function reference as the barrel', () => {
-    for (const name of EXPECTED_EXPORTS) {
-      expect(shimNs[name]).toBe(barrelNs[name]);
-    }
-  });
-});
-
 describe('no internal leakage through the public API', () => {
   test.each(INTERNAL_HELPERS)('barrel does not expose %s', (name) => {
     expect(barrelNs[name]).toBeUndefined();
-  });
-
-  test.each(INTERNAL_HELPERS)('shim does not expose %s', (name) => {
-    expect(shimNs[name]).toBeUndefined();
   });
 });
 

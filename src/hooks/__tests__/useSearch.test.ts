@@ -8,8 +8,10 @@
  * - searchDocuments is SYNCHRONOUS (called without await) -> mockReturnValue
  * - encodeText is async -> mockResolvedValue / deferred implementations
  * - 200ms debounce for search, 800ms debounce for history save
+ * - text-only search runs first and its results show immediately; the hybrid
+ *   search runs only once encodeText resolves with a vector
+ * - history save reuses the last result count (no second search)
  * - isCurrent staleness guard on both debounced effects
- * - queryVector null is passed through as `undefined` (?? undefined)
  * - mount effect has NO catch on loadSearchHistory
  */
 import { renderHook, act } from '@testing-library/react-native';
@@ -18,7 +20,7 @@ import type { DocumentRecord } from '../../database';
 import type { SearchHistoryItem } from '../../utils/SearchHistory';
 
 import { searchDocuments } from '../../database';
-import { encodeText } from '../../services/EmbeddingService';
+import { encodeText, warmUpText } from '../../services/EmbeddingService';
 import {
     loadSearchHistory,
     saveSearch,
@@ -32,6 +34,7 @@ jest.mock('../../database', () => ({
 
 jest.mock('../../services/EmbeddingService', () => ({
     encodeText: jest.fn(),
+    warmUpText: jest.fn(),
 }));
 
 jest.mock('../../utils/SearchHistory', () => ({
@@ -43,6 +46,7 @@ jest.mock('../../utils/SearchHistory', () => ({
 
 const mockSearchDocuments = searchDocuments as unknown as jest.Mock;
 const mockEncodeText = encodeText as unknown as jest.Mock;
+const mockWarmUpText = warmUpText as unknown as jest.Mock;
 const mockLoadSearchHistory = loadSearchHistory as unknown as jest.Mock;
 const mockSaveSearch = saveSearch as unknown as jest.Mock;
 const mockDeleteSearchItem = deleteSearchItem as unknown as jest.Mock;
@@ -72,6 +76,7 @@ beforeEach(() => {
     jest.useFakeTimers();
     jest.clearAllMocks();
     mockEncodeText.mockResolvedValue(VECTOR);
+    mockWarmUpText.mockResolvedValue(true);
     mockSearchDocuments.mockReturnValue([]);
     mockLoadSearchHistory.mockResolvedValue([]);
     mockSaveSearch.mockResolvedValue(undefined);
@@ -142,7 +147,41 @@ describe('useSearch — debounced search (200ms)', () => {
         await flush();
         await typeAndWait(result, 'invoice', 200);
         expect(mockEncodeText).toHaveBeenCalledWith('invoice');
-        expect(mockSearchDocuments).toHaveBeenCalledWith('invoice', VECTOR);
+        expect(mockSearchDocuments).toHaveBeenNthCalledWith(1, 'invoice');
+        expect(mockSearchDocuments).toHaveBeenNthCalledWith(2, 'invoice', VECTOR);
+    });
+
+    test('text results show before the query vector is ready', async () => {
+        const textDocs = [doc(1, 'Invoice Jan')];
+        const hybridDocs = [doc(2, 'Beach photo'), doc(1, 'Invoice Jan')];
+        mockSearchDocuments.mockImplementation((_q: string, v?: Float32Array) => (v ? hybridDocs : textDocs));
+        let resolveVector: (v: Float32Array | null) => void = () => {};
+        mockEncodeText.mockImplementation(() => new Promise((r) => { resolveVector = r; }));
+        const { result } = await renderHook(() => useSearch(true));
+        await flush();
+        await typeAndWait(result, 'invoice', 200);
+        // Encoder still running: text results are already on screen
+        expect(result.current.searchResults).toEqual(textDocs);
+        expect(result.current.isSearchPending).toBe(false);
+        await act(async () => { resolveVector(VECTOR); });
+        expect(result.current.searchResults).toEqual(hybridDocs);
+    });
+
+    test('text-only matches the hybrid query missed are kept after it', async () => {
+        const likeOnly = doc(5, 'Aadhar (synonym match)');
+        mockSearchDocuments.mockImplementation((_q: string, v?: Float32Array) => (v ? [doc(2, 'Beach')] : [likeOnly]));
+        const { result } = await renderHook(() => useSearch(true));
+        await flush();
+        await typeAndWait(result, 'aadhaar', 200);
+        expect(result.current.searchResults).toEqual([doc(2, 'Beach'), likeOnly]);
+    });
+
+    test('warms up the text encoder shortly after mount', async () => {
+        await renderHook(() => useSearch(true));
+        await flush();
+        expect(mockWarmUpText).not.toHaveBeenCalled();
+        await act(async () => { jest.advanceTimersByTime(1500); });
+        expect(mockWarmUpText).toHaveBeenCalledTimes(1);
     });
 
     test('no search fires before the 200ms debounce elapses', async () => {
@@ -168,12 +207,13 @@ describe('useSearch — debounced search (200ms)', () => {
         expect(result.current.debouncedSearchText).toBe('invoice');
     });
 
-    test('null query vector is passed as undefined (?? undefined path)', async () => {
+    test('null query vector: only the text search runs', async () => {
         mockEncodeText.mockResolvedValue(null);
         const { result } = await renderHook(() => useSearch(true));
         await flush();
         await typeAndWait(result, 'hello', 200);
-        expect(mockSearchDocuments).toHaveBeenCalledWith('hello', undefined);
+        expect(mockSearchDocuments).toHaveBeenCalledTimes(1);
+        expect(mockSearchDocuments).toHaveBeenCalledWith('hello');
     });
 
     test('empty query never searches and clears results', async () => {
@@ -216,8 +256,8 @@ describe('useSearch — debounced search (200ms)', () => {
         await flush();
         expect(result.current.searchResults).toEqual([]);
         expect(result.current.isSearchPending).toBe(false);
-        // no additional DB call for the empty query
-        expect(mockSearchDocuments).toHaveBeenCalledTimes(1);
+        // no additional DB call for the empty query (2 = text + hybrid for 'invoice')
+        expect(mockSearchDocuments).toHaveBeenCalledTimes(2);
     });
 
     test('isSearchPending is true while debouncing, false after completion', async () => {
@@ -233,12 +273,13 @@ describe('useSearch — debounced search (200ms)', () => {
         expect(result.current.isSearchPending).toBe(false);
     });
 
-    test('encodeText rejection: no DB call, error logged, pending cleared', async () => {
+    test('encodeText rejection: text results kept, error logged, pending cleared', async () => {
         mockEncodeText.mockRejectedValue(new Error('model missing'));
         const { result } = await renderHook(() => useSearch(true));
         await flush();
         await typeAndWait(result, 'invoice', 200);
-        expect(mockSearchDocuments).not.toHaveBeenCalled();
+        expect(mockSearchDocuments).toHaveBeenCalledTimes(1);
+        expect(mockSearchDocuments).toHaveBeenCalledWith('invoice');
         expect(consoleSpy).toHaveBeenCalledWith(
             '[Search] search error:',
             expect.any(Error),
@@ -281,8 +322,9 @@ describe('useSearch — staleness / rapid typing', () => {
         });
         expect(mockEncodeText).toHaveBeenCalledTimes(1);
         expect(mockEncodeText).toHaveBeenCalledWith('ab');
-        expect(mockSearchDocuments).toHaveBeenCalledTimes(1);
-        expect(mockSearchDocuments).toHaveBeenCalledWith('ab', VECTOR);
+        expect(mockSearchDocuments).toHaveBeenCalledTimes(2);
+        expect(mockSearchDocuments).toHaveBeenNthCalledWith(1, 'ab');
+        expect(mockSearchDocuments).toHaveBeenNthCalledWith(2, 'ab', VECTOR);
     });
 
     test('in-flight encodeText for a stale query is discarded (isCurrent guard)', async () => {
@@ -305,16 +347,19 @@ describe('useSearch — staleness / rapid typing', () => {
         });
         expect(mockEncodeText).toHaveBeenCalledWith('a');
         expect(resolvers).toHaveLength(1);
+        // the text search for 'a' already ran
+        expect(mockSearchDocuments).toHaveBeenCalledTimes(1);
+        expect(mockSearchDocuments).toHaveBeenCalledWith('a');
 
         // change query -> cleanup marks the 'a' run as stale
         await act(() => {
             result.current.setSearchText('ab');
         });
 
-        // late resolution of the stale 'a' encode must not hit the DB
+        // late resolution of the stale 'a' encode must not run the hybrid query
         resolvers[0](new Float32Array([9]));
         await flush();
-        expect(mockSearchDocuments).not.toHaveBeenCalled();
+        expect(mockSearchDocuments).toHaveBeenCalledTimes(1);
 
         // the 'ab' timer fires and completes normally
         await act(async () => {
@@ -323,8 +368,9 @@ describe('useSearch — staleness / rapid typing', () => {
         expect(mockEncodeText).toHaveBeenCalledWith('ab');
         resolvers[1](new Float32Array([8]));
         await flush();
-        expect(mockSearchDocuments).toHaveBeenCalledTimes(1);
-        expect(mockSearchDocuments).toHaveBeenCalledWith(
+        expect(mockSearchDocuments).toHaveBeenCalledTimes(3);
+        expect(mockSearchDocuments).toHaveBeenNthCalledWith(2, 'ab');
+        expect(mockSearchDocuments).toHaveBeenLastCalledWith(
             'ab',
             expect.any(Float32Array),
         );
@@ -381,16 +427,14 @@ describe('useSearch — history save (800ms debounce)', () => {
         expect(result.current.searchHistory).toEqual([historyItem('invoice', 2)]);
     });
 
-    test('encodeText rejection in history effect skips save, logs saveSearch error', async () => {
-        mockEncodeText.mockRejectedValue(new Error('no model'));
+    test('history save reuses the search result count instead of searching again', async () => {
+        mockSearchDocuments.mockReturnValue([doc(1, 'A'), doc(2, 'B')]);
         const { result } = await renderHook(() => useSearch(true));
         await flush();
         await typeAndWait(result, 'invoice', 800);
-        expect(mockSaveSearch).not.toHaveBeenCalled();
-        expect(consoleSpy).toHaveBeenCalledWith(
-            '[Search] saveSearch error:',
-            expect.any(Error),
-        );
+        expect(mockEncodeText).toHaveBeenCalledTimes(1);
+        expect(mockSearchDocuments).toHaveBeenCalledTimes(2); // text + hybrid only
+        expect(mockSaveSearch).toHaveBeenCalledWith('invoice', 2);
     });
 
     test('no history save for empty query', async () => {

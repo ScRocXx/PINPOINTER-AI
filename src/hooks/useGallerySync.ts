@@ -1,9 +1,12 @@
 import { useState, useRef, useCallback } from 'react';
 import { Platform, PermissionsAndroid, Alert } from 'react-native';
-import { performFullGallerySync, performQuickSync, loadSavedCursor } from '../utils/GallerySync';
+import { performFullGallerySync, performQuickSync, loadSavedCursor, backfillEmbeddings } from '../utils/GallerySync';
 import { getIndexedCount } from '../database';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AppLogger } from '../utils/AppLogger';
+
+/** Wait after app start before backfilling, so startup stays smooth. */
+const BACKFILL_STARTUP_DELAY_MS = 5000;
 
 /**
  * useGallerySync — handles quick/deep sync, pause, resume, progress.
@@ -17,18 +20,31 @@ export const useGallerySync = () => {
     const [lastSyncTime, setLastSyncTime] = useState<number | null>(null);
     const cancelRef = useRef<boolean>(false);
 
+    // Give already-indexed photos that lack a CLIP embedding one, in the
+    // background. Safe to call repeatedly: only one backfill runs at a time.
+    const startBackfill = useCallback(() => {
+        try {
+            backfillEmbeddings(cancelRef).catch((e) => AppLogger.warn('GallerySync', 'Backfill failed', e));
+        } catch (e) {
+            AppLogger.warn('GallerySync', 'Backfill failed to start', e);
+        }
+    }, []);
+
     // Load persisted count on mount
     const loadPersistedCount = useCallback(async () => {
         try {
             const count = getIndexedCount();
-            if (count > 0) setSyncCount(count);
+            if (count > 0) {
+                setSyncCount(count);
+                setTimeout(startBackfill, BACKFILL_STARTUP_DELAY_MS);
+            }
 
             const timeStr = await AsyncStorage.getItem('gallery_last_sync_time');
             if (timeStr) setLastSyncTime(parseInt(timeStr, 10));
         } catch (e) {
             AppLogger.warn('GallerySync', 'Failed to load persisted state', e);
         }
-    }, []);
+    }, [startBackfill]);
 
     const requestPermission = async (): Promise<boolean> => {
         if (Platform.OS === 'android') {
@@ -65,6 +81,7 @@ export const useGallerySync = () => {
                 setLastSyncTime(now);
                 await AsyncStorage.setItem('gallery_last_sync_time', now.toString());
                 Alert.alert('Gallery Indexed', `Done! ${processed} photos indexed for AI search.`);
+                startBackfill();
             }
         } catch (error) {
             AppLogger.error('GallerySync', 'Deep sync failed', error);
@@ -72,7 +89,7 @@ export const useGallerySync = () => {
             setIsPaused(true); // treat error as pause — cursor was saved
             Alert.alert('Sync Paused', 'Progress saved. Tap Resume to continue.');
         }
-    }, []);
+    }, [startBackfill]);
 
     const handleQuickSync = useCallback(async () => {
         try {
@@ -93,12 +110,13 @@ export const useGallerySync = () => {
             const now = Date.now();
             setLastSyncTime(now);
             await AsyncStorage.setItem('gallery_last_sync_time', now.toString());
+            startBackfill();
         } catch (e) {
             AppLogger.error('GallerySync', 'Quick sync failed', e);
             setIsSyncing(false);
             Alert.alert('Sync Error', 'Quick sync failed. Please try again.');
         }
-    }, []);
+    }, [startBackfill]);
 
     const handleDeepSync = useCallback(() => {
         setIsDeepSync(true);

@@ -25,6 +25,7 @@ import {
   getAllDocuments,
 } from '../documents';
 import { searchDocuments } from '../search';
+import { getEmbeddingCount, hasEmbedding, indexEmbedding } from '../vectors';
 import type { DocumentRecord } from '../types';
 import * as OpSqlite from '@op-engineering/op-sqlite';
 
@@ -350,6 +351,32 @@ describe('clearIndex', () => {
 
   test('is a no-op on an empty db', () => {
     expect(() => clearIndex()).not.toThrow();
+  });
+
+  test('clears stored embeddings too', () => {
+    const id = indexDocument('A', 'aaa', '/1.jpg', 'IMAGE', 'TEXT')!;
+    indexEmbedding(id, new Float32Array(512).fill(0.1));
+    expect(getEmbeddingCount()).toBe(1);
+    clearIndex();
+    expect(getEmbeddingCount()).toBe(0);
+  });
+});
+
+describe('indexDocument — vector cleanup on re-index', () => {
+  test('re-indexing a file removes the old row\'s vector (no orphans)', () => {
+    const oldId = indexDocument(null, 'first pass', '/p.jpg', 'IMAGE', 'TEXT')!;
+    indexEmbedding(oldId, new Float32Array(512).fill(0.1));
+    const newId = indexDocument(null, 'second pass', '/p.jpg', 'IMAGE', 'TEXT')!;
+    expect(newId).not.toBe(oldId);
+    expect(hasEmbedding(oldId)).toBe(false);
+    expect(getEmbeddingCount()).toBe(0);
+  });
+
+  test('indexing a different file leaves other vectors alone', () => {
+    const a = indexDocument(null, 'a', '/a.jpg', 'IMAGE', 'TEXT')!;
+    indexEmbedding(a, new Float32Array(512).fill(0.1));
+    indexDocument(null, 'b', '/b.jpg', 'IMAGE', 'TEXT');
+    expect(hasEmbedding(a)).toBe(true);
   });
 });
 

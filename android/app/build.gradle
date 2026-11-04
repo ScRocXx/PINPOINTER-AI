@@ -99,12 +99,13 @@ dependencies {
     // 2. The "Devanagari" model (for Hindi)
     implementation 'com.google.mlkit:text-recognition-devanagari:16.0.0'
 
+    // 4. ONNX Runtime Android - Java/Kotlin API for MobileCLIP inference
+    // Must come BEFORE fileTree so pickFirst grabs the full libonnxruntime.so from this package
+    // and NOT the stripped one from sherpa-onnx.aar
+    implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.20.0'
+
     // 3. sherpa-onnx for on-device STT + TTS
     implementation fileTree(dir: 'libs', include: ['*.aar'])
-
-    // 4. ONNX Runtime Android - Java/Kotlin API for MobileCLIP inference
-    // (sherpa-onnx AAR bundles the native .so but doesn't expose the Java API)
-    implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.18.0'
 
 
     // The version of react-native is set by the React Native Gradle Plugin

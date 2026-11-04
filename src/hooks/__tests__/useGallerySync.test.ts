@@ -17,6 +17,7 @@ import {
   performFullGallerySync,
   performQuickSync,
   loadSavedCursor,
+  backfillEmbeddings,
 } from '../../utils/GallerySync';
 import { getIndexedCount } from '../../database';
 import { AppLogger } from '../../utils/AppLogger';
@@ -25,6 +26,7 @@ jest.mock('../../utils/GallerySync', () => ({
   performFullGallerySync: jest.fn(),
   performQuickSync: jest.fn(),
   loadSavedCursor: jest.fn(),
+  backfillEmbeddings: jest.fn(),
 }));
 
 jest.mock('../../database', () => ({
@@ -54,6 +56,7 @@ const setPlatform = (os: 'android' | 'ios', version?: number) => {
 const fullSync = performFullGallerySync as jest.Mock;
 const quickSync = performQuickSync as jest.Mock;
 const loadCursor = loadSavedCursor as jest.Mock;
+const backfill = backfillEmbeddings as jest.Mock;
 const mockedGetIndexedCount = getIndexedCount as jest.Mock;
 const mockedWarn = AppLogger.warn as jest.Mock;
 const mockedError = AppLogger.error as jest.Mock;
@@ -69,6 +72,7 @@ describe('useGallerySync', () => {
     quickSync.mockResolvedValue({ processed: 0, wasCancelled: false });
     fullSync.mockResolvedValue({ processed: 0, wasCancelled: false });
     loadCursor.mockResolvedValue(undefined);
+    backfill.mockResolvedValue(0);
     mockedGetIndexedCount.mockReturnValue(0);
 
     jest
@@ -609,6 +613,65 @@ describe('useGallerySync', () => {
       });
       expect(fullSync).toHaveBeenCalledTimes(1);
       expect(fullSync.mock.calls[0][2]).toBeUndefined();
+    });
+  });
+  describe('embedding backfill', () => {
+    it('starts a backfill after a quick sync finishes', async () => {
+      const { result } = await renderHook(() => useGallerySync());
+      await act(async () => {
+        await result.current.handleQuickSync();
+      });
+      expect(backfill).toHaveBeenCalledTimes(1);
+    });
+
+    it('starts a backfill after a deep sync completes', async () => {
+      const { result } = await renderHook(() => useGallerySync());
+      await act(async () => {
+        result.current.handleDeepSync();
+        await flush();
+      });
+      expect(backfill).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not start a backfill when a deep sync is paused', async () => {
+      fullSync.mockResolvedValue({ processed: 2, wasCancelled: true });
+      const { result } = await renderHook(() => useGallerySync());
+      await act(async () => {
+        result.current.handleDeepSync();
+        await flush();
+      });
+      expect(backfill).not.toHaveBeenCalled();
+    });
+
+    it('starts a delayed backfill on launch when photos are already indexed', async () => {
+      jest.useFakeTimers();
+      try {
+        mockedGetIndexedCount.mockReturnValue(10);
+        const { result } = await renderHook(() => useGallerySync());
+        await act(async () => {
+          await result.current.loadPersistedCount();
+        });
+        expect(backfill).not.toHaveBeenCalled();
+        await act(async () => {
+          jest.advanceTimersByTime(5000);
+        });
+        expect(backfill).toHaveBeenCalledTimes(1);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('a backfill that fails to start never breaks the sync flow', async () => {
+      backfill.mockImplementation(() => {
+        throw new Error('boom');
+      });
+      const { result } = await renderHook(() => useGallerySync());
+      await act(async () => {
+        await result.current.handleQuickSync();
+      });
+      expect(result.current.isSyncing).toBe(false);
+      expect(Alert.alert).not.toHaveBeenCalledWith('Sync Error', expect.anything());
+      expect(mockedWarn).toHaveBeenCalledWith('GallerySync', 'Backfill failed to start', expect.any(Error));
     });
   });
 });

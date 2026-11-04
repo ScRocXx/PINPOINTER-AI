@@ -8,7 +8,8 @@
  * jest.spyOn on the connection module's isVecAvailable binding.
  * Raw stored bytes are read back through the mock's vec_index rows.
  */
-import { getEmbeddingCount, hasEmbedding, indexEmbedding } from '../vectors';
+import { getEmbeddingCount, getImagesMissingEmbeddings, hasEmbedding, indexEmbedding } from '../vectors';
+import { indexDocument } from '../documents';
 import { closeDatabase, getDb, isVecAvailable, setupDatabase } from '../connection';
 import * as connectionModule from '../connection';
 
@@ -224,5 +225,32 @@ describe('lifecycle', () => {
 
   test('reports sqlite-vec as available after setupDatabase', () => {
     expect(isVecAvailable()).toBe(true);
+  });
+});
+
+describe('getImagesMissingEmbeddings', () => {
+  test('returns image rows without a vector, newest first', () => {
+    const a = indexDocument(null, 'a', '/a.jpg', 'IMAGE', 'TEXT')!;
+    const b = indexDocument(null, 'b', '/b.jpg', 'IMAGE', 'TEXT')!;
+    const c = indexDocument(null, 'c', '/c.jpg', 'IMAGE', 'TEXT')!;
+    indexEmbedding(b, makeEmbedding(1));
+    expect(getImagesMissingEmbeddings()).toEqual([
+      { id: c, filePath: '/c.jpg' },
+      { id: a, filePath: '/a.jpg' },
+    ]);
+  });
+
+  test('ignores documents and honours limit and beforeId', () => {
+    indexDocument('Doc', 'pdf', '/d.pdf', 'DOCUMENT', 'TEXT');
+    const a = indexDocument(null, 'a', '/a.jpg', 'IMAGE', 'TEXT')!;
+    const b = indexDocument(null, 'b', '/b.jpg', 'IMAGE', 'TEXT')!;
+    expect(getImagesMissingEmbeddings(1)).toEqual([{ id: b, filePath: '/b.jpg' }]);
+    expect(getImagesMissingEmbeddings(10, b)).toEqual([{ id: a, filePath: '/a.jpg' }]);
+  });
+
+  test('returns [] when sqlite-vec is unavailable', () => {
+    indexDocument(null, 'a', '/a.jpg', 'IMAGE', 'TEXT');
+    jest.spyOn(connectionModule, 'isVecAvailable').mockReturnValue(false);
+    expect(getImagesMissingEmbeddings()).toEqual([]);
   });
 });

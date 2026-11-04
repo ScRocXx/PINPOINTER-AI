@@ -1,6 +1,7 @@
 import { CameraRoll } from "@react-native-camera-roll/camera-roll";
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { indexDocument, isFileIndexed, beginTransaction, commitTransaction, rollbackTransaction, indexEmbedding } from '../database';
+import { indexDocument, isFileIndexed, beginTransaction, commitTransaction, rollbackTransaction, indexEmbedding, getImagesMissingEmbeddings } from '../database';
+import { encodeImage } from '../services/EmbeddingService';
 import { buildIndexableContent } from './TextEnrichment';
 import { analyzeImage } from './VisionPipeline';
 import { AppLogger } from './AppLogger';
@@ -94,7 +95,7 @@ export const performQuickSync = async (
                 } catch (e) {
                     rollbackTransaction();
                     AppLogger.warn('QuickSync', `Failed to process ${uri}`, e);
-                    indexDocument(null, 'image', uri, 'IMAGE', 'OBJECT');
+                    // No placeholder row: leaving it unindexed means the next sync retries it.
                 }
             }
 
@@ -138,7 +139,7 @@ export const performQuickSync = async (
                             }
                         } catch (e) {
                             AppLogger.warn('QuickSync (BG)', `Failed to process ${uri}`, e);
-                            indexDocument(null, 'image', uri, 'IMAGE', 'OBJECT');
+                            // No placeholder row: leaving it unindexed means the next sync retries it.
                         }
                     }
                     bgProcessed++;
@@ -213,7 +214,7 @@ export const performFullGallerySync = async (
                     } catch (e) {
                         rollbackTransaction();
                         AppLogger.warn('DeepSync', `Failed to process ${uri}`, e);
-                        indexDocument(null, 'image', uri, 'IMAGE', 'OBJECT');
+                        // No placeholder row: leaving it unindexed means the next sync retries it.
                     }
                 }
 
@@ -232,5 +233,57 @@ export const performFullGallerySync = async (
     } catch (error) {
         await saveCursor(after);
         throw error;
+    }
+};
+
+// ─── Embedding backfill ─────────────────────────────────────────────────────
+
+const BACKFILL_BATCH_SIZE = 20;
+const BACKFILL_SLEEP_MS = 300;
+/** Stop early when the encoder clearly isn't working (e.g. models missing). */
+const BACKFILL_GIVE_UP_AFTER = 5;
+let backfillRunning = false;
+
+/**
+ * Adds CLIP embeddings to photos that are already indexed but have none:
+ * photos synced before semantic search worked, or whose encoding failed.
+ * Sync skips already-indexed files, so without this they never get vectors.
+ *
+ * Runs newest first, in small batches with a pause between them. Only one
+ * backfill runs at a time; a second call while one is running returns 0.
+ */
+export const backfillEmbeddings = async (
+    cancelRef?: React.MutableRefObject<boolean>,
+): Promise<number> => {
+    if (backfillRunning) return 0;
+    backfillRunning = true;
+    let added = 0;
+    let beforeId = Number.MAX_SAFE_INTEGER;
+    let failuresBeforeFirstSuccess = 0;
+    try {
+        outer: while (!cancelRef?.current) {
+            const batch = getImagesMissingEmbeddings(BACKFILL_BATCH_SIZE, beforeId);
+            if (batch.length === 0) break;
+            for (const row of batch) {
+                if (cancelRef?.current) break;
+                beforeId = row.id;
+                const embedding = await encodeImage(row.filePath);
+                if (embedding) {
+                    indexEmbedding(row.id, embedding);
+                    added++;
+                } else if (added === 0 && ++failuresBeforeFirstSuccess >= BACKFILL_GIVE_UP_AFTER) {
+                    AppLogger.warn('Backfill', 'Image encoder unavailable, skipping backfill for now.');
+                    break outer;
+                }
+            }
+            await sleep(BACKFILL_SLEEP_MS);
+        }
+        if (added > 0) AppLogger.info('Backfill', `Added embeddings to ${added} photos.`);
+        return added;
+    } catch (e) {
+        AppLogger.warn('Backfill', 'Embedding backfill stopped early', e);
+        return added;
+    } finally {
+        backfillRunning = false;
     }
 };

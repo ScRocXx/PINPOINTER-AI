@@ -28,6 +28,14 @@ const SYNONYM_GROUPS: string[][] = [
   ['property', 'deed', 'rent agreement', 'lease'],
 ];
 
+// ─── Semantic relevance cutoff ──────────────────────────────────────────────
+// vec_index uses L2 distance. Both CLIP vectors are unit length, so
+// distance = sqrt(2 - 2·cosine). Without a cutoff the 50 nearest photos are
+// returned for every query, even nonsense. 1.26 keeps matches with cosine
+// similarity ≳ 0.21, a typical floor for a real CLIP text→image match.
+// Tune on device: lower = stricter, fewer semantic results.
+export const MAX_VECTOR_DISTANCE = 1.26;
+
 /**
  * Expand a search word with synonyms if it matches any group.
  * Returns the original word + any synonyms from the same group.
@@ -71,13 +79,18 @@ export const searchDocuments = (query: string, queryVector?: Float32Array): Docu
 
         const hybridResults = db.executeSync(`
           WITH
+          vector_knn AS (
+            SELECT document_id, distance
+            FROM vec_index
+            WHERE embedding MATCH vec_f32(?)
+              AND k = 50
+          ),
           vector_matches AS (
             SELECT
               document_id AS rowid,
               ROW_NUMBER() OVER (ORDER BY distance ASC) AS vec_rank
-            FROM vec_index
-            WHERE embedding MATCH vec_f32(?)
-              AND k = 50
+            FROM vector_knn
+            WHERE distance <= ?
           ),
           fts_matches AS (
             SELECT
@@ -102,7 +115,7 @@ export const searchDocuments = (query: string, queryVector?: Float32Array): Docu
           GROUP BY c.rowid
           ORDER BY rrf_score DESC
           LIMIT 50
-        `, [vectorBlob, ftsTerms]);
+        `, [vectorBlob, MAX_VECTOR_DISTANCE, ftsTerms]);
 
         const hybridHits = processResults(hybridResults);
         if (hybridHits.length > 0) {
