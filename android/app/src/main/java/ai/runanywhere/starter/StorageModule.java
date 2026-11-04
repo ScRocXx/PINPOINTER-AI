@@ -4,6 +4,8 @@ import android.content.Intent;
 import android.net.Uri;
 import android.provider.Settings;
 import android.os.Build;
+import android.os.Environment;
+import android.content.pm.PackageManager;
 import android.os.StrictMode;
 import android.content.res.AssetFileDescriptor;
 import androidx.core.content.FileProvider;
@@ -100,6 +102,25 @@ public class StorageModule extends ReactContextBaseJavaModule {
                 }
             }
         }).start();
+    }
+
+    /**
+     * True when the user has turned on "All files access" for this app
+     * (Android 11+). Below Android 11 that setting doesn't exist, so this
+     * reports whether READ_EXTERNAL_STORAGE is granted instead.
+     */
+    @ReactMethod
+    public void hasAllFilesAccess(Promise promise) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                promise.resolve(Environment.isExternalStorageManager());
+            } else {
+                promise.resolve(getReactApplicationContext().checkSelfPermission(
+                        android.Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED);
+            }
+        } catch (Exception e) {
+            promise.resolve(false);
+        }
     }
 
     @ReactMethod

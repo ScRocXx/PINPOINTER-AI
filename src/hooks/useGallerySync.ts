@@ -1,9 +1,10 @@
 import { useState, useRef, useCallback } from 'react';
-import { Platform, PermissionsAndroid, Alert } from 'react-native';
+import { Alert } from 'react-native';
 import { performFullGallerySync, performQuickSync, loadSavedCursor, backfillEmbeddings } from '../utils/GallerySync';
 import { getIndexedCount } from '../database';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AppLogger } from '../utils/AppLogger';
+import { ensurePhotoAccess } from '../utils/StoragePermissions';
 
 /** Wait after app start before backfilling, so startup stays smooth. */
 const BACKFILL_STARTUP_DELAY_MS = 5000;
@@ -46,16 +47,10 @@ export const useGallerySync = () => {
         }
     }, [startBackfill]);
 
-    const requestPermission = async (): Promise<boolean> => {
-        if (Platform.OS === 'android') {
-            const permission = Platform.Version >= 33
-                ? PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES
-                : PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE;
-            const granted = await PermissionsAndroid.request(permission);
-            return granted === PermissionsAndroid.RESULTS.GRANTED;
-        }
-        return true; // iOS permissions handled by Info.plist
-    };
+    // Asks for photo access and, when Android won't show its dialog any more
+    // (denied twice, or "Select photos" on Android 14+), guides the user to
+    // Settings instead of silently doing nothing.
+    const requestPermission = (): Promise<boolean> => ensurePhotoAccess();
 
     const runSync = useCallback(async (fromCursor?: string) => {
         try {

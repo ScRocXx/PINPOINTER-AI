@@ -1,20 +1,19 @@
 import { useState } from 'react';
-import { Platform, Alert, Linking, NativeModules } from 'react-native';
+import { Platform } from 'react-native';
 import RNFS from 'react-native-fs';
 import { isFileIndexed, beginTransaction, commitTransaction, rollbackTransaction } from '../database';
 import { processPDF } from '../utils/DocumentPipeline';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useCallback, useEffect } from 'react';
 import { AppLogger } from '../utils/AppLogger';
-
-const { StorageModule } = NativeModules;
+import { ensureDocumentAccess } from '../utils/StoragePermissions';
 
 /**
  * Tracks document-sync state and crawls device storage for PDFs to index.
  *
  * Persists the last sync time in AsyncStorage and exposes the manual
- * `handleDocumentSync` trigger plus a settings deep-link helper for the
- * Android "All files access" permission.
+ * `handleDocumentSync` trigger. Permission handling (including the Android
+ * "All files access" settings screen) lives in utils/StoragePermissions.
  *
  * @returns Sync progress flags, counts, and control callbacks.
  */
@@ -36,26 +35,6 @@ export const useDocumentSync = () => {
     useEffect(() => {
         loadPersistedState();
     }, [loadPersistedState]);
-
-    const requestAccessAndOpenSettings = () => {
-        Alert.alert(
-            "Full Storage Access Required",
-            "To automatically find and sync all your documents, Pinpoint needs 'All Files Access' permission on Android 11+.\n\nPlease tap 'Open Settings', find Pinpoint, and enable 'Allow management of all files'.",
-            [
-                { text: "Cancel", style: "cancel" },
-                {
-                    text: "Open Settings",
-                    onPress: () => {
-                        if (StorageModule && StorageModule.openAllFilesAccessSettings) {
-                            StorageModule.openAllFilesAccessSettings();
-                        } else {
-                            Linking.openSettings();
-                        }
-                    }
-                }
-            ]
-        );
-    };
 
     const scanForPDFs = async (): Promise<RNFS.ReadDirItem[] | null> => {
         let pdfFiles: RNFS.ReadDirItem[] = [];
@@ -95,7 +74,7 @@ export const useDocumentSync = () => {
             }
         }
 
-        // If Android Scoped Storage perfectly blocked everything or the user has no documents
+        // No PDFs in Download/ or Documents/
         if (pdfFiles.length === 0) {
             return null;
         }
@@ -106,16 +85,16 @@ export const useDocumentSync = () => {
     const handleDocumentSync = async (limit?: number) => {
         if (isSyncingDocs) return;
 
+        // Check the real permission (not "the scan found no PDFs"). If it is
+        // missing, explain it and wait for the user to come back from Settings.
+        if (!(await ensureDocumentAccess())) return;
+
         try {
             setIsSyncingDocs(true);
             const results = await scanForPDFs();
 
-            // Intercept permission block and redirect to Android Settings
-            if (results === null) {
-                setIsSyncingDocs(false);
-                requestAccessAndOpenSettings();
-                return;
-            }
+            // Access is granted, so null now just means there are no PDFs yet
+            if (results === null) return;
 
             // Apply limit if provided (e.g., quick scan = 50, universal = all)
             const docsToProcess = limit ? results.slice(0, limit) : results;
