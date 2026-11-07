@@ -212,6 +212,21 @@ class MockDB {
       this.files = new Map();
       return { rows: [] };
     }
+    if (/^DELETE FROM files WHERE uri = \?/i.test(q)) {
+      this.files.delete(params[0]);
+      return { rows: [] };
+    }
+
+    // Paged walk over the index (pruning deleted files)
+    if (/^SELECT id, filePath, type FROM document_index WHERE id > \? ORDER BY id LIMIT \?/i.test(q)) {
+      const [afterId, limit] = params;
+      const rows = this.documents
+        .filter((r) => r.id > afterId)
+        .sort((a, b) => a.id - b.id)
+        .slice(0, limit)
+        .map((r) => ({ id: r.id, filePath: r.filePath, type: r.type }));
+      return { rows };
+    }
 
     // Full scans used by the files-table migration
     if (/^SELECT id, filePath, type FROM document_index\s*;?$/i.test(q)) {

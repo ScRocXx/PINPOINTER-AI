@@ -3,8 +3,9 @@
  * this headless task only while the phone is charging and the battery isn't
  * low, and only when the app isn't open (the app runs its own sync then).
  *
- * It resumes deep gallery sync from the saved cursor, then backfills missing
- * embeddings, through the same IndexingService queue the app uses. It stops
+ * It resumes deep gallery sync from the saved cursor, removes files deleted
+ * from the phone, then backfills missing embeddings, through the same
+ * IndexingService queue the app uses. It stops
  * by itself after `budgetMs`, or as soon as native says the conditions no
  * longer hold; deep sync saves its cursor, so the next run carries on.
  */
@@ -50,8 +51,13 @@ export const runBackgroundIndexing = async (data?: { budgetMs?: number }): Promi
         const { processed, wasCancelled } = await IndexingService.deepGallerySync(undefined, cursor);
         AppLogger.info('BackgroundIndexing', `Gallery pass: ${processed} photos${wasCancelled ? ' (paused)' : ''}`);
         if (!stopped && !wasCancelled) {
-            const added = await IndexingService.backfill();
-            AppLogger.info('BackgroundIndexing', `Backfill added ${added} embeddings`);
+            // Drop deleted files first, so the backfill doesn't spend time on them.
+            const removed = await IndexingService.pruneMissing();
+            AppLogger.info('BackgroundIndexing', `Removed ${removed} deleted files`);
+            if (!stopped) {
+                const added = await IndexingService.backfill();
+                AppLogger.info('BackgroundIndexing', `Backfill added ${added} embeddings`);
+            }
         }
         return stopped || wasCancelled ? 'stopped' : 'finished';
     } catch (e) {

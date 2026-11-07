@@ -23,7 +23,10 @@ import {
   getIndexedCount,
   clearIndex,
   getAllDocuments,
+  removeDocument,
+  listIndexedFiles,
 } from '../documents';
+import { getFileState, noteFileSeen } from '../fileState';
 import { searchDocuments } from '../search';
 import { getEmbeddingCount, hasEmbedding, indexEmbedding } from '../vectors';
 import type { DocumentRecord } from '../types';
@@ -377,6 +380,46 @@ describe('indexDocument — vector cleanup on re-index', () => {
     indexEmbedding(a, new Float32Array(512).fill(0.1));
     indexDocument(null, 'b', '/b.jpg', 'IMAGE', 'TEXT');
     expect(hasEmbedding(a)).toBe(true);
+  });
+});
+
+// ─── removeDocument / listIndexedFiles ──────────────────────────────────────
+
+describe('removeDocument', () => {
+  test('drops the row, its vector and its sync state, and nothing else', () => {
+    const gone = indexDocument(null, 'deleted photo', '/gone.jpg', 'IMAGE', 'TEXT')!;
+    indexEmbedding(gone, new Float32Array(512).fill(0.1));
+    noteFileSeen('/gone.jpg', 'IMAGE', 1);
+    const kept = indexDocument(null, 'kept photo', '/kept.jpg', 'IMAGE', 'TEXT')!;
+    indexEmbedding(kept, new Float32Array(512).fill(0.2));
+
+    removeDocument('/gone.jpg');
+
+    expect(isFileIndexed('/gone.jpg')).toBe(false);
+    expect(hasEmbedding(gone)).toBe(false);
+    expect(getFileState('/gone.jpg')).toBeNull();
+    expect(isFileIndexed('/kept.jpg')).toBe(true);
+    expect(hasEmbedding(kept)).toBe(true);
+  });
+
+  test('is a no-op for a file that is not indexed', () => {
+    indexDocument(null, 'a', '/a.jpg', 'IMAGE', 'TEXT');
+    expect(() => removeDocument('/never.jpg')).not.toThrow();
+    expect(getIndexedCount()).toBe(1);
+  });
+});
+
+describe('listIndexedFiles', () => {
+  test('pages through every row in id order', () => {
+    const ids = ['/1.jpg', '/2.jpg', '/3.pdf'].map((p, i) =>
+      indexDocument(null, `doc ${i}`, p, p.endsWith('.pdf') ? 'DOCUMENT' : 'IMAGE', 'TEXT')!,
+    );
+
+    const first = listIndexedFiles(0, 2);
+    expect(first.map((r) => r.filePath)).toEqual(['/1.jpg', '/2.jpg']);
+    const rest = listIndexedFiles(first[1].id, 2);
+    expect(rest).toEqual([{ id: ids[2], filePath: '/3.pdf', type: 'DOCUMENT' }]);
+    expect(listIndexedFiles(ids[2], 2)).toEqual([]);
   });
 });
 

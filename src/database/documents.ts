@@ -112,6 +112,34 @@ export const indexDocument = (
   }
 };
 
+/** Takes a file out of the index: its row, its vector and its sync state. */
+export const removeDocument = (filePath: string): void => {
+  try {
+    const db = getDb();
+    const id = getDocumentId(filePath);
+    if (id != null && isVecAvailable()) db.executeSync('DELETE FROM vec_index WHERE document_id = ?', [id]);
+    db.executeSync('DELETE FROM document_index WHERE filePath = ?', [filePath]);
+    db.executeSync('DELETE FROM files WHERE uri = ?', [filePath]);
+    AppLogger.info('DB', `Removed from index: ${filePath}`);
+  } catch (e) {
+    AppLogger.warn('DB', 'removeDocument failed:', e);
+  }
+};
+
+/** One page of indexed files in id order, for walking the whole index. */
+export const listIndexedFiles = (afterId: number, limit: number): Array<{ id: number; filePath: string; type: string }> => {
+  try {
+    const result = getDb().executeSync(
+      'SELECT id, filePath, type FROM document_index WHERE id > ? ORDER BY id LIMIT ?',
+      [afterId, limit]
+    );
+    return (result?.rows ?? []) as unknown as Array<{ id: number; filePath: string; type: string }>;
+  } catch (e) {
+    AppLogger.warn('DB', 'listIndexedFiles failed:', e);
+    return [];
+  }
+};
+
 /** Returns the total number of indexed documents */
 export const getIndexedCount = (): number => {
   try {

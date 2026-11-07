@@ -17,8 +17,9 @@ import type { DocumentRecord } from '../index';
 import { __resetAll } from '@op-engineering/op-sqlite';
 
 // The original src/Database.ts public function API, plus
-// getImagesMissingEmbeddings (embedding backfill) and the per-file indexing
-// state functions (fileState.ts), alphabetically sorted.
+// getImagesMissingEmbeddings (embedding backfill), removeDocument /
+// listIndexedFiles (dropping deleted files) and the per-file indexing state
+// functions (fileState.ts), alphabetically sorted.
 // (DocumentRecord is a type-only export and does not appear at runtime.)
 const EXPECTED_EXPORTS = [
   'beginTransaction',
@@ -37,11 +38,13 @@ const EXPECTED_EXPORTS = [
   'indexDocument',
   'indexEmbedding',
   'isFileIndexed',
+  'listIndexedFiles',
   'markEmbedDone',
   'markEmbedSkipped',
   'markOcrDone',
   'markStageFailed',
   'noteFileSeen',
+  'removeDocument',
   'rollbackTransaction',
   'searchDocuments',
   'setupDatabase',
