@@ -1,60 +1,81 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code (and any AI assistant) working in this repository. Keep this file current: update it in the same commit as any change to architecture, commands or rules.
 
 ## Project
 
-PinPointer — privacy-first, offline, on-device search engine for text trapped in screenshots, images, and PDFs. React Native 0.83 (Android-only target; `ios/` is starter scaffolding), TypeScript. No cloud calls: all ML runs on-device.
+**PinPointer** is a privacy-first, fully offline Android app that finds photos, screenshots and PDFs by the text in them and by what they show. It's built with React Native 0.83.1 and TypeScript, plus Kotlin/Java native modules. Android is the only target; `ios/` is unused starter scaffolding. All ML runs on the device and there are no cloud calls.
+
+**Users:** elderly and non-technical people on **low-end Android phones** (2–3 GB RAM, slow CPU, small storage), with Hindi and Indian languages as a focus. Before adding anything, check its cost in RAM, battery, APK size and CPU. Prefer no new dependencies, and keep the UI simple and in plain words.
+
+Phase 1 covers photos and PDFs. Phase 2 (later) is video search for creators.
 
 ## Commands
 
 ```bash
-npm start                  # Metro bundler
-npm run android            # build + install on device/emulator
-npm test                   # jest (no test files exist yet)
-npm run lint               # eslint
-npm install                # also runs postinstall: patch-package + download-models.js
-node download-models.js    # fetch sherpa-onnx AAR + Whisper STT model into android/app/src/main/assets/models/
+npm install                 # postinstall runs download-models.js (sherpa AAR + Whisper STT)
+npm start                   # Metro
+npm run android             # build + install (needs Android SDK, a device or emulator)
+npx tsc --noEmit            # type check (must be clean)
+npm run lint                # eslint (must be clean)
+npx jest                    # 37 suites / ~1100 tests (must all pass). Slow on the D: drive; use --silent
+cd android && ./gradlew assembleDebug    # native compile check
+adb shell cmd jobscheduler run -f ai.runanywhere.starter 4711   # force the charging-time indexing job
 ```
 
-- Android APK: `cd android && ./gradlew assembleRelease` (or `assembleDebug`).
-- `patches/` contains a `patch-package` patch for `react-native-document-picker` — applied on postinstall; don't hand-edit `node_modules`.
+- CLIP models (`android/app/src/main/assets/models/clip/vision_encoder_int8.onnx`, `text_encoder_int8.onnx`, vocab) are gitignored and made with `scripts/export_mobileclip.py`. Without them semantic search is off, and the app falls back to text search.
+- `fix_aar.py` (untracked) strips `libonnxruntime.so` from the sherpa-onnx AAR so it doesn't clash with `onnxruntime-android` 1.20.0 (`pickFirst`). If STT or CLIP crashes at load, check this first.
+- Done means: tsc clean, lint clean, all Jest tests pass, and for native changes, `assembleDebug` builds.
 
 ## Architecture
 
-**Data flow:** gallery/documents → sync hooks → pipelines (Vision/Document) → enrichment (Soundex, Hindi transliteration, PII masking, classification) → SQLite FTS5 → search.
+**Data flow:** gallery/PDFs → `IndexingService` queue → pipelines (Vision/Document) → enrichment (Indic transliteration, sound keys, concepts, PII masking, classifier) → op-sqlite (FTS5 + sqlite-vec) → hybrid search.
 
-- `src/Database.ts` — singleton `react-native-quick-sqlite` DB (`pinpoint.db`, WAL mode). FTS5 virtual table with graceful LIKE-based fallback if FTS5 is unavailable. **All PII masking happens at index time, not query time** — masked data is what's stored.
-- `src/utils/VisionPipeline.ts` — image pipeline with early-exit: OCR (ML Kit Latin + Devanagari in parallel) → garbage-text filter → object labeling only if OCR finds nothing. Returns `search_index` (original + transliteration + soundex + labels).
-- `src/utils/DocumentPipeline.ts` — 5-phase PDF pipeline. Phase 2 early-exits for digital PDFs (native byte-stream text extraction via `NativePdfModule`); only scanned PDFs fall through to rasterization + OCR. Caps: 500 chars/page, 2000 total, pages 1-3 foreground.
-- `src/utils/DataMasking.ts` — PII (Aadhaar/PAN) regex masking. Must stay in the indexing path; never index unmasked content.
-- `src/utils/TextEnrichment.ts`, `Soundex.ts`, `HindiTranslit.ts`, `DocumentClassifier.ts` — search-index enrichment and zero-cost NLP classification ("Invoice", "ID Proof", smart titles).
+### Database: `src/database/`
+- `connection.ts`: singleton op-sqlite DB `pinpoint.db` (WAL). **`MIGRATIONS[]`** is versioned with `PRAGMA user_version`, one transaction each. Migration 1 adds the `files` table and seeds it from the existing index. Migration 2 adds Indian-language search keys and the FTS5 tokenizer, and re-masks old rows.
+- `documents.ts`: `indexDocument` (masks PII, writes search keys, deletes the old vector), `isFileIndexed`, `clearIndex` (also clears `vec_index`).
+- `fileState.ts`: the **`files` table**, with per-file, per-stage state: `ocr` and `embed` status (`pending|done|failed|skipped`), embed model (`CURRENT_EMBED_MODEL = 'mobileclip2-s0'`), attempts (`MAX_ATTEMPTS = 3`), last error and mtime. Call `noteFileSeen(uri, kind, mtime)` to get the stages a file still needs.
+- `vectors.ts`: sqlite-vec `vec_index` (float32[512]) plus `getImagesMissingEmbeddings` for the backfill.
+- `search.ts`: hybrid search (RRF, FTS weighted 2×) with a vector cutoff **`MAX_VECTOR_DISTANCE = 1.26`** (to be tuned on a phone), falling back to FTS-only, then LIKE + synonyms + Soundex. Indian-language queries are matched through the sound and concept keys.
 
-**State:** `src/hooks/PinpointerContext.tsx` wraps `usePinpointer()` in a single provider. **Screens must use `usePinpointerShared()`, never `usePinpointer()` directly** — duplicate instances spawn duplicate sync engines and native listeners (fixed as "H7"). `usePinpointer` composes `useSearch`, `useGallerySync`, `useDocumentSync`, `useVoiceRecording`.
+### Indexing: one queue
+- `src/services/IndexingService.ts` is **the only place indexing runs**: one queue, one job at a time. Jobs: `gallery-quick`, `gallery-quick-background`, `gallery-deep`, `documents`, `backfill`. User-started jobs go before background ones, and the backfill yields. Calling sync twice reuses the running job.
+- `src/utils/GallerySync.ts`: gallery loops (quick, deep with a saved cursor, embedding backfill).
+- `src/utils/DocumentSync.ts`: PDF crawl (Download/, Documents/, plus copies of picked or shared PDFs from `PdfImport`).
+- `src/services/BackgroundIndexingTask.ts` + native `IndexingJobService.kt` / `IndexingSchedulerModule.kt`: a JobScheduler job (**id 4711**, every 6 h with 2 h flex, only while charging with battery and storage not low, persisted). It runs a headless JS task that resumes deep sync and then the backfill, stops after 8 min or on unplug, never asks for permissions, and counts limited photo access.
+- `src/utils/VisionPipeline.ts`: resize → ML Kit OCR (Latin + Devanagari) → garbage filter → labels as a fallback → CLIP image embedding (`EmbeddingService` → `MobileCLIPModule`).
+- `src/utils/DocumentPipeline.ts`: 5-phase PDF pipeline (native text for digital PDFs, raster + OCR for scanned ones; 500 chars/page, 2000 total, pages 1–3).
 
-**Native Android modules** (`android/app/src/main/java/ai/runanywhere/starter/`), accessed via `NativeModules`:
-- `NativePdfModule` (Kotlin) — PDF text extraction + rasterization
-- `OCRModule` (Java), `StorageModule` (Java)
-- `SherpaOnnxModule` (Kotlin) — on-device STT via sherpa-onnx Whisper (model downloaded by `download-models.js`, ~165 MB)
-- `NativeAudioModule` — audio recording
+### Search and language
+- `src/hooks/useSearch.ts`: FTS results show **immediately**, then get re-ranked when the CLIP query vector arrives. No duplicate search for history. Hindi words reach CLIP as English through `ConceptTable`, and unknown non-Latin text skips CLIP.
+- `src/utils/IndicText.ts`: one converter from 10 Indian scripts to Roman (schwa deletion, conjuncts, Indic digits) plus the **Bhasha sound key**.
+- `src/utils/SearchKeys.ts`: builds the same sound and concept keys for documents and queries.
+- `src/utils/ConceptTable.ts`: about 50 Hindi/Hinglish/English concepts with meaning IDs.
+- `src/utils/HindiTranslit.ts`, `TextEnrichment.ts`, `Soundex.ts`, `DocumentClassifier.ts`: enrichment, classification and smart titles (titles are masked).
+- `src/utils/DataMasking.ts`: Aadhaar, PAN and phone, including Indic digits. **Masking happens at index time. Never store unmasked content or titles.**
 
-**Voice:** sherpa-onnx Whisper STT, fully offline. TTS models exist in `download-models.js` but are commented out (removed to shrink APK); uncomment there to re-enable. `usePinpointer` strips conversational prefixes ("search for my...") from transcriptions before querying.
+### Permissions and import
+- `src/utils/StoragePermissions.ts`: photo access (`full|limited|denied|blocked`, including Android 14+ `READ_MEDIA_VISUAL_USER_SELECTED`), a plain-language Settings guide, re-checks on return to the app, and a real All Files Access check (`StorageModule.isExternalStorageManager`).
+- `src/utils/PdfImport.ts` + `DocumentAccessModule.kt`: SAF folder picker with lasting access, plus "Share / Open with Pinpointer" (MainActivity intents). PDFs are copied into app storage.
+- Manifest: `MANAGE_EXTERNAL_STORAGE` (needs a Play declaration, "on-device file search"), `READ_MEDIA_IMAGES`, `READ_MEDIA_VISUAL_USER_SELECTED`, legacy storage capped at `maxSdkVersion 32`, `RECEIVE_BOOT_COMPLETED`.
 
-**Entry:** `src/App.tsx` — providers order: `GestureHandlerRootView` → `ModelServiceProvider` → `PinpointerProvider`. `setupDatabase()` runs in App mount effect; `closeDatabase()` on unmount.
+### State and UI
+- `src/hooks/PinpointerContext.tsx` provides one `usePinpointer()`. **Screens must use `usePinpointerShared()`.** A second instance means duplicate sync engines and listeners.
+- Hooks (`useGallerySync`, `useDocumentSync`) only handle permissions, alerts and progress. They call `IndexingService` and must never run sync loops themselves.
+- Screens: `PinpointerScreen` (home/search), `HomeScreen` (drawer), `gallery`, `DocumentVaultScreen`, `SmartClipboardScreen`. Point & Speak and Speech-to-Text were removed.
+- Voice: sherpa-onnx Whisper base.en STT (`SherpaOnnxModule`, `useVoiceRecording`). TTS is off.
+- Entry: `src/App.tsx` (GestureHandlerRootView → ModelServiceProvider → PinpointerProvider; `setupDatabase()` and `scheduleBackgroundIndexing()` on mount). `index.js` also registers the headless task.
 
-## Conventions
+### Native modules (`android/app/src/main/java/ai/runanywhere/starter/`)
+`MobileCLIPModule` (own thread, int8 models, ORT 1.20) + `BPETokenizer` (CLIP-exact vocab), `NativePdfModule`, `SherpaOnnxModule`, `StorageModule`, `DocumentAccessModule`, `IndexingJobService` + `IndexingSchedulerModule`. The package name is still `ai.runanywhere.starter` (rebrand pending).
 
-- Path aliases: none — imports are relative (`../utils/...`).
-- Logging via `src/utils/AppLogger.ts`, not raw `console.log` (pipelines already use it).
-- Schema migrations: add a new entry to the end of `MIGRATIONS` in `src/database/connection.ts` (tracked with `PRAGMA user_version`, one transaction each). Never edit an old migration. The older inline `try { ALTER TABLE ... } catch {}` statements stay as they are.
-- Indexing runs only through `src/services/IndexingService.ts` (one queue, one job at a time). Hooks call it and must not start sync loops themselves. Per-file progress lives in the `files` table (`src/database/fileState.ts`): call `noteFileSeen()` to find out which stages a file still needs.
+## Rules
 
-## graphify
-
-This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
-
-Rules:
-- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
-- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
-- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
-- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
+- Schema change → append a new entry to `MIGRATIONS`. Never edit an old one.
+- Indexing → only through `IndexingService`. Record per-file progress in `files` (`fileState.ts`).
+- PII → mask before storing (content **and** title). Search history is still unmasked in AsyncStorage (known gap).
+- Logging → `AppLogger`, not `console.log`.
+- Imports are relative (no path aliases).
+- Tests live in `__tests__/` next to the code. Native modules are mocked in `jest.setup.js` and `__mocks__/`. Add or adjust tests with every change.
+- Don't commit: model files, `.claude/settings.local.json`, crash logs, `graphify-out/` (gitignored, regenerate with `graphify update .`).
+- One branch per task (`feat/…`, `fix/…`, `chore/…`). Small commits. Don't push or merge without the owner's OK.
