@@ -9,10 +9,8 @@ import { PinpointerProvider } from './hooks/PinpointerContext';
 import { AppColors } from './theme';
 import {
   HomeScreen,
-  SpeechToTextScreen,
   PinpointerScreen,
   SmartClipboardScreen,
-  PointAndSpeakScreen,
   GalleryScreen,
   DocumentVaultScreen,
 } from './screens';
@@ -76,11 +74,9 @@ const App: React.FC = () => {
             {/* Existing Hackathon Screens */}
             <Stack.Screen name="Home" component={HomeScreen} options={{ headerShown: false }} />
             <Stack.Screen name="Gallery" component={GalleryScreen} options={{ headerShown: false }} />
-            <Stack.Screen name="SpeechToText" component={SpeechToTextScreen} options={{ title: 'Speech to Text' }} />
 
             {/* New Feature Screens */}
             <Stack.Screen name="SmartClipboard" component={SmartClipboardScreen} options={{ title: 'Scan Images' }} />
-            <Stack.Screen name="PointAndSpeak" component={PointAndSpeakScreen} options={{ title: 'Point & Speak' }} />
             <Stack.Screen name="DocumentVault" component={DocumentVaultScreen} options={{ headerShown: false }} />
           </Stack.Navigator>
         </NavigationContainer>

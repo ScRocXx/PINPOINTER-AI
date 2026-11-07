@@ -5,12 +5,11 @@
  * - addRecentPhoto: exact-URI dedup (case-sensitive), moves to front
  *   (newest first), cap MAX_RECENT = 24, viewedAt = Date.now()
  * - getRecentPhotos: [] when empty; corrupted JSON -> [] (guarded, warns)
- * - clearRecentPhotos: removes the key entirely
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AppLogger } from '../AppLogger';
-import { RecentPhoto, addRecentPhoto, clearRecentPhotos, getRecentPhotos } from '../RecentPhotos';
+import { RecentPhoto, addRecentPhoto, getRecentPhotos } from '../RecentPhotos';
 
 jest.mock('../AppLogger', () => ({
     AppLogger: {
@@ -132,19 +131,6 @@ describe('addRecentPhoto', () => {
         const keys = await AsyncStorage.getAllKeys();
         expect(keys).toContain('recent_viewed_photos');
         expect(keys).not.toContain('search_history');
-    });
-});
-
-describe('clearRecentPhotos', () => {
-    it('empties the stored photos', async () => {
-        await addRecentPhoto('a.jpg');
-        await addRecentPhoto('b.jpg');
-        await clearRecentPhotos();
-        await expect(getRecentPhotos()).resolves.toEqual([]);
-    });
-
-    it('does not throw when no photos are stored', async () => {
-        await expect(clearRecentPhotos()).resolves.toBeUndefined();
     });
 });
 

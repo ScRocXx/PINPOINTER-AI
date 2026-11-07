@@ -95,6 +95,3 @@ export const ModelServiceProvider: React.FC<ModelServiceProviderProps> = ({ chil
     </ModelServiceContext.Provider>
   );
 };
-
-// No-op: models are bundled in assets, no registration needed
-export const registerDefaultModels = async () => {};

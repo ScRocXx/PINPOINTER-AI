@@ -112,3 +112,6 @@ eslint_*.json
 
 # Project audit artifacts (not needed in repo)
 final_project_audit.md
+
+# Generated code graph (rebuild with `graphify update .`)
+graphify-out/

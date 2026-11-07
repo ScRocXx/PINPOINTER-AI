@@ -24,7 +24,7 @@ import { NativeModules } from 'react-native';
 import RNFS from 'react-native-fs';
 import { analyzeImage } from '../VisionPipeline';
 import { soundex } from '../Soundex';
-import { processPDF, processPDFBatch } from '../DocumentPipeline';
+import { processPDF } from '../DocumentPipeline';
 import * as DatabaseDocuments from '../../database/documents';
 import { getAllDocuments, clearIndex } from '../../database';
 
@@ -504,58 +504,5 @@ describe('Error recovery', () => {
         expect(result.content).toBe('Document: missing.pdf');
         expect(result.detectionType).toBe('EMPTY');
         expect(result.pagesProcessed).toBe(0);
-    });
-});
-
-// ─── Batch convenience ───────────────────────────────────────────────────────
-
-describe('processPDFBatch', () => {
-    test('processes multiple PDFs and reports progress', async () => {
-        const progress: Array<[number, number]> = [];
-        const onProgress = (done: number, total: number) => {
-            progress.push([done, total]);
-        };
-
-        const results = await processPDFBatch(['/docs/a.pdf', '/docs/b.pdf'], onProgress);
-
-        expect(results).toHaveLength(2);
-        expect(results[0].status).toBe('OCR_COMPLETE');
-        expect(results[1].status).toBe('OCR_COMPLETE');
-        expect(progress).toEqual([
-            [1, 2],
-            [2, 2],
-        ]);
-        expect(pdfModule.rasterizePages).toHaveBeenCalledTimes(2);
-    });
-
-    test('works without a progress callback', async () => {
-        const results = await processPDFBatch(['/docs/solo.pdf']);
-
-        expect(results).toHaveLength(1);
-        expect(results[0].status).toBe('OCR_COMPLETE');
-    });
-
-    test('a file whose OCR fails still resolves and does not stop the batch', async () => {
-        // Derive the reported fileName from the requested URI (the default
-        // stub returns a static name, which would hide per-file behavior).
-        pdfModule.getPdfInfo.mockImplementation((uri: string) =>
-            Promise.resolve({
-                fileName: uri.split('/').pop(),
-                pageCount: 5,
-                fileSize: 2048,
-            }),
-        );
-        pdfModule.rasterizePages
-            .mockResolvedValueOnce(['/tmp/p1.jpg'])
-            .mockRejectedValueOnce(new Error('render failed'));
-
-        const results = await processPDFBatch(['/docs/good.pdf', '/docs/bad.pdf']);
-
-        expect(results).toHaveLength(2);
-        expect(results[0].status).toBe('OCR_COMPLETE');
-        expect(results[0].detectionType).toBe('TEXT');
-        expect(results[1].status).toBe('OCR_COMPLETE');
-        expect(results[1].detectionType).toBe('EMPTY');
-        expect(results[1].content).toBe('Document: bad.pdf');
     });
 });

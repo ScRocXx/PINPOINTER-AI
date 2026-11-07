@@ -48,7 +48,7 @@ jest.mock('../../utils/DocumentClassifier', () => ({
 
 // ModelDownloadSheet calls useModelService() unconditionally, which throws
 // outside a ModelServiceProvider — replace just that component, keeping the
-// real SearchFilterChips / SearchHistoryPanel / SyncProgressCard.
+// real SearchFilterChips / SearchHistoryPanel.
 jest.mock('../../components/ModelDownloadSheet', () => ({
   ModelDownloadSheet: () => null,
 }));

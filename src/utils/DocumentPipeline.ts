@@ -329,34 +329,3 @@ export const processPDF = async (filePath: string): Promise<PipelineResult> => {
         smartTitle,
     };
 };
-
-/**
- * Convenience: process multiple PDFs with progress tracking.
- */
-export const processPDFBatch = async (
-    filePaths: string[],
-    onProgress?: (processed: number, total: number) => void,
-): Promise<PipelineResult[]> => {
-    const results: PipelineResult[] = [];
-
-    for (let i = 0; i < filePaths.length; i++) {
-        try {
-            const result = await processPDF(filePaths[i]);
-            results.push(result);
-        } catch (error) {
-            AppLogger.error('DocumentPipeline', `Failed to process ${filePaths[i]}`, error);
-            results.push({
-                status: 'FAILED',
-                metadata: { fileName: filePaths[i].split('/').pop() || 'Unknown', pageCount: 0, fileSize: 0 },
-                content: '',
-                detectionType: 'EMPTY',
-                pagesProcessed: 0,
-                classification: { category: 'GENERAL_DOCUMENT', emoji: '📄', label: 'Document', confidence: 0 },
-                smartTitle: filePaths[i].split('/').pop() || 'Unknown',
-            });
-        }
-        onProgress?.(i + 1, filePaths.length);
-    }
-
-    return results;
-};
