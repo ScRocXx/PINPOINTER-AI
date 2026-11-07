@@ -69,6 +69,17 @@ describe('runBackgroundIndexing', () => {
     expect(deep).not.toHaveBeenCalled();
   });
 
+  test('runs with only "Select photos" (limited) access on Android 14+', async () => {
+    setPlatform('android', 34);
+    checkSpy.mockImplementation(async (perm: string) =>
+      perm === PermissionsAndroid.PERMISSIONS.READ_MEDIA_VISUAL_USER_SELECTED);
+
+    await expect(runBackgroundIndexing()).resolves.toBe('finished');
+
+    expect(checkSpy).toHaveBeenCalledWith(PermissionsAndroid.PERMISSIONS.READ_MEDIA_VISUAL_USER_SELECTED);
+    expect(deep).toHaveBeenCalled();
+  });
+
   test('uses the old storage permission before Android 13', async () => {
     setPlatform('android', 30);
     await runBackgroundIndexing();

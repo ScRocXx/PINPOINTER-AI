@@ -12,7 +12,7 @@
  * StorageModule come from the preset / jest.setup.js stubs.
  * Platform.OS is forced to 'android' except in the iOS-specific tests.
  */
-import { Alert, Linking, NativeModules, Platform } from 'react-native';
+import { Alert, AppState, DeviceEventEmitter, Linking, NativeModules, Platform } from 'react-native';
 import RNFS from 'react-native-fs';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { act, renderHook } from '@testing-library/react-native';
@@ -94,6 +94,8 @@ beforeEach(() => {
   IndexingService.reset();
   (AsyncStorage as unknown as { __reset: () => void }).__reset();
   (Platform as unknown as { OS: string }).OS = 'android';
+  Object.defineProperty(Platform, 'Version', { value: 34, configurable: true, writable: true });
+  (StorageModule.hasAllFilesAccess as jest.Mock).mockResolvedValue(true);
   (RNFS.exists as jest.Mock).mockResolvedValue(true);
   (RNFS.readDir as jest.Mock).mockResolvedValue([]);
   // After processPDF the row is there (the hook checks it landed)
@@ -480,9 +482,23 @@ describe('handleDocumentSync — error handling', () => {
   });
 });
 
-// ─── permission-denied / empty scan ─────────────────────────────────────────
+// ─── permission flow / empty scan ───────────────────────────────────────────
+/** Captures the AppState listener StoragePermissions adds while the user is in Settings. */
+function captureAppState() {
+  const handlers: Array<(s: string) => void> = [];
+  jest.spyOn(AppState, 'addEventListener').mockImplementation(((_: string, h: (s: string) => void) => {
+    handlers.push(h);
+    return { remove: jest.fn() };
+  }) as never);
+  return {
+    returnToApp: () => handlers.forEach((h) => { h('background'); h('active'); }),
+  };
+}
+
+const flushAll = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
 describe('handleDocumentSync — empty scan & permission flow', () => {
-  test('no PDFs found → settings alert, no pipeline work', async () => {
+  test('no PDFs found with access granted → no prompt, no pipeline work', async () => {
     const { result } = await renderHook(() => useDocumentSync());
 
     await act(async () => {
@@ -491,15 +507,11 @@ describe('handleDocumentSync — empty scan & permission flow', () => {
 
     expect(processPDF).not.toHaveBeenCalled();
     expect(beginTransaction).not.toHaveBeenCalled();
-    expect(alertSpy).toHaveBeenCalledWith(
-      'Full Storage Access Required',
-      expect.stringContaining('All Files Access'),
-      expect.any(Array),
-    );
+    expect(alertSpy).not.toHaveBeenCalled();
     expect(result.current.isSyncingDocs).toBe(false);
   });
 
-  test('last-sync time is still persisted on the permission-denied path', async () => {
+  test('last-sync time is persisted when the scan finds nothing', async () => {
     const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(1700000000001);
     try {
       const { result } = await renderHook(() => useDocumentSync());
@@ -516,47 +528,107 @@ describe('handleDocumentSync — empty scan & permission flow', () => {
     }
   });
 
-  test('"Open Settings" opens all-files-access settings via StorageModule', async () => {
+  test('without All Files Access it explains the steps and does not scan', async () => {
+    (StorageModule.hasAllFilesAccess as jest.Mock).mockResolvedValue(false);
     const { result } = await renderHook(() => useDocumentSync());
+
+    let done: Promise<void> = Promise.resolve();
     await act(async () => {
-      await result.current.handleDocumentSync();
+      done = result.current.handleDocumentSync();
+      await flushAll();
     });
 
+    expect(alertSpy).toHaveBeenCalledWith(
+      'Allow Pinpointer to find your PDFs',
+      expect.stringContaining('Allow access to manage all files'),
+      expect.any(Array),
+      expect.anything(),
+    );
     const buttons = alertButtons();
-    expect(buttons.map((b) => b.text)).toEqual(['Cancel', 'Open Settings']);
-    buttons[1].onPress?.();
+    expect(buttons.map((b) => b.text)).toEqual(['Not now', 'Open Settings']);
+
+    await act(async () => {
+      buttons[0].onPress?.();
+      await done;
+    });
+    expect(RNFS.readDir).not.toHaveBeenCalled();
+    expect(StorageModule.openAllFilesAccessSettings).not.toHaveBeenCalled();
+    expect(Linking.openSettings).not.toHaveBeenCalled();
+    expect(result.current.isSyncingDocs).toBe(false);
+  });
+
+  test('"Open Settings" opens the All Files Access screen and syncs once the user is back with access', async () => {
+    (StorageModule.hasAllFilesAccess as jest.Mock).mockResolvedValue(false);
+    const appState = captureAppState();
+    (RNFS.readDir as jest.Mock).mockImplementation(async (p: string) =>
+      p === DOWNLOAD ? asItems([pdfFile('a.pdf', `${DOWNLOAD}/a.pdf`)]) : [],
+    );
+    const { result } = await renderHook(() => useDocumentSync());
+
+    let done: Promise<void> = Promise.resolve();
+    await act(async () => {
+      done = result.current.handleDocumentSync();
+      await flushAll();
+    });
+    await act(async () => {
+      alertButtons()[1].onPress?.();
+      await flushAll();
+    });
     expect(StorageModule.openAllFilesAccessSettings).toHaveBeenCalledTimes(1);
     expect(Linking.openSettings).not.toHaveBeenCalled();
+    expect(RNFS.readDir).not.toHaveBeenCalled(); // still waiting for the user
+
+    (StorageModule.hasAllFilesAccess as jest.Mock).mockResolvedValue(true);
+    await act(async () => {
+      appState.returnToApp();
+      await done;
+    });
+    expect(processPDF).toHaveBeenCalledWith(`file://${DOWNLOAD}/a.pdf`);
+  });
+
+  test('coming back with access still off does not scan', async () => {
+    (StorageModule.hasAllFilesAccess as jest.Mock).mockResolvedValue(false);
+    const appState = captureAppState();
+    const { result } = await renderHook(() => useDocumentSync());
+
+    let done: Promise<void> = Promise.resolve();
+    await act(async () => {
+      done = result.current.handleDocumentSync();
+      await flushAll();
+    });
+    await act(async () => {
+      alertButtons()[1].onPress?.();
+      await flushAll();
+      appState.returnToApp();
+      await done;
+    });
+    expect(RNFS.readDir).not.toHaveBeenCalled();
+    expect(result.current.isSyncingDocs).toBe(false);
   });
 
   test('"Open Settings" falls back to Linking.openSettings when the native method is missing', async () => {
+    (StorageModule.hasAllFilesAccess as jest.Mock).mockResolvedValue(false);
+    const appState = captureAppState();
     const sm = StorageModule as Record<string, unknown>;
     const original = sm.openAllFilesAccessSettings;
     delete sm.openAllFilesAccessSettings;
     try {
       const { result } = await renderHook(() => useDocumentSync());
+      let done: Promise<void> = Promise.resolve();
       await act(async () => {
-        await result.current.handleDocumentSync();
+        done = result.current.handleDocumentSync();
+        await flushAll();
       });
-
-      alertButtons()[1].onPress?.();
+      await act(async () => {
+        alertButtons()[1].onPress?.();
+        await flushAll();
+        appState.returnToApp();
+        await done;
+      });
       expect(Linking.openSettings).toHaveBeenCalledTimes(1);
     } finally {
       sm.openAllFilesAccessSettings = original;
     }
-  });
-
-  test('"Cancel" dismisses without opening anything', async () => {
-    const { result } = await renderHook(() => useDocumentSync());
-    await act(async () => {
-      await result.current.handleDocumentSync();
-    });
-
-    const buttons = alertButtons();
-    expect(buttons[0].text).toBe('Cancel');
-    expect(buttons[0].onPress).toBeUndefined();
-    expect(StorageModule.openAllFilesAccessSettings).not.toHaveBeenCalled();
-    expect(Linking.openSettings).not.toHaveBeenCalled();
   });
 });
 
@@ -572,7 +644,7 @@ describe('PDF scanner', () => {
 
     const existsCalls = (RNFS.exists as jest.Mock).mock.calls.map((c) => c[0]);
     expect(existsCalls).toEqual([RNFS.DocumentDirectoryPath]);
-    expect(alertSpy).toHaveBeenCalled(); // nothing found → permission prompt
+    expect(alertSpy).not.toHaveBeenCalled(); // nothing found is not a permission problem
   });
 
   test('recurses into subdirs, skips hidden dirs, matches .pdf case-insensitively', async () => {
@@ -650,7 +722,7 @@ describe('PDF scanner', () => {
     expect(alertSpy).not.toHaveBeenCalled();
   });
 
-  test('EACCES everywhere yields the permission prompt', async () => {
+  test('EACCES everywhere with access granted finishes quietly (no false permission prompt)', async () => {
     (RNFS.readDir as jest.Mock).mockRejectedValue(new Error('EACCES: denied'));
     const { result } = await renderHook(() => useDocumentSync());
 
@@ -659,11 +731,7 @@ describe('PDF scanner', () => {
     });
 
     expect(processPDF).not.toHaveBeenCalled();
-    expect(alertSpy).toHaveBeenCalledWith(
-      'Full Storage Access Required',
-      expect.any(String),
-      expect.any(Array),
-    );
+    expect(alertSpy).not.toHaveBeenCalled();
   });
 
   test('non-EACCES read errors are swallowed per directory', async () => {
@@ -696,5 +764,74 @@ describe('PDF scanner', () => {
     const readDirs = (RNFS.readDir as jest.Mock).mock.calls.map((c) => c[0] as string);
     expect(readDirs).not.toContain(DOWNLOAD);
     expect(readDirs).toContain(DOCS_DIR);
+  });
+});
+
+// ─── picked folders & Share to Pinpointer ───────────────────────────────────
+describe('PDFs from picked folders and Share', () => {
+  const modules = NativeModules as Record<string, unknown>;
+  const IMPORTED = `${RNFS.DocumentDirectoryPath}/imported_pdfs`;
+  let docAccess: Record<string, jest.Mock>;
+  let shareListeners: Array<() => void>;
+
+  beforeEach(() => {
+    shareListeners = [];
+    docAccess = {
+      canRequestAllFilesAccess: jest.fn(async () => true),
+      listPdfFolders: jest.fn(async () => [{ uri: 'content://tree/Bills', name: 'Bills' }]),
+      importPdfFolder: jest.fn(async () => 1),
+      takeSharedPdfs: jest.fn(async () => []),
+      pickPdfFolder: jest.fn(),
+      pickPdfFiles: jest.fn(),
+    };
+    modules.DocumentAccessModule = docAccess;
+    jest.spyOn(DeviceEventEmitter, 'addListener').mockImplementation(((_: string, cb: () => void) => {
+      shareListeners.push(cb);
+      return { remove: jest.fn() };
+    }) as never);
+  });
+
+  afterEach(() => {
+    delete modules.DocumentAccessModule;
+  });
+
+  test('without All Files Access, indexes the copies from a picked folder', async () => {
+    (StorageModule.hasAllFilesAccess as jest.Mock).mockResolvedValue(false);
+    (RNFS.readDir as jest.Mock).mockImplementation(async (p: string) =>
+      p === IMPORTED ? asItems([pdfFile('bill-1a2b.pdf', `${IMPORTED}/bill-1a2b.pdf`)]) : [],
+    );
+    const { result } = await renderHook(() => useDocumentSync());
+
+    await act(async () => {
+      await result.current.handleDocumentSync();
+    });
+
+    expect(alertSpy).not.toHaveBeenCalled();
+    expect(docAccess.importPdfFolder).toHaveBeenCalledWith('content://tree/Bills', 4);
+    expect(processPDF).toHaveBeenCalledWith(`file://${IMPORTED}/bill-1a2b.pdf`);
+  });
+
+  test('a shared PDF is confirmed and indexed without asking for any permission', async () => {
+    (StorageModule.hasAllFilesAccess as jest.Mock).mockResolvedValue(false);
+    docAccess.listPdfFolders.mockResolvedValue([]);
+    docAccess.takeSharedPdfs.mockResolvedValueOnce([]).mockResolvedValueOnce([`${IMPORTED}/shared-9f.pdf`]);
+    (RNFS.readDir as jest.Mock).mockImplementation(async (p: string) =>
+      p === IMPORTED ? asItems([pdfFile('shared-9f.pdf', `${IMPORTED}/shared-9f.pdf`)]) : [],
+    );
+    await renderHook(() => useDocumentSync());
+    await act(async () => {
+      await flushAll();
+    });
+    expect(processPDF).not.toHaveBeenCalled();
+
+    await act(async () => {
+      shareListeners.forEach((cb) => cb());
+      await flushAll();
+      await flushAll();
+    });
+
+    expect(alertSpy).toHaveBeenCalledWith('PDF added', expect.stringContaining('search'));
+    expect(alertSpy).not.toHaveBeenCalledWith('Allow Pinpointer to find your PDFs', expect.anything(), expect.anything(), expect.anything());
+    expect(processPDF).toHaveBeenCalledWith(`file://${IMPORTED}/shared-9f.pdf`);
   });
 });

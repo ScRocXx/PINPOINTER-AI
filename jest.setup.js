@@ -44,6 +44,7 @@ Object.assign(NativeModules, {
     openPDF: jest.fn(),
     shareImage: jest.fn(),
     openAllFilesAccessSettings: jest.fn(),
+    hasAllFilesAccess: jest.fn(async () => true),
   },
 });
 

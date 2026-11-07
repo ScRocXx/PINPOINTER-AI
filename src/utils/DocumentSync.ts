@@ -12,13 +12,14 @@ import {
     noteFileSeen, markOcrDone, markStageFailed,
 } from '../database';
 import { processPDF } from './DocumentPipeline';
+import { prepareImportedPdfs } from './PdfImport';
 import { AppLogger } from './AppLogger';
 
 const MAX_DEPTH = 4;
 
 /** Result of one document sync run. */
 export type DocumentSyncResult =
-    | { status: 'blocked' }                         // nothing readable: needs "All files access"
+    | { status: 'blocked' }                         // no PDFs found (access is checked by the hook first)
     | { status: 'done'; processed: number; total: number; wasCancelled: boolean };
 
 /**
@@ -49,7 +50,8 @@ export const scanForPDFs = async (): Promise<RNFS.ReadDirItem[] | null> => {
 
     // Target standard user-accessible directories
     const targetDirs = Platform.OS === 'android'
-        ? [RNFS.DownloadDirectoryPath, `${RNFS.ExternalStorageDirectoryPath}/Documents`]
+        // + copies of PDFs from picked folders, picked files and Share
+        ? [RNFS.DownloadDirectoryPath, `${RNFS.ExternalStorageDirectoryPath}/Documents`, ...(await prepareImportedPdfs())]
         : [RNFS.DocumentDirectoryPath];
 
     for (const dir of targetDirs) {

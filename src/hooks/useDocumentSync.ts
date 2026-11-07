@@ -1,19 +1,19 @@
-import { useState } from 'react';
-import { Alert, Linking, NativeModules } from 'react-native';
+import { useRef, useState } from 'react';
+import { Alert } from 'react-native';
 import { IndexingService } from '../services/IndexingService';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useCallback, useEffect } from 'react';
 import { AppLogger } from '../utils/AppLogger';
-
-const { StorageModule } = NativeModules;
+import { ensureDocumentAccess } from '../utils/StoragePermissions';
+import { subscribeToSharedPdfs } from '../utils/PdfImport';
 
 /**
  * Tracks document-sync state. The PDF crawl itself (utils/DocumentSync.ts)
  * runs in IndexingService's queue, one job at a time with gallery sync.
  *
  * Persists the last sync time in AsyncStorage and exposes the manual
- * `handleDocumentSync` trigger plus a settings deep-link helper for the
- * Android "All files access" permission.
+ * `handleDocumentSync` trigger. Permission handling (including the Android
+ * "All files access" settings screen) lives in utils/StoragePermissions.
  *
  * @returns Sync progress flags, counts, and control callbacks.
  */
@@ -36,28 +36,22 @@ export const useDocumentSync = () => {
         loadPersistedState();
     }, [loadPersistedState]);
 
-    const requestAccessAndOpenSettings = () => {
-        Alert.alert(
-            "Full Storage Access Required",
-            "To automatically find and sync all your documents, Pinpoint needs 'All Files Access' permission on Android 11+.\n\nPlease tap 'Open Settings', find Pinpoint, and enable 'Allow management of all files'.",
-            [
-                { text: "Cancel", style: "cancel" },
-                {
-                    text: "Open Settings",
-                    onPress: () => {
-                        if (StorageModule && StorageModule.openAllFilesAccessSettings) {
-                            StorageModule.openAllFilesAccessSettings();
-                        } else {
-                            Linking.openSettings();
-                        }
-                    }
-                }
-            ]
-        );
-    };
+    // Latest handleDocumentSync, for the Share listener below.
+    const syncRef = useRef<(limit?: number, fromShare?: boolean) => Promise<void>>(async () => {});
+    const syncingRef = useRef(false);
+    const rerunRef = useRef(false);
 
-    const handleDocumentSync = async (limit?: number) => {
-        if (isSyncingDocs) return;
+    const handleDocumentSync = async (limit?: number, fromShare = false) => {
+        if (isSyncingDocs || syncingRef.current) {
+            if (fromShare) rerunRef.current = true; // pick the shared PDF up right after
+            return;
+        }
+
+        // Check the real permission (not "the scan found no PDFs"). If it is
+        // missing, explain it and wait for the user to come back from Settings.
+        // A shared PDF needs no permission, so don't ask then.
+        if (!fromShare && !(await ensureDocumentAccess())) return;
+        syncingRef.current = true;
 
         try {
             setIsSyncingDocs(true);
@@ -65,16 +59,13 @@ export const useDocumentSync = () => {
                 setTotalDocs(total);
                 setDocSyncCount(processed);
             });
-
-            // Intercept permission block and redirect to Android Settings
-            if (result.status === 'blocked') {
-                setIsSyncingDocs(false);
-                requestAccessAndOpenSettings();
-                return;
-            }
+            // Access was checked above, so a 'blocked' result now just means
+            // there are no PDFs yet: nothing more to do.
+            if (result.status === 'blocked') AppLogger.info('DocumentSync', 'No PDFs found yet');
         } catch (err) {
             AppLogger.error('DocumentSync', 'Background crawler failed:', err);
         } finally {
+            syncingRef.current = false;
             setIsSyncingDocs(false);
             setDocSyncCount(0);
             setTotalDocs(0);
@@ -82,8 +73,23 @@ export const useDocumentSync = () => {
             const now = Date.now();
             setLastDocSyncTime(now);
             await AsyncStorage.setItem('doc_last_sync_time', now.toString());
+
+            if (rerunRef.current) {
+                rerunRef.current = false;
+                syncRef.current(undefined, true);
+            }
         }
     };
+    syncRef.current = handleDocumentSync;
+
+    // PDFs shared to Pinpointer from other apps: confirm, then index them.
+    useEffect(() => subscribeToSharedPdfs((count) => {
+        Alert.alert(
+            count === 1 ? 'PDF added' : `${count} PDFs added`,
+            `Pinpointer is reading ${count === 1 ? 'it' : 'them'} now. ${count === 1 ? 'It' : 'They'} will show up in search in a moment.`,
+        );
+        syncRef.current(undefined, true);
+    }), []);
 
     return {
         isSyncingDocs,

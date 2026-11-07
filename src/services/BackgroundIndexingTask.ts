@@ -8,10 +8,11 @@
  * by itself after `budgetMs`, or as soon as native says the conditions no
  * longer hold; deep sync saves its cursor, so the next run carries on.
  */
-import { DeviceEventEmitter, NativeModules, PermissionsAndroid, Platform } from 'react-native';
+import { DeviceEventEmitter, NativeModules, Platform } from 'react-native';
 import { setupDatabase } from '../database';
 import { loadSavedCursor } from '../utils/GallerySync';
 import { AppLogger } from '../utils/AppLogger';
+import { hasPhotoAccess } from '../utils/StoragePermissions';
 import { IndexingService } from './IndexingService';
 
 /** Must match IndexingJobService.TASK_KEY. */
@@ -24,17 +25,10 @@ const DEFAULT_BUDGET_MS = 8 * 60 * 1000;
 /** What one background run did, for logs and tests. */
 export type BackgroundRunOutcome = 'no-permission' | 'stopped' | 'finished' | 'failed' | 'not-android';
 
-const hasGalleryPermission = async (): Promise<boolean> => {
-    const permission = Number(Platform.Version) >= 33
-        ? PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES
-        : PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE;
-    try {
-        // check, never request: nobody is there to answer a prompt
-        return await PermissionsAndroid.check(permission);
-    } catch {
-        return false;
-    }
-};
+// Checks, never requests: nobody is there to answer a prompt. Counts the
+// Android 14+ "Select photos" (limited) grant too, so those users still get
+// background indexing of the photos they picked.
+const hasGalleryPermission = (): Promise<boolean> => hasPhotoAccess();
 
 export const runBackgroundIndexing = async (data?: { budgetMs?: number }): Promise<BackgroundRunOutcome> => {
     if (Platform.OS !== 'android') return 'not-android';

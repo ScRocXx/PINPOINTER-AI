@@ -84,6 +84,19 @@ describe('useGallerySync', () => {
     jest
       .spyOn(PermissionsAndroid, 'request')
       .mockResolvedValue(PermissionsAndroid.RESULTS.GRANTED);
+    // StoragePermissions checks first and asks for several permissions at
+    // once; route each of those through the `request` mock above so the
+    // tests below can keep driving the outcome with it.
+    jest.spyOn(PermissionsAndroid, 'check').mockResolvedValue(false);
+    jest
+      .spyOn(PermissionsAndroid, 'requestMultiple')
+      .mockImplementation(async (perms) => {
+        const out: Record<string, string> = {};
+        for (const p of perms) {
+          out[p] = await (PermissionsAndroid.request as jest.Mock)(p);
+        }
+        return out as never;
+      });
   });
 
   afterEach(() => {
