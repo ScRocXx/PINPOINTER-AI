@@ -7,10 +7,7 @@
  */
 import { Platform } from 'react-native';
 import RNFS from 'react-native-fs';
-import {
-    isFileIndexed, beginTransaction, commitTransaction, rollbackTransaction,
-    noteFileSeen, markOcrDone, markStageFailed,
-} from '../database';
+import { isFileIndexed, noteFileSeen, markOcrDone, markStageFailed } from '../database';
 import { processPDF } from './DocumentPipeline';
 import { prepareImportedPdfs } from './PdfImport';
 import { AppLogger } from './AppLogger';
@@ -69,10 +66,14 @@ export const scanForPDFs = async (): Promise<RNFS.ReadDirItem[] | null> => {
     return pdfFiles.length === 0 ? null : pdfFiles;
 };
 
+const fileUriOf = (doc: RNFS.ReadDirItem) => `file://${doc.path}`;
+
 /**
- * Scans for PDFs and indexes the ones that still need it.
- * @param limit - only look at the first `limit` PDFs (quick scan); falsy = all
- * @param onProgress - (processed, total), called once at the start and after each PDF
+ * Scans for PDFs and indexes the ones that still need it, newest first.
+ * @param limit - index at most `limit` PDFs that still need work (quick scan); falsy = all.
+ *   Finished PDFs don't count, so each quick scan moves on to new ones.
+ * @param onProgress - (processed, total) over the PDFs being indexed, called
+ *   once at the start and after each PDF
  */
 export const performDocumentSync = async (
     limit: number | undefined,
@@ -82,49 +83,33 @@ export const performDocumentSync = async (
     const results = await scanForPDFs();
     if (results === null) return { status: 'blocked' };
 
-    // Apply limit if provided (e.g., quick scan = 50, universal = all)
-    const docsToProcess = limit ? results.slice(0, limit) : results;
+    // Skip PDFs that are done, or that failed too often and haven't changed since.
+    const pending = results
+        .filter((doc) => doc.path)
+        .sort((a, b) => (b.mtime?.getTime() ?? 0) - (a.mtime?.getTime() ?? 0))
+        .filter((doc) => noteFileSeen(fileUriOf(doc), 'DOCUMENT', doc.mtime ? doc.mtime.getTime() : undefined).ocr);
+    const docsToProcess = limit ? pending.slice(0, limit) : pending;
     const total = docsToProcess.length;
     onProgress(0, total);
 
     let processed = 0;
     for (const doc of docsToProcess) {
         if (cancelRef?.current) return { status: 'done', processed, total, wasCancelled: true };
-        if (!doc.path) continue;
-
-        // Construct a proper file URI for External Rendering
-        const fileUri = `file://${doc.path}`;
-
-        // Skip PDFs that are done, or that failed too often and haven't changed since.
-        const work = noteFileSeen(fileUri, 'DOCUMENT', doc.mtime ? doc.mtime.getTime() : undefined);
-        if (!work.ocr) {
-            processed++;
-            onProgress(processed, total);
-            continue;
-        }
-
-        // C3 fix: Transaction-per-document with real rollback
-        // Prevents DB lock + total data loss on mid-sync errors
-        beginTransaction();
-        let failure: unknown = null;
+        const fileUri = fileUriOf(doc);
+        // No transaction here: the pipeline awaits OCR for seconds, and its
+        // only write is one synchronous indexDocument call at the end.
         try {
-            // Run the 5-phase PDF Intelligence Pipeline
             await processPDF(fileUri);
             // The pipeline logs and swallows save errors, so check the row landed.
             if (!isFileIndexed(fileUri)) throw new Error('PDF row was not written');
-            commitTransaction();
             markOcrDone(fileUri, 'DOCUMENT');
             AppLogger.info('DocumentSync', `Pipeline complete for: ${doc.name}`);
         } catch (pipelineError) {
-            failure = pipelineError;
-            rollbackTransaction();
+            markStageFailed(fileUri, 'ocr', pipelineError, 'DOCUMENT');
             AppLogger.error('DocumentSync', `Pipeline failed for: ${doc.name}`, pipelineError);
-        } finally {
-            // Outside the rolled-back transaction, so the failure is remembered.
-            if (failure) markStageFailed(fileUri, 'ocr', failure, 'DOCUMENT');
-            processed++;
-            onProgress(processed, total);
         }
+        processed++;
+        onProgress(processed, total);
     }
     return { status: 'done', processed, total, wasCancelled: false };
 };
