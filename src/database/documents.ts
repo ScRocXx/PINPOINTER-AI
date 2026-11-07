@@ -51,6 +51,18 @@ export const isFileIndexed = (path: string): boolean => {
   }
 };
 
+/** The document_index id for `path`, or null when it isn't indexed. */
+export const getDocumentId = (path: string): number | null => {
+  try {
+    const result = getDb().executeSync('SELECT id FROM document_index WHERE filePath = ? LIMIT 1', [path]);
+    const id = (result?.rows?.[0] as { id?: number } | undefined)?.id;
+    return typeof id === 'number' ? id : null;
+  } catch (e) {
+    AppLogger.warn('DB', 'getDocumentId failed:', e);
+    return null;
+  }
+};
+
 export const indexDocument = (
   title: string | null = null,
   content: string,
@@ -120,6 +132,8 @@ export const clearIndex = () => {
     if (isVecAvailable()) {
       try { db.executeSync('DELETE FROM vec_index'); } catch { }
     }
+    // Forget per-file progress too, so the next sync redoes every file.
+    try { db.executeSync('DELETE FROM files'); } catch { }
     AppLogger.info('DB', 'Index cleared');
   } catch (e) {
     AppLogger.error('DB', 'Clear Failed:', e);

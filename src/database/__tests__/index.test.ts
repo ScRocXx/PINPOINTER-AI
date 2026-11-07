@@ -17,7 +17,8 @@ import type { DocumentRecord } from '../index';
 import { __resetAll } from '@op-engineering/op-sqlite';
 
 // The original src/Database.ts public function API, plus
-// getImagesMissingEmbeddings (embedding backfill), alphabetically sorted.
+// getImagesMissingEmbeddings (embedding backfill) and the per-file indexing
+// state functions (fileState.ts), alphabetically sorted.
 // (DocumentRecord is a type-only export and does not appear at runtime.)
 const EXPECTED_EXPORTS = [
   'beginTransaction',
@@ -26,13 +27,21 @@ const EXPECTED_EXPORTS = [
   'commitTransaction',
   'extractSnippet',
   'getAllDocuments',
+  'getDocumentId',
   'getEmbeddingCount',
+  'getFileState',
   'getImagesMissingEmbeddings',
   'getIndexedCount',
+  'getIndexingStats',
   'hasEmbedding',
   'indexDocument',
   'indexEmbedding',
   'isFileIndexed',
+  'markEmbedDone',
+  'markEmbedSkipped',
+  'markOcrDone',
+  'markStageFailed',
+  'noteFileSeen',
   'rollbackTransaction',
   'searchDocuments',
   'setupDatabase',
@@ -59,7 +68,7 @@ afterEach(() => {
 });
 
 describe('database barrel — public API contract', () => {
-  test('exposes exactly the 16 expected export names (no more, no less)', () => {
+  test('exposes exactly the expected export names (no more, no less)', () => {
     expect(Object.keys(barrelNs).sort()).toEqual(EXPECTED_EXPORTS);
   });
 

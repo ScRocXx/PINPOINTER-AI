@@ -46,7 +46,8 @@ node download-models.js    # fetch sherpa-onnx AAR + Whisper STT model into andr
 
 - Path aliases: none — imports are relative (`../utils/...`).
 - Logging via `src/utils/AppLogger.ts`, not raw `console.log` (pipelines already use it).
-- Schema migrations are inline `try { ALTER TABLE ... } catch {}` in `setupDatabase()` — additive columns only, no migration framework.
+- Schema migrations: add a new entry to the end of `MIGRATIONS` in `src/database/connection.ts` (tracked with `PRAGMA user_version`, one transaction each). Never edit an old migration. The older inline `try { ALTER TABLE ... } catch {}` statements stay as they are.
+- Indexing runs only through `src/services/IndexingService.ts` (one queue, one job at a time). Hooks call it and must not start sync loops themselves. Per-file progress lives in the `files` table (`src/database/fileState.ts`): call `noteFileSeen()` to find out which stages a file still needs.
 
 ## graphify
 

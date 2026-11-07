@@ -1,6 +1,9 @@
 import { CameraRoll } from "@react-native-camera-roll/camera-roll";
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { indexDocument, isFileIndexed, beginTransaction, commitTransaction, rollbackTransaction, indexEmbedding, getImagesMissingEmbeddings } from '../database';
+import {
+    indexDocument, beginTransaction, commitTransaction, rollbackTransaction, indexEmbedding,
+    getImagesMissingEmbeddings, getDocumentId, noteFileSeen, markOcrDone, markEmbedDone, markStageFailed,
+} from '../database';
 import { encodeImage } from '../services/EmbeddingService';
 import { buildIndexableContent } from './TextEnrichment';
 import { analyzeImage } from './VisionPipeline';
@@ -46,6 +49,98 @@ export const clearSyncCursor = async () => {
     }
 };
 
+// ─── Per-photo pipeline ─────────────────────────────────────────────────────
+
+/** What happened to one photo during sync. */
+export type PhotoOutcome = 'indexed' | 'embedded' | 'skipped' | 'failed';
+
+type GalleryEdge = { node: { image: { uri: string }; modificationTimestamp?: number; timestamp?: number } };
+
+/** The photo's modification time, used to notice edited photos. */
+const mtimeOf = (edge: GalleryEdge): number | undefined => {
+    const t = edge.node.modificationTimestamp ?? edge.node.timestamp;
+    return typeof t === 'number' ? t : undefined;
+};
+
+/**
+ * Set once any image encode succeeds this session. Until then a missing
+ * embedding is blamed on the encoder (models missing, still loading), not the
+ * photo, so it doesn't use up the photo's retry attempts.
+ */
+let encoderProven = false;
+
+/** @internal Test helper. */
+export const __resetEncoderProven = () => { encoderProven = false; };
+
+/** Writes the vector and its state, or records why there isn't one. Sync DB work only. */
+const recordEmbedding = (uri: string, docId: number, embedding: Float32Array | null | undefined): boolean => {
+    if (embedding) {
+        encoderProven = true;
+        indexEmbedding(docId, embedding);
+        markEmbedDone(uri);
+        return true;
+    }
+    if (encoderProven) markStageFailed(uri, 'embed', 'no embedding returned');
+    return false;
+};
+
+/**
+ * Runs whichever stages this photo still needs, according to its row in the
+ * files table: full OCR + embedding for a new or changed photo, only the
+ * embedding for a photo that has text but no vector, nothing for a finished
+ * one. The ML work happens first; the DB writes then run in one short
+ * transaction with no await inside, so other sync loops can't interleave.
+ */
+export const indexPhoto = async (uri: string, mtime?: number): Promise<PhotoOutcome> => {
+    const work = noteFileSeen(uri, 'IMAGE', mtime);
+    if (!work.ocr) {
+        return work.embed ? embedPhoto(uri) : 'skipped';
+    }
+
+    let content: string;
+    let detection: 'TEXT' | 'OBJECT';
+    let embedding: Float32Array | null | undefined;
+    try {
+        const vision = await analyzeImage(uri);
+        const rawText = vision.content ?? '';
+        content = rawText.trim().length === 0 ? 'image' : await buildIndexableContent(rawText);
+        detection = vision.detection_type as 'TEXT' | 'OBJECT';
+        embedding = vision.embedding;
+    } catch (e) {
+        markStageFailed(uri, 'ocr', e);
+        AppLogger.warn('GallerySync', `Failed to process ${uri}`, e);
+        return 'failed';
+    }
+
+    beginTransaction();
+    try {
+        const docId = indexDocument(null, content || 'image', uri, 'IMAGE', detection);
+        if (docId == null) throw new Error('indexDocument did not write a row');
+        markOcrDone(uri);
+        recordEmbedding(uri, docId, embedding);
+        commitTransaction();
+        return 'indexed';
+    } catch (e) {
+        rollbackTransaction();
+        // Outside the rolled-back transaction, so the failure is remembered.
+        markStageFailed(uri, 'ocr', e);
+        AppLogger.warn('GallerySync', `Failed to save ${uri}`, e);
+        return 'failed';
+    }
+};
+
+/** Embedding only, for a photo whose text is already indexed. */
+const embedPhoto = async (uri: string, knownDocId?: number): Promise<PhotoOutcome> => {
+    const docId = knownDocId ?? getDocumentId(uri);
+    if (docId == null) {
+        // The text row is gone (e.g. cleared): start the photo over next time.
+        markStageFailed(uri, 'ocr', 'indexed row missing');
+        return 'failed';
+    }
+    const embedding = await encodeImage(uri);
+    return recordEmbedding(uri, docId, embedding) ? 'embedded' : 'failed';
+};
+
 /** Maximum photos the gallery sync will process (-1 = stub, not yet implemented). */
 export const getGallerySyncLimit = async (): Promise<number> => -1;
 /** Total photo count visible to gallery sync (-1 = stub, not yet implemented). */
@@ -59,7 +154,9 @@ export const getGalleryTotalCount = async (): Promise<number> => -1;
 export const performQuickSync = async (
     onProgress: (count: number) => void,
     cancelRef?: React.MutableRefObject<boolean>,
-): Promise<{ processed: number; wasCancelled: boolean }> => {
+    options: { background?: boolean } = {},
+): Promise<{ processed: number; wasCancelled: boolean; nextCursor?: string }> => {
+    const { background = true } = options;
     let hasNextPage = true;
     let after: string | undefined;
     let totalProcessed = 0;
@@ -81,23 +178,7 @@ export const performQuickSync = async (
                 break;
             }
 
-            const uri = edge.node.image.uri;
-            if (!isFileIndexed(uri)) {
-                beginTransaction();
-                try {
-                    const vision = await analyzeImage(uri);
-                    const content = await buildIndexableContent(vision.content || 'image');
-                    const docId = indexDocument(null, content || vision.content || 'image', uri, 'IMAGE', vision.detection_type as 'TEXT' | 'OBJECT');
-                    if (docId && vision.embedding) {
-                        indexEmbedding(docId, vision.embedding);
-                    }
-                    commitTransaction();
-                } catch (e) {
-                    rollbackTransaction();
-                    AppLogger.warn('QuickSync', `Failed to process ${uri}`, e);
-                    // No placeholder row: leaving it unindexed means the next sync retries it.
-                }
-            }
+            await indexPhoto(edge.node.image.uri, mtimeOf(edge));
 
             totalProcessed++;
             onProgress(totalProcessed);
@@ -107,55 +188,56 @@ export const performQuickSync = async (
         after = pageResult.page_info.end_cursor;
     }
 
-    // Phase 2: Silent Background processing
-    if (hasNextPage && !cancelRef?.current) {
+    // Phase 2: Silent background processing of the next SILENT_BACKGROUND_LIMIT photos.
+    // IndexingService passes background: false and queues this itself, so it
+    // never runs alongside another sync loop.
+    const nextCursor = hasNextPage && !cancelRef?.current ? after : undefined;
+    if (background && nextCursor) {
         // Fire and forget (do not await)
-        (async () => {
-            let bgProcessed = 0;
-            while (hasNextPage && bgProcessed < SILENT_BACKGROUND_LIMIT) {
-                if (cancelRef?.current) break;
-
-                const bgPageResult = await CameraRoll.getPhotos({
-                    first: DEEP_BATCH_SIZE, // smaller batches in background
-                    after,
-                    assetType: 'Photos',
-                });
-
-                if (bgPageResult.edges.length === 0) break;
-
-                for (const edge of bgPageResult.edges) {
-                    if (bgProcessed >= SILENT_BACKGROUND_LIMIT || cancelRef?.current) {
-                        break;
-                    }
-
-                    const uri = edge.node.image.uri;
-                    if (!isFileIndexed(uri)) {
-                        try {
-                            const vision = await analyzeImage(uri);
-                            const content = await buildIndexableContent(vision.content || 'image');
-                            const docId = indexDocument(null, content || vision.content || 'image', uri, 'IMAGE', vision.detection_type as 'TEXT' | 'OBJECT');
-                            if (docId && vision.embedding) {
-                                indexEmbedding(docId, vision.embedding);
-                            }
-                        } catch (e) {
-                            AppLogger.warn('QuickSync (BG)', `Failed to process ${uri}`, e);
-                            // No placeholder row: leaving it unindexed means the next sync retries it.
-                        }
-                    }
-                    bgProcessed++;
-                    // intentionally not calling onProgress so the UI ignores it
-                }
-
-                hasNextPage = bgPageResult.page_info.has_next_page;
-                after = bgPageResult.page_info.end_cursor;
-                await sleep(500); // 500ms sleep between bg batches to keep UI fully responsive
-            }
-            AppLogger.info('QuickSync', `Finished silent background sync of ${bgProcessed} photos.`);
-        })();
+        performQuickSyncBackground(nextCursor, cancelRef).catch((e) =>
+            AppLogger.warn('QuickSync', 'Background pass failed', e));
     }
 
     // Return immediately to release the UI
-    return { processed: totalProcessed, wasCancelled: false };
+    return { processed: totalProcessed, wasCancelled: false, nextCursor };
+};
+
+/**
+ * The silent second half of quick sync: up to SILENT_BACKGROUND_LIMIT more
+ * photos after `after`, in small batches with a pause between them. No
+ * progress is reported, so the UI ignores it.
+ */
+export const performQuickSyncBackground = async (
+    after: string | undefined,
+    cancelRef?: React.MutableRefObject<boolean>,
+): Promise<number> => {
+    let hasNextPage = true;
+    let bgProcessed = 0;
+    while (hasNextPage && bgProcessed < SILENT_BACKGROUND_LIMIT) {
+        if (cancelRef?.current) break;
+
+        const bgPageResult = await CameraRoll.getPhotos({
+            first: DEEP_BATCH_SIZE, // smaller batches in background
+            after,
+            assetType: 'Photos',
+        });
+
+        if (bgPageResult.edges.length === 0) break;
+
+        for (const edge of bgPageResult.edges) {
+            if (bgProcessed >= SILENT_BACKGROUND_LIMIT || cancelRef?.current) {
+                break;
+            }
+            await indexPhoto(edge.node.image.uri, mtimeOf(edge));
+            bgProcessed++;
+        }
+
+        hasNextPage = bgPageResult.page_info.has_next_page;
+        after = bgPageResult.page_info.end_cursor;
+        await sleep(500); // 500ms sleep between bg batches to keep UI fully responsive
+    }
+    AppLogger.info('QuickSync', `Finished silent background sync of ${bgProcessed} photos.`);
+    return bgProcessed;
 };
 
 /**
@@ -194,29 +276,7 @@ export const performFullGallerySync = async (
                 }
 
                 const uri = edge.node.image.uri;
-                if (!isFileIndexed(uri)) {
-                    beginTransaction();
-                    try {
-                        const vision = await analyzeImage(uri);
-                        const rawText = vision.content;
-
-                        let content: string;
-                        if (rawText.trim().length === 0) {
-                            content = 'image';
-                        } else {
-                            content = await buildIndexableContent(rawText);
-                        }
-                        const docId = indexDocument(null, content, uri, 'IMAGE', vision.detection_type as 'TEXT' | 'OBJECT');
-                        if (docId && vision.embedding) {
-                            indexEmbedding(docId, vision.embedding);
-                        }
-                        commitTransaction();
-                    } catch (e) {
-                        rollbackTransaction();
-                        AppLogger.warn('DeepSync', `Failed to process ${uri}`, e);
-                        // No placeholder row: leaving it unindexed means the next sync retries it.
-                    }
-                }
+                await indexPhoto(uri, mtimeOf(edge));
 
                 totalProcessed++;
                 onProgress(totalProcessed, uri);
@@ -245,9 +305,11 @@ const BACKFILL_GIVE_UP_AFTER = 5;
 let backfillRunning = false;
 
 /**
- * Adds CLIP embeddings to photos that are already indexed but have none:
- * photos synced before semantic search worked, or whose encoding failed.
- * Sync skips already-indexed files, so without this they never get vectors.
+ * Adds CLIP embeddings to photos that are already indexed but need one:
+ * photos synced before semantic search worked, whose encoding failed fewer
+ * than MAX_ATTEMPTS times, or whose vector is from an older model. Sync does
+ * the same for photos it walks past; this covers the ones quick sync never
+ * reaches.
  *
  * Runs newest first, in small batches with a pause between them. Only one
  * backfill runs at a time; a second call while one is running returns 0.
@@ -267,9 +329,8 @@ export const backfillEmbeddings = async (
             for (const row of batch) {
                 if (cancelRef?.current) break;
                 beforeId = row.id;
-                const embedding = await encodeImage(row.filePath);
-                if (embedding) {
-                    indexEmbedding(row.id, embedding);
+                const outcome = await embedPhoto(row.filePath, row.id);
+                if (outcome === 'embedded') {
                     added++;
                 } else if (added === 0 && ++failuresBeforeFirstSuccess >= BACKFILL_GIVE_UP_AFTER) {
                     AppLogger.warn('Backfill', 'Image encoder unavailable, skipping backfill for now.');

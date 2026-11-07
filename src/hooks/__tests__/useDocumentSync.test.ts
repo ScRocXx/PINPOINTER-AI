@@ -2,7 +2,8 @@
  * Tests for useDocumentSync — the PDF document sync engine hook.
  *
  * Strategy: the hook's collaborators are fully mocked —
- *   - '../../database' (isFileIndexed, begin/commit/rollbackTransaction)
+ *   - '../../database' (isFileIndexed, begin/commit/rollbackTransaction,
+ *     noteFileSeen / markOcrDone / markStageFailed for per-file state)
  *   - '../utils/DocumentPipeline' (processPDF)
  *   - '../utils/AppLogger' (quiet + assertable)
  *   - 'react-native-fs' and '@react-native-async-storage/async-storage'
@@ -21,9 +22,13 @@ import {
   beginTransaction,
   commitTransaction,
   isFileIndexed,
+  markOcrDone,
+  markStageFailed,
+  noteFileSeen,
   rollbackTransaction,
 } from '../../database';
 import { processPDF } from '../../utils/DocumentPipeline';
+import { IndexingService } from '../../services/IndexingService';
 import { AppLogger } from '../../utils/AppLogger';
 
 jest.mock('../../database', () => ({
@@ -31,6 +36,9 @@ jest.mock('../../database', () => ({
   beginTransaction: jest.fn(),
   commitTransaction: jest.fn(),
   rollbackTransaction: jest.fn(),
+  noteFileSeen: jest.fn(),
+  markOcrDone: jest.fn(),
+  markStageFailed: jest.fn(),
 }));
 jest.mock('../../utils/DocumentPipeline', () => ({
   processPDF: jest.fn(),
@@ -83,11 +91,15 @@ function alertButtons() {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  IndexingService.reset();
   (AsyncStorage as unknown as { __reset: () => void }).__reset();
   (Platform as unknown as { OS: string }).OS = 'android';
   (RNFS.exists as jest.Mock).mockResolvedValue(true);
   (RNFS.readDir as jest.Mock).mockResolvedValue([]);
-  (isFileIndexed as jest.Mock).mockReturnValue(false);
+  // After processPDF the row is there (the hook checks it landed)
+  (isFileIndexed as jest.Mock).mockReturnValue(true);
+  // By default every PDF is new: OCR pending, PDFs never get embeddings
+  (noteFileSeen as jest.Mock).mockReturnValue({ ocr: true, embed: false });
   (processPDF as jest.Mock).mockResolvedValue(undefined);
 });
 
@@ -164,28 +176,46 @@ describe('handleDocumentSync — android happy path', () => {
     expect(beginTransaction).toHaveBeenCalledTimes(2);
     expect(commitTransaction).toHaveBeenCalledTimes(2);
     expect(rollbackTransaction).not.toHaveBeenCalled();
+    expect(noteFileSeen).toHaveBeenCalledWith(`file://${DOWNLOAD}/a.pdf`, 'DOCUMENT', undefined);
+    expect(markOcrDone).toHaveBeenCalledWith(`file://${DOWNLOAD}/a.pdf`, 'DOCUMENT');
+    expect(markOcrDone).toHaveBeenCalledWith(`file://${DOWNLOAD}/b.pdf`, 'DOCUMENT');
+    expect(markStageFailed).not.toHaveBeenCalled();
     expect(AppLogger.info).toHaveBeenCalledWith(
       'DocumentSync',
       expect.stringContaining('Pipeline complete for: a.pdf'),
     );
   });
 
-  test('skips already-indexed files but still commits their transaction', async () => {
+  test('skips finished files without opening a transaction', async () => {
     (RNFS.readDir as jest.Mock).mockImplementation(async (p: string) =>
       p === DOWNLOAD ? asItems([pdfFile('old.pdf', `${DOWNLOAD}/old.pdf`)]) : asItems([]),
     );
-    (isFileIndexed as jest.Mock).mockReturnValue(true);
+    (noteFileSeen as jest.Mock).mockReturnValue({ ocr: false, embed: false });
     const { result } = await renderHook(() => useDocumentSync());
 
     await act(async () => {
       await result.current.handleDocumentSync();
     });
 
-    expect(isFileIndexed).toHaveBeenCalledWith(`file://${DOWNLOAD}/old.pdf`);
+    expect(noteFileSeen).toHaveBeenCalledWith(`file://${DOWNLOAD}/old.pdf`, 'DOCUMENT', undefined);
     expect(processPDF).not.toHaveBeenCalled();
-    expect(beginTransaction).toHaveBeenCalledTimes(1);
-    expect(commitTransaction).toHaveBeenCalledTimes(1);
+    expect(beginTransaction).not.toHaveBeenCalled();
+    expect(commitTransaction).not.toHaveBeenCalled();
     expect(rollbackTransaction).not.toHaveBeenCalled();
+  });
+
+  test('passes the file modification time so edited PDFs are redone', async () => {
+    const mtime = new Date(1700000000000);
+    (RNFS.readDir as jest.Mock).mockImplementation(async (p: string) =>
+      p === DOWNLOAD ? asItems([{ ...pdfFile('a.pdf', `${DOWNLOAD}/a.pdf`), mtime } as DirItem]) : asItems([]),
+    );
+    const { result } = await renderHook(() => useDocumentSync());
+
+    await act(async () => {
+      await result.current.handleDocumentSync();
+    });
+
+    expect(noteFileSeen).toHaveBeenCalledWith(`file://${DOWNLOAD}/a.pdf`, 'DOCUMENT', 1700000000000);
   });
 
   test('mixed run: indexed files skipped, new files processed', async () => {
@@ -194,9 +224,10 @@ describe('handleDocumentSync — android happy path', () => {
         ? asItems([pdfFile('old.pdf', `${DOWNLOAD}/old.pdf`), pdfFile('new.pdf', `${DOWNLOAD}/new.pdf`)])
         : asItems([]),
     );
-    (isFileIndexed as jest.Mock).mockImplementation((uri: string) =>
-      uri.endsWith('old.pdf'),
-    );
+    (noteFileSeen as jest.Mock).mockImplementation((uri: string) => ({
+      ocr: !uri.endsWith('old.pdf'),
+      embed: false,
+    }));
     const { result } = await renderHook(() => useDocumentSync());
 
     await act(async () => {
@@ -205,7 +236,7 @@ describe('handleDocumentSync — android happy path', () => {
 
     expect(processPDF).toHaveBeenCalledTimes(1);
     expect(processPDF).toHaveBeenCalledWith(`file://${DOWNLOAD}/new.pdf`);
-    expect(commitTransaction).toHaveBeenCalledTimes(2);
+    expect(commitTransaction).toHaveBeenCalledTimes(1);
   });
 
   test('reports progress mid-sync and resets state afterwards', async () => {
@@ -385,6 +416,12 @@ describe('handleDocumentSync — error handling', () => {
     expect(processPDF).toHaveBeenCalledTimes(2);
     expect(rollbackTransaction).toHaveBeenCalledTimes(1);
     expect(commitTransaction).toHaveBeenCalledTimes(1);
+    // the failure is recorded (outside the rolled-back transaction) so retries are capped
+    expect(markStageFailed).toHaveBeenCalledWith(
+      `file://${DOWNLOAD}/bad.pdf`, 'ocr', expect.any(Error), 'DOCUMENT',
+    );
+    expect(markOcrDone).toHaveBeenCalledWith(`file://${DOWNLOAD}/good.pdf`, 'DOCUMENT');
+    expect(markOcrDone).toHaveBeenCalledTimes(1);
     expect(AppLogger.error).toHaveBeenCalledWith(
       'DocumentSync',
       expect.stringContaining('Pipeline failed for: bad.pdf'),
@@ -395,22 +432,25 @@ describe('handleDocumentSync — error handling', () => {
     expect(result.current.lastDocSyncTime).toEqual(expect.any(Number));
   });
 
-  test('isFileIndexed throwing is treated as a pipeline failure', async () => {
+  test('a PDF whose row never lands counts as a failure', async () => {
     (RNFS.readDir as jest.Mock).mockImplementation(async (p: string) =>
       p === DOWNLOAD ? asItems([pdfFile('a.pdf', `${DOWNLOAD}/a.pdf`)]) : asItems([]),
     );
-    (isFileIndexed as jest.Mock).mockImplementation(() => {
-      throw new Error('db locked');
-    });
+    // processPDF logs and swallows its own save errors
+    (isFileIndexed as jest.Mock).mockReturnValue(false);
     const { result } = await renderHook(() => useDocumentSync());
 
     await act(async () => {
       await result.current.handleDocumentSync();
     });
 
-    expect(processPDF).not.toHaveBeenCalled();
+    expect(processPDF).toHaveBeenCalledTimes(1);
     expect(rollbackTransaction).toHaveBeenCalledTimes(1);
     expect(commitTransaction).not.toHaveBeenCalled();
+    expect(markOcrDone).not.toHaveBeenCalled();
+    expect(markStageFailed).toHaveBeenCalledWith(
+      `file://${DOWNLOAD}/a.pdf`, 'ocr', expect.any(Error), 'DOCUMENT',
+    );
     expect(AppLogger.error).toHaveBeenCalledWith(
       'DocumentSync',
       expect.stringContaining('Pipeline failed for: a.pdf'),

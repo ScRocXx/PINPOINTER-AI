@@ -1,8 +1,6 @@
 import { useState } from 'react';
-import { Platform, Alert, Linking, NativeModules } from 'react-native';
-import RNFS from 'react-native-fs';
-import { isFileIndexed, beginTransaction, commitTransaction, rollbackTransaction } from '../database';
-import { processPDF } from '../utils/DocumentPipeline';
+import { Alert, Linking, NativeModules } from 'react-native';
+import { IndexingService } from '../services/IndexingService';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useCallback, useEffect } from 'react';
 import { AppLogger } from '../utils/AppLogger';
@@ -10,7 +8,8 @@ import { AppLogger } from '../utils/AppLogger';
 const { StorageModule } = NativeModules;
 
 /**
- * Tracks document-sync state and crawls device storage for PDFs to index.
+ * Tracks document-sync state. The PDF crawl itself (utils/DocumentSync.ts)
+ * runs in IndexingService's queue, one job at a time with gallery sync.
  *
  * Persists the last sync time in AsyncStorage and exposes the manual
  * `handleDocumentSync` trigger plus a settings deep-link helper for the
@@ -57,103 +56,21 @@ export const useDocumentSync = () => {
         );
     };
 
-    const scanForPDFs = async (): Promise<RNFS.ReadDirItem[] | null> => {
-        let pdfFiles: RNFS.ReadDirItem[] = [];
-        const MAX_DEPTH = 4;
-
-        const scanRecursive = async (dirPath: string, currentDepth: number) => {
-            if (currentDepth > MAX_DEPTH) return;
-            try {
-                const items = await RNFS.readDir(dirPath);
-                for (const item of items) {
-                    if (item.isDirectory()) {
-                        if (item.name.startsWith('.')) continue; // Skip hidden folders
-                        await scanRecursive(item.path, currentDepth + 1);
-                    } else if (item.isFile() && item.name.toLowerCase().endsWith('.pdf')) {
-                        pdfFiles.push(item);
-                    }
-                }
-            } catch {
-                // Ignore per-directory scan errors (e.g. EACCES under scoped
-                // storage); remaining directories are still scanned.
-            }
-        };
-
-        // Target standard user-accessible directories
-        const targetDirs = Platform.OS === 'android'
-            ? [RNFS.DownloadDirectoryPath, `${RNFS.ExternalStorageDirectoryPath}/Documents`]
-            : [RNFS.DocumentDirectoryPath];
-
-        for (const dir of targetDirs) {
-            try {
-                const exists = await RNFS.exists(dir);
-                if (exists) {
-                    await scanRecursive(dir, 1);
-                }
-            } catch {
-                // Ignore per-directory errors (e.g. EACCES under scoped storage).
-            }
-        }
-
-        // If Android Scoped Storage perfectly blocked everything or the user has no documents
-        if (pdfFiles.length === 0) {
-            return null;
-        }
-
-        return pdfFiles;
-    };
-
     const handleDocumentSync = async (limit?: number) => {
         if (isSyncingDocs) return;
 
         try {
             setIsSyncingDocs(true);
-            const results = await scanForPDFs();
+            const result = await IndexingService.documentSync(limit, (processed, total) => {
+                setTotalDocs(total);
+                setDocSyncCount(processed);
+            });
 
             // Intercept permission block and redirect to Android Settings
-            if (results === null) {
+            if (result.status === 'blocked') {
                 setIsSyncingDocs(false);
                 requestAccessAndOpenSettings();
                 return;
-            }
-
-            // Apply limit if provided (e.g., quick scan = 50, universal = all)
-            const docsToProcess = limit ? results.slice(0, limit) : results;
-
-            setTotalDocs(docsToProcess.length);
-            setDocSyncCount(0);
-
-            let processed = 0;
-
-            for (const doc of docsToProcess) {
-                if (!doc.path) continue;
-
-                // Construct a proper file URI for External Rendering
-                const fileUri = `file://${doc.path}`;
-
-                // C3 fix: Transaction-per-document with real rollback
-                // Prevents DB lock + total data loss on mid-sync errors
-                beginTransaction();
-                try {
-                    // Skip if already in DB
-                    if (isFileIndexed(fileUri)) {
-                        commitTransaction();
-                        processed++;
-                        setDocSyncCount(processed);
-                        continue;
-                    }
-
-                    // Run the 5-phase PDF Intelligence Pipeline
-                    await processPDF(fileUri);
-                    commitTransaction();
-                    AppLogger.info('DocumentSync', `Pipeline complete for: ${doc.name}`);
-                } catch (pipelineError) {
-                    rollbackTransaction();
-                    AppLogger.error('DocumentSync', `Pipeline failed for: ${doc.name}`, pipelineError);
-                } finally {
-                    processed++;
-                    setDocSyncCount(processed);
-                }
             }
         } catch (err) {
             AppLogger.error('DocumentSync', 'Background crawler failed:', err);

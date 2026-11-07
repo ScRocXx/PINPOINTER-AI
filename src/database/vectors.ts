@@ -3,6 +3,7 @@
  */
 import { getDb, isVecAvailable } from './connection';
 import { AppLogger } from '../utils/AppLogger';
+import { CURRENT_EMBED_MODEL, MAX_ATTEMPTS } from './fileState';
 
 /** Store a 512-dim float32 embedding vector for a document */
 export const indexEmbedding = (documentId: number, embedding: Float32Array) => {
@@ -56,8 +57,10 @@ export interface MissingEmbedding {
 }
 
 /**
- * Image rows with no vector in vec_index: photos indexed before CLIP worked,
- * or whose encoding failed. Used by the embedding backfill.
+ * Image rows that still need a vector: photos indexed before CLIP worked,
+ * whose encoding failed fewer than MAX_ATTEMPTS times, or whose vector came
+ * from an older model. Rows with no `files` state (indexed outside sync) count
+ * when they have no vector. Used by the embedding backfill.
  * Newest first; pass the last id seen as `beforeId` to page past rows that
  * failed to encode, so the backfill never loops on them.
  */
@@ -66,11 +69,16 @@ export const getImagesMissingEmbeddings = (limit = 50, beforeId = Number.MAX_SAF
   try {
     const db = getDb();
     const result = db.executeSync(
-      `SELECT id, filePath FROM document_index
-       WHERE type = 'IMAGE' AND id < ? AND id NOT IN (SELECT document_id FROM vec_index)
-       ORDER BY id DESC
+      `SELECT d.id AS id, d.filePath AS filePath FROM document_index d
+       LEFT JOIN files f ON f.uri = d.filePath
+       WHERE d.type = 'IMAGE' AND d.id < ?
+         AND ((f.uri IS NULL AND d.id NOT IN (SELECT document_id FROM vec_index))
+           OR (f.ocr_status = 'done' AND (f.embed_status = 'pending'
+             OR (f.embed_status = 'failed' AND f.attempts < ?)
+             OR (f.embed_status = 'done' AND (f.embed_model IS NULL OR f.embed_model != ?)))))
+       ORDER BY d.id DESC
        LIMIT ?`,
-      [beforeId, limit]
+      [beforeId, MAX_ATTEMPTS, CURRENT_EMBED_MODEL, limit]
     );
     const rows = (result?.rows || []) as unknown as MissingEmbedding[];
     return rows.map(r => ({ id: r.id, filePath: r.filePath }));

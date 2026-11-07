@@ -20,6 +20,8 @@ import {
   getGallerySyncLimit,
   getGalleryTotalCount,
   backfillEmbeddings,
+  indexPhoto,
+  __resetEncoderProven,
   QUICK_SYNC_LIMIT,
 } from '../GallerySync';
 import { analyzeImage } from '../VisionPipeline';
@@ -34,7 +36,10 @@ import {
   isFileIndexed,
   getEmbeddingCount,
   indexDocument,
+  getFileState,
+  markEmbedDone,
 } from '../../database';
+import { MAX_ATTEMPTS } from '../../database/fileState';
 import { AppLogger } from '../AppLogger';
 
 jest.mock('../VisionPipeline', () => ({
@@ -115,6 +120,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   asyncStoreReset.__reset();
   clearIndex();
+  __resetEncoderProven();
   analyzeImageMock.mockImplementation(async (uri: string) => visionResult(uri));
   // default: empty gallery
   getPhotosMock.mockResolvedValue({
@@ -190,7 +196,7 @@ describe('performQuickSync', () => {
     expect(isFileIndexed(uriFor(2))).toBe(true);
   });
 
-  test('continues past per-photo failures: failed photo left unindexed for retry, transaction rolled back', async () => {
+  test('continues past per-photo failures: failed photo left unindexed for retry, no transaction opened', async () => {
     analyzeImageMock.mockImplementation(async (uri: string) => {
       if (uri === uriFor(1)) throw new Error('OCR exploded');
       return visionResult(uri);
@@ -212,12 +218,15 @@ describe('performQuickSync', () => {
     expect(
       indexSpy.mock.calls.find((c) => c[2] === uriFor(0))?.[1],
     ).toContain('ocr text');
-    // transaction discipline: 5 begins, 4 commits, 1 rollback
-    expect(beginSpy).toHaveBeenCalledTimes(5);
+    // transaction discipline: the DB writes are wrapped only after analysis
+    // succeeds, so the failed photo never opens a transaction
+    expect(beginSpy).toHaveBeenCalledTimes(4);
     expect(commitSpy).toHaveBeenCalledTimes(4);
-    expect(rollbackSpy).toHaveBeenCalledTimes(1);
+    expect(rollbackSpy).not.toHaveBeenCalled();
+    // the failure is recorded so retries are capped
+    expect(getFileState(uriFor(1))).toMatchObject({ ocr_status: 'failed', attempts: 1 });
     expect(warnSpy).toHaveBeenCalledWith(
-      'QuickSync',
+      'GallerySync',
       expect.stringContaining(uriFor(1)),
       expect.any(Error),
     );
@@ -243,7 +252,7 @@ describe('performQuickSync', () => {
     const result = await performQuickSync(onProgress);
 
     expect(QUICK_SYNC_LIMIT).toBe(50);
-    expect(result).toEqual({ processed: 50, wasCancelled: false });
+    expect(result).toEqual({ processed: 50, wasCancelled: false, nextCursor: 'cursor_50' });
     expect(onProgress).toHaveBeenCalledTimes(50);
     expect(onProgress).toHaveBeenLastCalledWith(50);
 
@@ -392,7 +401,7 @@ describe('performFullGallerySync', () => {
     expect(getIndexedCount()).toBe(10);
   });
 
-  test('recovers from per-photo errors: rolled-back transaction, failed photo left for retry', async () => {
+  test('recovers from per-photo errors: failed photo recorded and left for retry', async () => {
     analyzeImageMock.mockImplementation(async (uri: string) => {
       if (uri === uriFor(3)) throw new Error('OCR exploded');
       return visionResult(uri);
@@ -409,10 +418,11 @@ describe('performFullGallerySync', () => {
     expect(getIndexedCount()).toBe(9);
     expect(isFileIndexed(uriFor(3))).toBe(false);
     expect(indexSpy.mock.calls.some((c) => c[2] === uriFor(3))).toBe(false);
-    expect(rollbackSpy).toHaveBeenCalledTimes(1);
+    expect(rollbackSpy).not.toHaveBeenCalled();
     expect(commitSpy).toHaveBeenCalledTimes(9);
+    expect(getFileState(uriFor(3))).toMatchObject({ ocr_status: 'failed', attempts: 1 });
     expect(warnSpy).toHaveBeenCalledWith(
-      'DeepSync',
+      'GallerySync',
       expect.stringContaining(uriFor(3)),
       expect.any(Error),
     );
@@ -614,5 +624,130 @@ describe('backfillEmbeddings', () => {
 
     expect(second).toBe(0);
     expect(await first).toBe(1);
+  });
+});
+
+// ─── per-file state (files table) ───────────────────────────────────────────
+
+describe('indexPhoto — per-file, per-stage state', () => {
+  const vec = () => new Float32Array(512).fill(0.02);
+
+  test('a new photo gets OCR, a text row and its vector, all recorded', async () => {
+    analyzeImageMock.mockResolvedValue(visionResult(uriFor(0), { embedding: vec() }));
+
+    expect(await indexPhoto(uriFor(0), 1000)).toBe('indexed');
+
+    expect(isFileIndexed(uriFor(0))).toBe(true);
+    expect(getEmbeddingCount()).toBe(1);
+    expect(getFileState(uriFor(0))).toMatchObject({
+      mtime: 1000, ocr_status: 'done', embed_status: 'done', attempts: 0,
+    });
+  });
+
+  test('a finished photo is skipped without any ML work', async () => {
+    analyzeImageMock.mockResolvedValue(visionResult(uriFor(0), { embedding: vec() }));
+    await indexPhoto(uriFor(0), 1000);
+    analyzeImageMock.mockClear();
+
+    expect(await indexPhoto(uriFor(0), 1000)).toBe('skipped');
+    expect(analyzeImageMock).not.toHaveBeenCalled();
+    expect(encodeImageMock).not.toHaveBeenCalled();
+  });
+
+  test('a photo with text but no vector gets only the embedding, not OCR again', async () => {
+    await indexPhoto(uriFor(0)); // encoder returned nothing: vector pending
+    analyzeImageMock.mockClear();
+    encodeImageMock.mockResolvedValue(vec());
+
+    expect(await indexPhoto(uriFor(0))).toBe('embedded');
+
+    expect(analyzeImageMock).not.toHaveBeenCalled();
+    expect(encodeImageMock).toHaveBeenCalledWith(uriFor(0));
+    expect(getEmbeddingCount()).toBe(1);
+    expect(getFileState(uriFor(0))?.embed_status).toBe('done');
+  });
+
+  test('missing vectors before the encoder has ever worked do not use up retries', async () => {
+    encodeImageMock.mockResolvedValue(null); // e.g. CLIP models not installed
+    await indexPhoto(uriFor(0));
+    for (let i = 0; i < MAX_ATTEMPTS + 1; i++) await indexPhoto(uriFor(0));
+
+    expect(getFileState(uriFor(0))).toMatchObject({ embed_status: 'pending', attempts: 0 });
+  });
+
+  test('once the encoder has worked, a photo that keeps failing to encode is capped', async () => {
+    analyzeImageMock.mockResolvedValueOnce(visionResult(uriFor(9), { embedding: vec() }));
+    await indexPhoto(uriFor(9)); // proves the encoder works
+    encodeImageMock.mockResolvedValue(null);
+    await indexPhoto(uriFor(0)); // OCR ok, vector missing → attempt 1
+
+    for (let i = 0; i < MAX_ATTEMPTS + 2; i++) await indexPhoto(uriFor(0));
+
+    expect(getFileState(uriFor(0))).toMatchObject({ embed_status: 'failed', attempts: MAX_ATTEMPTS });
+    expect(encodeImageMock).toHaveBeenCalledTimes(MAX_ATTEMPTS - 1);
+  });
+
+  test(`a photo whose OCR keeps failing is retried ${MAX_ATTEMPTS} times, then left alone until edited`, async () => {
+    analyzeImageMock.mockRejectedValue(new Error('corrupt image'));
+
+    for (let i = 0; i < MAX_ATTEMPTS + 2; i++) await indexPhoto(uriFor(0), 1000);
+
+    expect(analyzeImageMock).toHaveBeenCalledTimes(MAX_ATTEMPTS);
+    expect(getFileState(uriFor(0))).toMatchObject({ ocr_status: 'failed', attempts: MAX_ATTEMPTS, last_error: 'corrupt image' });
+
+    analyzeImageMock.mockResolvedValue(visionResult(uriFor(0)));
+    expect(await indexPhoto(uriFor(0), 2000)).toBe('indexed');
+  });
+
+  test('an edited photo is OCRed again', async () => {
+    await indexPhoto(uriFor(0), 1000);
+    analyzeImageMock.mockResolvedValue(visionResult(uriFor(0), { content: 'new text' }));
+
+    expect(await indexPhoto(uriFor(0), 2000)).toBe('indexed');
+    expect(analyzeImageMock).toHaveBeenCalledTimes(2);
+  });
+
+  test('a failed save is rolled back and recorded', async () => {
+    jest.spyOn(DatabaseDocuments, 'indexDocument').mockReturnValue(null);
+    const rollbackSpy = jest.spyOn(DatabaseTransactions, 'rollbackTransaction');
+
+    expect(await indexPhoto(uriFor(0))).toBe('failed');
+
+    expect(rollbackSpy).toHaveBeenCalledTimes(1);
+    expect(getFileState(uriFor(0))).toMatchObject({ ocr_status: 'failed', attempts: 1 });
+  });
+
+  test('sync passes each photo\'s modification time through', async () => {
+    getPhotosMock.mockResolvedValue({
+      edges: [{ node: { image: { uri: uriFor(0) }, modificationTimestamp: 1234, timestamp: 1000 } }],
+      page_info: { has_next_page: false, end_cursor: undefined },
+    });
+
+    await performQuickSync(jest.fn());
+
+    expect(getFileState(uriFor(0))?.mtime).toBe(1234);
+  });
+
+  test('backfill records the vector in file state', async () => {
+    await indexPhoto(uriFor(0));
+    encodeImageMock.mockResolvedValue(vec());
+    const p = backfillEmbeddings();
+    await jest.advanceTimersByTimeAsync(60_000);
+
+    expect(await p).toBe(1);
+    expect(getFileState(uriFor(0))?.embed_status).toBe('done');
+  });
+
+  test('backfill re-encodes vectors from an older model', async () => {
+    analyzeImageMock.mockResolvedValue(visionResult(uriFor(0), { embedding: vec() }));
+    await indexPhoto(uriFor(0));
+    markEmbedDone(uriFor(0), 'old-model');
+    encodeImageMock.mockResolvedValue(vec());
+    const p = backfillEmbeddings();
+    await jest.advanceTimersByTimeAsync(60_000);
+
+    expect(await p).toBe(1);
+    expect(getEmbeddingCount()).toBe(1);
+    expect(getFileState(uriFor(0))?.embed_model).not.toBe('old-model');
   });
 });

@@ -6,6 +6,7 @@
  *   - document_index table (INSERT/DELETE/SELECT, UNIQUE-ish filePath handling
  *     is done by the app's DELETE-before-INSERT pattern)
  *   - vec_index table (embedding storage)
+ *   - files table (per-file indexing state) and PRAGMA user_version
  *   - FTS5 MATCH queries → case-insensitive substring matching over
  *     content + title (AND/OR term logic honored)
  *   - LIKE fallback queries → evaluates the generated WHERE clause
@@ -60,6 +61,8 @@ class MockDB {
     this.name = name;
     this.documents = [];
     this.vectors = [];
+    this.files = new Map();
+    this.userVersion = 0;
     this._autoId = 1;
     this._lastInsertId = null;
     this._txStack = [];
@@ -80,6 +83,8 @@ class MockDB {
   __reset() {
     this.documents = [];
     this.vectors = [];
+    this.files = new Map();
+    this.userVersion = 0;
     this._autoId = 1;
     this._lastInsertId = null;
     this._txStack = [];
@@ -90,6 +95,8 @@ class MockDB {
     return {
       documents: this.documents.map((r) => ({ ...r })),
       vectors: this.vectors.map((r) => ({ ...r })),
+      files: new Map([...this.files].map(([k, v]) => [k, { ...v }])),
+      userVersion: this.userVersion,
       autoId: this._autoId,
       lastInsertId: this._lastInsertId,
     };
@@ -98,6 +105,8 @@ class MockDB {
   _restore(s) {
     this.documents = s.documents;
     this.vectors = s.vectors;
+    this.files = s.files;
+    this.userVersion = s.userVersion;
     this._autoId = s.autoId;
     this._lastInsertId = s.lastInsertId;
   }
@@ -132,6 +141,16 @@ class MockDB {
     const q = sql.replace(/\s+/g, ' ').trim();
     const up = q.toUpperCase();
 
+    // PRAGMA user_version (read / write) — schema migrations
+    if (/^PRAGMA user_version\s*;?$/i.test(q)) {
+      return { rows: [{ user_version: this.userVersion }] };
+    }
+    const setVersion = q.match(/^PRAGMA user_version\s*=\s*(\d+)/i);
+    if (setVersion) {
+      this.userVersion = parseInt(setVersion[1], 10);
+      return { rows: [] };
+    }
+
     // DDL / PRAGMA → no-op success
     if (/^(PRAGMA|CREATE|ALTER)\b/.test(up)) return { rows: [] };
 
@@ -161,6 +180,45 @@ class MockDB {
       this.documents.push(row);
       this._lastInsertId = row.id;
       return { rows: [] };
+    }
+
+    // files table: INSERT OR REPLACE / INSERT OR IGNORE (cols…) VALUES (…)
+    const filesInsert = q.match(/^INSERT OR (REPLACE|IGNORE) INTO files\s*\(([^)]+)\)/i);
+    if (filesInsert) {
+      const cols = filesInsert[2].split(',').map((c) => c.trim());
+      const row = {};
+      cols.forEach((c, i) => {
+        row[c] = params[i] === undefined ? null : params[i];
+      });
+      if (filesInsert[1].toUpperCase() === 'IGNORE' && this.files.has(row.uri)) return { rows: [] };
+      this.files.set(row.uri, row);
+      return { rows: [] };
+    }
+    if (/^SELECT .+ FROM files WHERE uri = \?/i.test(q)) {
+      const hit = this.files.get(params[0]);
+      return { rows: hit ? this._project([hit], this._selectList(q)) : [] };
+    }
+    if (/^SELECT ocr_status, embed_status, COUNT\(\*\) AS cnt FROM files GROUP BY/i.test(q)) {
+      const groups = new Map();
+      for (const f of this.files.values()) {
+        const key = `${f.ocr_status}|${f.embed_status}`;
+        const g = groups.get(key) || { ocr_status: f.ocr_status, embed_status: f.embed_status, cnt: 0 };
+        g.cnt++;
+        groups.set(key, g);
+      }
+      return { rows: [...groups.values()] };
+    }
+    if (/^DELETE FROM files\s*;?\s*$/i.test(q)) {
+      this.files = new Map();
+      return { rows: [] };
+    }
+
+    // Full scans used by the files-table migration
+    if (/^SELECT id, filePath, type FROM document_index\s*;?$/i.test(q)) {
+      return { rows: this.documents.map((r) => ({ id: r.id, filePath: r.filePath, type: r.type })) };
+    }
+    if (/^SELECT document_id FROM vec_index\s*;?$/i.test(q)) {
+      return { rows: this.vectors.map((v) => ({ document_id: v.document_id })) };
     }
 
     // INSERT INTO vec_index
@@ -216,15 +274,26 @@ class MockDB {
       return { rows: hit ? [{ document_id: hit.document_id }] : [] };
     }
 
-    // Images without an embedding (backfill): id < ? AND id NOT IN vec_index
-    if (/WHERE type = 'IMAGE' AND id < \? AND id NOT IN \(SELECT document_id FROM vec_index\)/i.test(q)) {
-      const [beforeId, limit] = params;
+    // Images that still need a vector (backfill), per the files-table rules
+    if (/FROM document_index d LEFT JOIN files f ON f.uri = d.filePath/i.test(q)) {
+      const [beforeId, maxAttempts, model, limit] = params;
       const withVec = new Set(this.vectors.map((v) => v.document_id));
+      const needs = (r) => {
+        const f = this.files.get(r.filePath);
+        if (!f) return !withVec.has(r.id);
+        if (f.ocr_status !== 'done') return false;
+        return (
+          f.embed_status === 'pending' ||
+          (f.embed_status === 'failed' && f.attempts < maxAttempts) ||
+          (f.embed_status === 'done' && (f.embed_model == null || f.embed_model !== model))
+        );
+      };
       const rows = this.documents
-        .filter((r) => r.type === 'IMAGE' && r.id < beforeId && !withVec.has(r.id))
+        .filter((r) => r.type === 'IMAGE' && r.id < beforeId && needs(r))
         .sort((a, b) => b.id - a.id)
-        .slice(0, limit);
-      return { rows: this._project(rows, this._selectList(q)) };
+        .slice(0, limit)
+        .map((r) => ({ id: r.id, filePath: r.filePath }));
+      return { rows };
     }
 
     // FTS5 MATCH (simple FTS path + hybrid WITH query)

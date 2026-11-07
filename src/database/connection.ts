@@ -4,6 +4,7 @@
  */
 import { open } from '@op-engineering/op-sqlite';
 import { AppLogger } from '../utils/AppLogger';
+import { seedFileStateFromIndex } from './fileState';
 
 // ─── Singleton DB ───────────────────────────────────────────────────────────
 
@@ -124,7 +125,78 @@ export const setupDatabase = () => {
       _vecAvailable = false;
       AppLogger.warn('DB', 'sqlite-vec not available:', vecError);
     }
+
+    runMigrations();
   } catch (error) {
     AppLogger.error('DB', 'Setup Failed:', error);
+  }
+};
+
+// ─── Versioned migrations ───────────────────────────────────────────────────
+// PRAGMA user_version records the last migration applied. Each migration runs
+// once, in its own transaction; add new ones to the end, never edit old ones.
+// (The CREATE/ALTER statements above predate this and stay idempotent.)
+
+interface Migration {
+  version: number;
+  name: string;
+  up: () => void;
+}
+
+const MIGRATIONS: Migration[] = [
+  {
+    version: 1,
+    name: 'per-file indexing state',
+    up: () => {
+      const db = getDb();
+      db.executeSync(`
+        CREATE TABLE IF NOT EXISTS files (
+          uri TEXT PRIMARY KEY,
+          kind TEXT NOT NULL,
+          mtime INTEGER,
+          ocr_status TEXT NOT NULL DEFAULT 'pending',
+          embed_status TEXT NOT NULL DEFAULT 'pending',
+          embed_model TEXT,
+          attempts INTEGER NOT NULL DEFAULT 0,
+          last_error TEXT,
+          updated_at INTEGER
+        ) WITHOUT ROWID;
+      `);
+      db.executeSync('CREATE INDEX IF NOT EXISTS files_embed_status ON files(embed_status);');
+      seedFileStateFromIndex(_vecAvailable);
+    },
+  },
+];
+
+/** The schema version this build expects. */
+export const SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;
+
+/** Current PRAGMA user_version (0 for a database that predates migrations). */
+export const getSchemaVersion = (): number => {
+  try {
+    const row = getDb().executeSync('PRAGMA user_version;')?.rows?.[0] as { user_version?: number } | undefined;
+    return typeof row?.user_version === 'number' ? row.user_version : 0;
+  } catch {
+    return 0;
+  }
+};
+
+const runMigrations = () => {
+  const db = getDb();
+  let current = getSchemaVersion();
+  for (const migration of MIGRATIONS) {
+    if (migration.version <= current) continue;
+    try {
+      db.executeSync('BEGIN TRANSACTION;');
+      migration.up();
+      db.executeSync(`PRAGMA user_version = ${migration.version};`);
+      db.executeSync('COMMIT;');
+      current = migration.version;
+      AppLogger.info('DB', `Migration ${migration.version} applied (${migration.name})`);
+    } catch (e) {
+      try { db.executeSync('ROLLBACK;'); } catch { }
+      AppLogger.error('DB', `Migration ${migration.version} failed (${migration.name})`, e);
+      return; // later migrations may depend on this one
+    }
   }
 };

@@ -17,6 +17,7 @@ import {
 import { setupDatabase, closeDatabase } from './database';
 import { RootStackParamList } from './navigation/types';
 import { AppLogger } from './utils/AppLogger';
+import { scheduleBackgroundIndexing } from './services/BackgroundIndexingTask';
 
 const Stack = createStackNavigator<RootStackParamList>();
 
@@ -30,6 +31,9 @@ const App: React.FC = () => {
       try {
         // 1. Initialize Pinpoint Search Database
         setupDatabase();
+
+        // 2. Let Android index the rest of the gallery while the phone charges
+        scheduleBackgroundIndexing();
 
         AppLogger.info('App', 'All systems initialized successfully');
       } catch (error) {

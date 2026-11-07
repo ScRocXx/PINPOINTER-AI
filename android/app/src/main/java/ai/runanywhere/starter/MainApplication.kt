@@ -24,6 +24,8 @@ class MainApplication : Application(), ReactApplication {
               // sherpa-onnx powered on-device STT
               add(SherpaOnnxPackage())
               add(MobileCLIPPackage())
+              // Schedules background indexing while charging (IndexingJobService)
+              add(IndexingSchedulerPackage())
             }
 
         override fun getJSMainModuleName(): String = "index"

@@ -2,7 +2,8 @@
  * Tests for useGallerySync — gallery quick/deep sync orchestration hook.
  *
  * Collaborators are mocked for isolation:
- * - ../utils/GallerySync (performFullGallerySync / performQuickSync / loadSavedCursor)
+ * - ../utils/GallerySync (performFullGallerySync / performQuickSync / loadSavedCursor),
+ *   called through the real IndexingService queue (reset before each test)
  * - ../Database (getIndexedCount)
  * - ../utils/AppLogger
  * AsyncStorage uses the repo's in-memory mock. Platform.OS / Platform.Version
@@ -20,6 +21,7 @@ import {
   backfillEmbeddings,
 } from '../../utils/GallerySync';
 import { getIndexedCount } from '../../database';
+import { IndexingService } from '../../services/IndexingService';
 import { AppLogger } from '../../utils/AppLogger';
 
 jest.mock('../../utils/GallerySync', () => ({
@@ -66,6 +68,7 @@ type CancelRef = { current: boolean };
 describe('useGallerySync', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    IndexingService.reset();
     (AsyncStorage as unknown as { __reset: () => void }).__reset();
     setPlatform('ios');
 
@@ -668,10 +671,12 @@ describe('useGallerySync', () => {
       const { result } = await renderHook(() => useGallerySync());
       await act(async () => {
         await result.current.handleQuickSync();
+        await flush();
       });
       expect(result.current.isSyncing).toBe(false);
       expect(Alert.alert).not.toHaveBeenCalledWith('Sync Error', expect.anything());
-      expect(mockedWarn).toHaveBeenCalledWith('GallerySync', 'Backfill failed to start', expect.any(Error));
+      // the service runs the backfill as a queued job, so the throw arrives as a rejection
+      expect(mockedWarn).toHaveBeenCalledWith('GallerySync', 'Backfill failed', expect.any(Error));
     });
   });
 });

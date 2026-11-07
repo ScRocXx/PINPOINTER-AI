@@ -9,6 +9,7 @@ export type { DocumentRecord } from './types';
 export { closeDatabase, setupDatabase } from './connection';
 export {
   isFileIndexed,
+  getDocumentId,
   indexDocument,
   getIndexedCount,
   clearIndex,
@@ -16,5 +17,15 @@ export {
 } from './documents';
 export { indexEmbedding, hasEmbedding, getEmbeddingCount, getImagesMissingEmbeddings } from './vectors';
 export type { MissingEmbedding } from './vectors';
+export {
+  noteFileSeen,
+  getFileState,
+  markOcrDone,
+  markEmbedDone,
+  markEmbedSkipped,
+  markStageFailed,
+  getIndexingStats,
+} from './fileState';
+export type { FileKind, FileState, IndexingStats, PendingWork, Stage, StageStatus } from './fileState';
 export { beginTransaction, commitTransaction, rollbackTransaction } from './transactions';
 export { searchDocuments, extractSnippet } from './search';

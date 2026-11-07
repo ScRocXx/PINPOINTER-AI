@@ -1,6 +1,7 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { Platform, PermissionsAndroid, Alert } from 'react-native';
-import { performFullGallerySync, performQuickSync, loadSavedCursor, backfillEmbeddings } from '../utils/GallerySync';
+import { loadSavedCursor } from '../utils/GallerySync';
+import { IndexingService } from '../services/IndexingService';
 import { getIndexedCount } from '../database';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AppLogger } from '../utils/AppLogger';
@@ -9,7 +10,9 @@ import { AppLogger } from '../utils/AppLogger';
 const BACKFILL_STARTUP_DELAY_MS = 5000;
 
 /**
- * useGallerySync — handles quick/deep sync, pause, resume, progress.
+ * useGallerySync — the UI side of gallery sync: permission, progress, pause,
+ * resume and alerts. The sync loops themselves run in IndexingService, which
+ * queues them so only one runs at a time.
  */
 export const useGallerySync = () => {
     const [isSyncing, setIsSyncing] = useState(false);
@@ -18,13 +21,12 @@ export const useGallerySync = () => {
     const [syncCount, setSyncCount] = useState(0);
     const [totalImages] = useState(0);
     const [lastSyncTime, setLastSyncTime] = useState<number | null>(null);
-    const cancelRef = useRef<boolean>(false);
 
     // Give already-indexed photos that lack a CLIP embedding one, in the
-    // background. Safe to call repeatedly: only one backfill runs at a time.
+    // background. Safe to call repeatedly: the service runs one at a time.
     const startBackfill = useCallback(() => {
         try {
-            backfillEmbeddings(cancelRef).catch((e) => AppLogger.warn('GallerySync', 'Backfill failed', e));
+            IndexingService.backfill().catch((e) => AppLogger.warn('GallerySync', 'Backfill failed', e));
         } catch (e) {
             AppLogger.warn('GallerySync', 'Backfill failed to start', e);
         }
@@ -62,13 +64,11 @@ export const useGallerySync = () => {
             const hasPermission = await requestPermission();
             if (!hasPermission) return;
 
-            cancelRef.current = false;
             setIsSyncing(true);
             setIsPaused(false);
 
-            const { processed, wasCancelled } = await performFullGallerySync(
+            const { processed, wasCancelled } = await IndexingService.deepGallerySync(
                 (currentCount) => setSyncCount(currentCount),
-                cancelRef,
                 fromCursor,
             );
 
@@ -96,15 +96,11 @@ export const useGallerySync = () => {
             const hasPermission = await requestPermission();
             if (!hasPermission) return;
 
-            cancelRef.current = false;
             setIsDeepSync(false);
             setIsSyncing(true);
             setIsPaused(false);
 
-            await performQuickSync(
-                (count) => setSyncCount(count),
-                cancelRef,
-            );
+            await IndexingService.quickGallerySync((count) => setSyncCount(count));
 
             setIsSyncing(false);
             const now = Date.now();
@@ -124,7 +120,7 @@ export const useGallerySync = () => {
     }, [runSync]);
 
     const handlePauseSync = useCallback(() => {
-        cancelRef.current = true;
+        IndexingService.pause();
     }, []);
 
     const handleResumeSync = useCallback(async () => {
