@@ -16,8 +16,8 @@
  *    key), so it gets NO implicit 'a': राम→"raam", कमल→"kamal",
  *    single क→"k". But a consonant followed by ANY other character
  *    (space, digit, Latin letter) goes through the consonant branch and
- *    DOES get implicit 'a': कमल123→"kamala123",
- *    "आधार कार्ड"→"aadhaara kaard" (the source's own doc comment says
+ *    drops the word-final 'a' before digits too: कमल123→"kamal123",
+ *    "आधार कार्ड"→"aadhaar kaard" (the source's own doc comment says
  *    "aadhaar kaard", which is wrong).
  *  - Precomposed nukta code points (e.g. U+0958 QA) are NOT in the maps and
  *    are silently skipped as unknown Devanagari.
@@ -134,9 +134,9 @@ describe('transliterate', () => {
             expect(transliterate('म')).toBe('m');
         });
 
-        it('adds implicit "a" when a consonant is followed by a non-Devanagari char', () => {
-            expect(transliterate('कमल!')).toBe('kamala!');
-            expect(transliterate('कमल123')).toBe('kamala123');
+        it('drops the word-final "a" before punctuation and digits too', () => {
+            expect(transliterate('कमल!')).toBe('kamal!');
+            expect(transliterate('कमल123')).toBe('kamal123');
         });
 
         it('halant suppresses the implicit "a" (explicit half-letter)', () => {
@@ -152,12 +152,12 @@ describe('transliterate', () => {
             expect(transliterate(devanagari)).toBe(expected);
         });
 
-        it('decomposes ज्ञ → "jn" (the "gya" table value is unreachable: the key is 3 code units, the fast path only checks 2)', () => {
-            expect(transliterate('ज्ञ')).toBe('jn');
+        it('says ज्ञ as "gy", the way Hindi speakers do', () => {
+            expect(transliterate('ज्ञ')).toBe('gy');
         });
 
         it('handles conjuncts inside words', () => {
-            expect(transliterate('ज्ञान')).toBe('jnaan');
+            expect(transliterate('ज्ञान')).toBe('gyaan');
             expect(transliterate('क्षमा')).toBe('kshamaa');
             expect(transliterate('स्त्री')).toBe('stree');
         });
@@ -165,7 +165,7 @@ describe('transliterate', () => {
 
     describe('anusvara, visarga and chandrabindu', () => {
         it.each([
-            ['सं', 'sn'], // anusvara → n, no implicit a (matra consumed)
+            ['सं', 'san'], // the consonant's own "a" comes before the anusvara's n
             ['दुःख', 'duhkh'], // visarga → h
             ['गाँव', 'gaanv'], // chandrabindu → n
             ['चाँद', 'chaand'], // chandrabindu → n
@@ -191,15 +191,14 @@ describe('transliterate', () => {
 
         it('handles nukta consonants inside words', () => {
             expect(transliterate('फ़िल्म')).toBe('film');
-            expect(transliterate('ज़मीन')).toBe('zmeen');
+            expect(transliterate('ज़मीन')).toBe('zameen');
             expect(transliterate('क़िला')).toBe('qilaa');
         });
 
-        it('silently drops PRECOMPOSED nukta code points (normalization-sensitive)', () => {
-            // U+0958 DEVANAGARI LETTER QA is not in any map; it falls into the
-            // "unknown Devanagari — skip" branch.
-            expect(transliterate('\u0958')).toBe('');
-            expect(transliterate('\u0958िला')).toBe('ilaa');
+        it('reads PRECOMPOSED nukta code points the same as decomposed ones', () => {
+            // U+0958 DEVANAGARI LETTER QA: NFC turns it into क + ़
+            expect(transliterate('\u0958')).toBe('q');
+            expect(transliterate('\u0958िला')).toBe('qilaa');
         });
     });
 
@@ -231,21 +230,21 @@ describe('transliterate', () => {
         });
 
         it('handles mixed Hindi + ASCII', () => {
-            expect(transliterate('कमल123')).toBe('kamala123');
+            expect(transliterate('कमल123')).toBe('kamal123');
             expect(transliterate('hello कमल')).toBe('hello kamal');
-            expect(transliterate('फोन 123')).toBe('phona 123');
+            expect(transliterate('फोन 123')).toBe('phon 123');
         });
 
-        it('skips Devanagari characters with no mapping (digits, om, danda)', () => {
-            expect(transliterate('१२३')).toBe('');
+        it('turns Indian digits into 0-9 and skips om and danda', () => {
+            expect(transliterate('१२३')).toBe('123');
             expect(transliterate('ॐ')).toBe('');
             expect(transliterate('।')).toBe('');
         });
 
         it('collapses whitespace and trims', () => {
-            expect(transliterate('कमल  घर')).toBe('kamala ghar');
-            expect(transliterate('  कमल ')).toBe('kamala');
-            expect(transliterate('कमल\nघर')).toBe('kamala ghar');
+            expect(transliterate('कमल  घर')).toBe('kamal ghar');
+            expect(transliterate('  कमल ')).toBe('kamal');
+            expect(transliterate('कमल\nघर')).toBe('kamal ghar');
         });
 
         it('produces non-empty plain-ASCII output for Hindi input', () => {
@@ -322,7 +321,7 @@ describe('enrichHindi', () => {
 
     it('enriches multi-word input, skipping dict misses (doc example)', () => {
         // "कार्ड" has no dict entry: transliterated but not translated
-        expect(enrichHindi('आधार कार्ड')).toBe('आधार कार्ड aadhaara kaard aadhaar id card');
+        expect(enrichHindi('आधार कार्ड')).toBe('आधार कार्ड aadhaar kaard aadhaar id card');
     });
 
     it('returns an empty string for empty input', () => {

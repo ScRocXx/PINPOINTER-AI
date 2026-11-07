@@ -35,7 +35,7 @@ describe('buildIndexableContent — Hindi pipeline output', () => {
 
     it('enriches a multi-word Hindi phrase deterministically', async () => {
         expect(await buildIndexableContent('आधार कार्ड')).toBe(
-            'आधार कार्ड aadhaara kaard aadhaar id card A360 K630 A360 I300 C630',
+            'आधार कार्ड aadhaar kaard aadhaar id card A360 K630 A360 I300 C630',
         );
     });
 
@@ -46,7 +46,7 @@ describe('buildIndexableContent — Hindi pipeline output', () => {
 
     it('handles mixed Hindi + Latin input', async () => {
         expect(await buildIndexableContent('कमल hello')).toBe(
-            'कमल hello kamala hello lotus flower H400 K540 H400 L320 F460',
+            'कमल hello kamal hello lotus flower H400 K540 H400 L320 F460',
         );
     });
 

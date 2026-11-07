@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { searchDocuments, DocumentRecord } from '../database';
 import { encodeText, warmUpText } from '../services/EmbeddingService';
 import { AppLogger } from '../utils/AppLogger';
+import { clipTextForQuery } from '../utils/ConceptTable';
+import { queryWords } from '../utils/SearchKeys';
 import {
     loadSearchHistory, saveSearch, deleteSearchItem,
     clearSearchHistory, SearchHistoryItem,
@@ -81,7 +83,11 @@ export const useSearch = (isDbReady: boolean) => {
                 setDebouncedSearchText(searchText);
                 setIsSearchPending(false);
 
-                const queryVector = await encodeText(searchText);
+                // Hindi and other Indian-script words never reach the
+                // English-only CLIP tokenizer: known concepts become English,
+                // unknown ones are dropped (null = skip semantic search).
+                const clipText = clipTextForQuery(searchText, queryWords(searchText));
+                const queryVector = clipText ? await encodeText(clipText) : null;
                 if (!isCurrent || !queryVector) return;
                 const hybridResults = mergeResults(searchDocuments(searchText, queryVector), textResults);
                 if (!isCurrent) return;

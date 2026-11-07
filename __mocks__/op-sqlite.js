@@ -262,6 +262,17 @@ class MockDB {
       return { rows: [{ cnt: this.documents.length }] };
     }
 
+    // Migration 2: read every row, rewrite one row's content
+    if (/^SELECT id, title, content FROM document_index;?$/i.test(q)) {
+      return { rows: this.documents.map((r) => ({ id: r.id, title: r.title, content: r.content })) };
+    }
+    if (/^UPDATE document_index SET content = \? WHERE id = \?/i.test(q)) {
+      const [content, id] = params;
+      const hit = this.documents.find((r) => r.id === id);
+      if (hit) hit.content = content;
+      return { rows: [] };
+    }
+
     // Point lookups
     if (/FROM document_index WHERE filePath = \?/i.test(q)) {
       const [p] = params;
@@ -316,25 +327,34 @@ class MockDB {
 
   _matchTerms(matchParam) {
     // FTS5 term strings look like: "aadhaar"* AND "card"*  or  "x"* OR "y"*
-    const terms = [];
-    const re = /"([^"]+)"\*?/g;
-    let m;
-    while ((m = re.exec(matchParam)) !== null) terms.push(m[1].toLowerCase());
-    const isOr = /\bOR\b/i.test(matchParam);
-    return { terms, isOr };
+    // or grouped: ("bill"* OR "qkbil") AND ("card"* OR "qkkrd")
+    const quoted = (str) => {
+      const out = [];
+      const re = /"([^"]+)"\*?/g;
+      let m;
+      while ((m = re.exec(str)) !== null) out.push(m[1].toLowerCase());
+      return out;
+    };
+    const andParts = splitTopLevel(matchParam, ' AND ');
+    if (andParts.length > 1) {
+      return { groups: andParts.map(quoted), isOr: false };
+    }
+    const orParts = splitTopLevel(matchParam, ' OR ');
+    return { groups: orParts.map(quoted), isOr: orParts.length > 1 };
   }
 
-  _docMatchesTerms(doc, terms, isOr) {
+  _docMatchesTerms(doc, groups, isOr) {
     const hay = `${doc.title || ''} ${doc.content || ''}`.toLowerCase();
-    return isOr ? terms.some((t) => hay.includes(t)) : terms.every((t) => hay.includes(t));
+    const groupHit = (g) => g.some((t) => hay.includes(t));
+    return isOr ? groups.some(groupHit) : groups.every(groupHit);
   }
 
   _ftsSearch(q, params) {
     // params: [ftsTerms] for the simple path, [vectorBlob, ftsTerms] for hybrid
     const matchParam = String(params[params.length - 1] ?? '');
-    const { terms, isOr } = this._matchTerms(matchParam);
+    const { groups, isOr } = this._matchTerms(matchParam);
     const hybrid = /rrf_score/i.test(q);
-    let rows = this.documents.filter((d) => this._docMatchesTerms(d, terms, isOr));
+    let rows = this.documents.filter((d) => this._docMatchesTerms(d, groups, isOr));
     rows = rows.slice(0, 50);
     const extra = hybrid ? { rrf_score: 1.0 } : {};
     return { rows: this._project(rows, this._selectList(q), extra) };

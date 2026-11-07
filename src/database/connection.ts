@@ -5,6 +5,8 @@
 import { open } from '@op-engineering/op-sqlite';
 import { AppLogger } from '../utils/AppLogger';
 import { seedFileStateFromIndex } from './fileState';
+import { maskSensitiveData } from '../utils/DataMasking';
+import { withSearchTail } from '../utils/SearchKeys';
 
 // ─── Singleton DB ───────────────────────────────────────────────────────────
 
@@ -44,6 +46,35 @@ export const isVecAvailable = (): boolean => _vecAvailable;
 
 // ─── Schema Setup ───────────────────────────────────────────────────────────
 
+/**
+ * FTS5 tokenizer that keeps Indian-script vowel signs inside words.
+ * unicode61's default categories ("L* N* Co") leave out combining marks
+ * (Mn, Mc), so बिल was split at its vowel sign. Older SQLite builds without
+ * the `categories` option fall back to plain unicode61.
+ */
+const INDIC_TOKENIZER = `unicode61 categories 'L* N* Co Mn Mc'`;
+
+const createFtsTable = (db: ReturnType<typeof open>) => {
+  try {
+    db.executeSync(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS fts_index USING fts5(
+        content,
+        filePath UNINDEXED,
+        tokenize = "${INDIC_TOKENIZER}"
+      );
+    `);
+  } catch (e) {
+    AppLogger.warn('DB', 'FTS5 categories option unsupported, using plain unicode61:', e);
+    db.executeSync(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS fts_index USING fts5(
+        content,
+        filePath UNINDEXED,
+        tokenize = 'unicode61'
+      );
+    `);
+  }
+};
+
 export const setupDatabase = () => {
   try {
     const db = getDb();
@@ -74,13 +105,7 @@ export const setupDatabase = () => {
 
     // Try FTS5 (may not be compiled into this SQLite build)
     try {
-      db.executeSync(`
-        CREATE VIRTUAL TABLE IF NOT EXISTS fts_index USING fts5(
-          content,
-          filePath UNINDEXED,
-          tokenize = 'unicode61'
-        );
-      `);
+      createFtsTable(db);
 
       db.executeSync(`
         CREATE TRIGGER IF NOT EXISTS fts_insert AFTER INSERT ON document_index BEGIN
@@ -164,6 +189,33 @@ const MIGRATIONS: Migration[] = [
       `);
       db.executeSync('CREATE INDEX IF NOT EXISTS files_embed_status ON files(embed_status);');
       seedFileStateFromIndex(_vecAvailable);
+    },
+  },
+  {
+    version: 2,
+    name: 'Indian-language search keys and tokenizer',
+    up: () => {
+      const db = getDb();
+      // 1. Re-mask (Indian digits are now caught) and add the search tail of
+      //    sound keys and concept ids to every row. The fts_update trigger
+      //    keeps the old FTS table in step while this runs.
+      const rows = (db.executeSync('SELECT id, title, content FROM document_index;')?.rows ?? []) as Array<{
+        id: number; title: string | null; content: string | null;
+      }>;
+      for (const r of rows) {
+        const current = r.content ?? '';
+        const masked = maskSensitiveData(current);
+        const next = masked.trim() ? withSearchTail(masked, r.title) : masked;
+        if (next !== current) {
+          db.executeSync('UPDATE document_index SET content = ? WHERE id = ?;', [next, r.id]);
+        }
+      }
+      // 2. Rebuild FTS with the Indian-script tokenizer.
+      if (_ftsAvailable) {
+        db.executeSync('DROP TABLE IF EXISTS fts_index;');
+        createFtsTable(db);
+        db.executeSync('INSERT INTO fts_index(rowid, content, filePath) SELECT id, content, filePath FROM document_index;');
+      }
     },
   },
 ];

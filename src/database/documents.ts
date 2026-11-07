@@ -2,6 +2,7 @@
  * Document CRUD: indexing, existence checks, counts, clearing, vault listing.
  */
 import { maskSensitiveData } from '../utils/DataMasking';
+import { visibleContent, withSearchTail } from '../utils/SearchKeys';
 import { AppLogger } from '../utils/AppLogger';
 import { getDb, isFtsAvailable, isVecAvailable } from './connection';
 import type { DocumentRecord } from './types';
@@ -30,7 +31,7 @@ export const processResults = (
     return {
       id: r.id,
       title: r.title,
-      content: r.content,
+      content: r.content == null ? r.content : visibleContent(r.content),
       filePath: r.filePath,
       type: r.type,
       detection_type: r.detection_type,
@@ -72,6 +73,9 @@ export const indexDocument = (
 ): number | null => {
   // C2 fix: Mask PII (Aadhaar/PAN/phone) at the single chokepoint so no caller can bypass it
   content = maskSensitiveData(content ?? '');
+  // Sound keys + concept ids for Indian-language search (after masking, so
+  // they are built from what is actually stored).
+  if (content.trim()) content = withSearchTail(content, title);
 
   if (!content.trim() && !title?.trim()) {
     AppLogger.info('DB', 'Skipped empty indexing for:', filePath);

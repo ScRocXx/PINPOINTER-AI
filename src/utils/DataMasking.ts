@@ -8,6 +8,8 @@
  * Performance: pure regex, <0.1ms per document. Zero memory overhead.
  */
 
+import { asciiDigits } from './IndicText';
+
 /**
  * Mask an Aadhaar number: 1234 5678 9012 → ****-****-9012
  */
@@ -39,7 +41,9 @@ const maskPhone = (text: string): string => {
  * matching (8-18 digits) to prevent double-masking.
  */
 export const maskSensitiveData = (content: string): string => {
-    let masked = content;
+    // Indian-script digits (०-९, ০-৯, ௦-௯ …) become 0-9 first. Without this an
+    // Aadhaar number printed in Hindi digits slips past every regex below.
+    let masked = asciiDigits(content);
     masked = maskAadhaar(masked);   // 12-digit Aadhaar (before bank accounts)
     masked = maskPAN(masked);       // PAN: ABCDE1234F
     masked = maskPhone(masked);     // 10-digit phone numbers

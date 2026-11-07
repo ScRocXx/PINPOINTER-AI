@@ -6,78 +6,18 @@
  *
  * Also provides an English keyword lookup for common words to enable full cross-lingual search.
  */
+import { romanize } from './IndicText';
 
-// ─── Devanagari → Latin character map ────────────────────────────────────────
-
-const VOWELS: Record<string, string> = {
-    'अ': 'a', 'आ': 'aa', 'इ': 'i', 'ई': 'ee', 'उ': 'u', 'ऊ': 'oo',
-    'ए': 'e', 'ऐ': 'ai', 'ओ': 'o', 'औ': 'au', 'ऋ': 'ri', 'अं': 'an',
-};
-
-const MATRAS: Record<string, string> = {
-    'ा': 'aa', 'ि': 'i', 'ी': 'ee', 'ु': 'u', 'ू': 'oo',
-    'े': 'e', 'ै': 'ai', 'ो': 'o', 'ौ': 'au', 'ृ': 'ri',
-    'ं': 'n', 'ः': 'h', '्': '', 'ँ': 'n',
-};
-
-const CONSONANTS: Record<string, string> = {
-    'क': 'k', 'ख': 'kh', 'ग': 'g', 'घ': 'gh', 'ङ': 'ng',
-    'च': 'ch', 'छ': 'chh', 'ज': 'j', 'झ': 'jh', 'ञ': 'n',
-    'ट': 't', 'ठ': 'th', 'ड': 'd', 'ढ': 'dh', 'ण': 'n',
-    'त': 't', 'थ': 'th', 'द': 'd', 'ध': 'dh', 'न': 'n',
-    'प': 'p', 'फ': 'ph', 'ब': 'b', 'भ': 'bh', 'म': 'm',
-    'य': 'y', 'र': 'r', 'ल': 'l', 'व': 'v', 'श': 'sh',
-    'ष': 'sh', 'स': 's', 'ह': 'h', 'ळ': 'l', 'क्ष': 'ksh',
-    'त्र': 'tr', 'ज्ञ': 'gya',
-    // Nukta variants
-    'क़': 'q', 'ख़': 'kh', 'ग़': 'gh', 'ज़': 'z', 'फ़': 'f',
-    'ड़': 'r', 'ढ़': 'rh', 'य़': 'y',
-};
-
-const ALL_CHARS: Record<string, string> = { ...VOWELS, ...MATRAS, ...CONSONANTS };
+// ─── Devanagari → Latin ──────────────────────────────────────────────────────
+// Delegates to the shared Indian-script romanizer (IndicText.ts), which also
+// fixes the old map's bugs: word-final schwa (कमल → kamal), 3-code-point
+// conjuncts (क्ष, त्र, ज्ञ), nukta letters and Indian digits.
 
 /**
- * Converts a Devanagari string to its Hinglish (Romanized) equivalent.
+ * Converts Indian-script text (Devanagari and 8 other scripts) to Hinglish.
  * e.g. "कमल" → "kamal", "आधार" → "aadhaar", "घर" → "ghar"
  */
-export const transliterate = (text: string): string => {
-    let result = '';
-    let i = 0;
-    while (i < text.length) {
-        // Try 2-char sequences first (conjuncts like क्ष, त्र, ज्ञ)
-        const two = text.slice(i, i + 2);
-        if (ALL_CHARS[two] !== undefined) {
-            result += ALL_CHARS[two];
-            i += 2;
-            continue;
-        }
-        const one = text[i];
-        if (CONSONANTS[one] !== undefined) {
-            result += CONSONANTS[one];
-            // Check for following matra
-            const next = text[i + 1];
-            if (next && MATRAS[next] !== undefined) {
-                result += MATRAS[next];
-                i += 2;
-            } else if (!next || MATRAS[next] === undefined) {
-                // Implicit 'a' vowel after consonant (unless halant follows)
-                if (next !== '्') result += 'a';
-                i++;
-            }
-        } else if (ALL_CHARS[one] !== undefined) {
-            result += ALL_CHARS[one];
-            i++;
-        } else if (/[\u0900-\u097F]/.test(one)) {
-            // Unknown Devanagari character — skip
-            i++;
-        } else {
-            // Non-Devanagari (spaces, punctuation, Latin chars) — keep as-is
-            result += one;
-            i++;
-        }
-    }
-    return result.trim().replace(/\s+/g, ' ');
-};
+export const transliterate = (text: string): string => romanize(text);
 
 // ─── Common Hindi word → English translation dictionary ───────────────────────
 // Covers the most frequently searched topics. Expand as needed.
@@ -157,7 +97,7 @@ export const containsDevanagari = (text: string): boolean =>
  *  Output: "आधार कार्ड aadhaar kaard aadhaar id card"
  */
 export const enrichHindi = (text: string): string => {
-    const hinglish = transliterate(text);   // "kaamal"  rule-based, 100% accurate
+    const hinglish = transliterate(text);   // "kamal"  rule-based (IndicText.romanize)
     const english = lookupEnglish(text);   // "lotus flower"  from dict
     return [text.trim(), hinglish, english].filter(Boolean).join(' ').trim();
 };

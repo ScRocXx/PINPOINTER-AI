@@ -4,6 +4,7 @@
  * relevance ranking, and snippet extraction.
  */
 import { soundex } from '../utils/Soundex';
+import { queryWords, termsForQueryWord } from '../utils/SearchKeys';
 import { AppLogger } from '../utils/AppLogger';
 import { getDb, isFtsAvailable, isVecAvailable } from './connection';
 import { processResults } from './documents';
@@ -51,6 +52,20 @@ const expandWithSynonyms = (word: string): string[] => {
 };
 
 /**
+ * One FTS5 group per query word: the word itself (prefix), its romanized
+ * form, its Bhasha sound key and its concept ids. e.g. दवाई →
+ *   ("दवाई"* OR "davaaee"* OR "qkdv" OR "qcmedicine")
+ */
+const ftsGroup = (word: string): string => {
+  const t = termsForQueryWord(word);
+  const parts = [`"${word}"*`];
+  if (t.roman) parts.push(`"${t.roman}"*`);
+  if (t.key) parts.push(`"${t.key}"`);
+  for (const c of t.concepts) parts.push(`"${c}"`);
+  return parts.length === 1 ? parts[0] : `(${parts.join(' OR ')})`;
+};
+
+/**
  * Search documents — uses FTS5 if available, falls back to LIKE.
  *
  * Improvements:
@@ -66,15 +81,14 @@ export const searchDocuments = (query: string, queryVector?: Float32Array): Docu
     if (!trimmed) return [];
 
     let results: DocumentRecord[] = [];
-    const safeQuery = trimmed.replace(/[^\w\s-]/g, '').trim();
-
     // Split query into individual words for multi-word AND matching
-    const words = safeQuery.split(/\s+/).filter(w => w.length > 0);
+    const words = queryWords(trimmed);
+    const safeQuery = words.join(' ');
 
     // ── Hybrid Search: FTS5 + Vector via Reciprocal Rank Fusion ──────────
     if (isFtsAvailable() && isVecAvailable() && queryVector && safeQuery) {
       try {
-        const ftsTerms = words.map(w => `"${w}"*`).join(' OR ');
+        const ftsTerms = words.map(ftsGroup).join(' OR ');
         const vectorBlob = new Uint8Array(queryVector.buffer);
 
         const hybridResults = db.executeSync(`
@@ -130,7 +144,7 @@ export const searchDocuments = (query: string, queryVector?: Float32Array): Docu
     if (isFtsAvailable() && safeQuery) {
       try {
         // Build FTS5 query: each word with wildcard, AND-joined
-        const ftsTerms = words.map(w => `"${w}"*`).join(' AND ');
+        const ftsTerms = words.map(ftsGroup).join(' AND ');
         const ftsResults = db.executeSync(
           `SELECT d.id, d.title, d.content, d.filePath, d.type, d.detection_type, d.timestamp
            FROM fts_index f
@@ -163,6 +177,13 @@ export const searchDocuments = (query: string, queryVector?: Float32Array): Docu
         params.push(`%${syn}%`);
         orParts.push('title LIKE ? COLLATE NOCASE');
         params.push(`%${syn}%`);
+      }
+      // Sound key and concept tokens from the search tail
+      const t = termsForQueryWord(word);
+      for (const extra of [t.roman, t.key, ...t.concepts]) {
+        if (!extra) continue;
+        orParts.push('content LIKE ? COLLATE NOCASE');
+        params.push(`%${extra}%`);
       }
       // Also match via Soundex code (phonetic matching)
       const sx = soundex(word);
