@@ -551,8 +551,31 @@ describe('cursor helpers', () => {
 });
 
 describe('sync limits', () => {
-  test('getGallerySyncLimit and getGalleryTotalCount return -1 (unlimited)', async () => {
+  test('getGallerySyncLimit returns -1 (unlimited)', async () => {
     await expect(getGallerySyncLimit()).resolves.toBe(-1);
+  });
+
+  test('getGalleryTotalCount adds up the photo albums', async () => {
+    (CameraRoll.getAlbums as jest.Mock).mockResolvedValueOnce([
+      { id: '1', title: 'Camera', count: 2100, type: 'Album' },
+      { id: '2', title: 'WhatsApp Images', count: 300, type: 'Album' },
+    ]);
+    await expect(getGalleryTotalCount()).resolves.toBe(2400);
+    expect(CameraRoll.getAlbums).toHaveBeenCalledWith({ assetType: 'Photos' });
+  });
+
+  test('getGalleryTotalCount is 0 with no albums and skips bad counts', async () => {
+    (CameraRoll.getAlbums as jest.Mock).mockResolvedValueOnce([]);
+    await expect(getGalleryTotalCount()).resolves.toBe(0);
+    (CameraRoll.getAlbums as jest.Mock).mockResolvedValueOnce([
+      { id: '1', title: 'Camera', count: 5, type: 'Album' },
+      { id: '2', title: 'Broken', count: Number.NaN, type: 'Album' },
+    ]);
+    await expect(getGalleryTotalCount()).resolves.toBe(5);
+  });
+
+  test('getGalleryTotalCount is -1 when the gallery cannot be read', async () => {
+    (CameraRoll.getAlbums as jest.Mock).mockRejectedValueOnce(new Error('no permission'));
     await expect(getGalleryTotalCount()).resolves.toBe(-1);
   });
 

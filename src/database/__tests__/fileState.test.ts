@@ -10,6 +10,7 @@ import {
   MAX_ATTEMPTS,
   getFileState,
   getIndexingStats,
+  getReadyCounts,
   markEmbedDone,
   markEmbedSkipped,
   markOcrDone,
@@ -259,5 +260,31 @@ describe('getIndexingStats and clearIndex', () => {
     clearIndex();
     expect(getFileState(URI)).toBeNull();
     expect(getIndexingStats().total).toBe(0);
+  });
+});
+
+describe('getReadyCounts', () => {
+  test('counts photos and papers whose text step is finished, failed ones included', () => {
+    noteFileSeen('file:///1.jpg', 'IMAGE'); // still waiting
+    noteFileSeen('file:///2.jpg', 'IMAGE');
+    markOcrDone('file:///2.jpg');
+    noteFileSeen('file:///3.jpg', 'IMAGE');
+    markStageFailed('file:///3.jpg', 'ocr', 'unreadable');
+    noteFileSeen('/docs/a.pdf', 'DOCUMENT');
+    markOcrDone('/docs/a.pdf', 'DOCUMENT');
+    noteFileSeen('/docs/b.pdf', 'DOCUMENT'); // still waiting
+
+    expect(getReadyCounts()).toEqual({ photos: 2, papers: 1 });
+  });
+
+  test('is zero on an empty database', () => {
+    expect(getReadyCounts()).toEqual({ photos: 0, papers: 0 });
+  });
+
+  test('returns zeros when the query fails', () => {
+    jest.spyOn(getDb(), 'executeSync').mockImplementation(() => {
+      throw new Error('db locked');
+    });
+    expect(getReadyCounts()).toEqual({ photos: 0, papers: 0 });
   });
 });
