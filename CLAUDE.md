@@ -20,7 +20,7 @@ npx tsc --noEmit            # type check (must be clean)
 npm run lint                # eslint (must be clean)
 npx jest                    # 64 suites / ~1740 tests (must all pass). Slow on the D: drive; use --silent (--runInBand if workers run out of memory)
 cd android && ./gradlew assembleDebug    # native compile check
-adb shell cmd jobscheduler run -f ai.runanywhere.starter 4711   # force the charging-time indexing job
+adb shell cmd jobscheduler run -f com.pinpointer.app 4711   # force the charging-time indexing job
 cd tools/preview && npm install && npm run dev   # browser preview of the UI kit and screens (react-native-web), `npm run shots -- out` for phone screenshots (stories in `tools/preview/src/stories.tsx`)
 ```
 
@@ -85,8 +85,8 @@ cd tools/preview && npm install && npm run dev   # browser preview of the UI kit
 - `utils/PinnedItems.ts` + `hooks/usePinnedItems.ts`: "Important" stars, AsyncStorage, synced across screens (titles must be masked).
 - `hooks/useReducedMotion.ts`, `hooks/useScreenFocus.ts` (focus that also works outside a navigator).
 
-### Native modules (`android/app/src/main/java/ai/runanywhere/starter/`)
-`MobileCLIPModule` (own thread, int8 models, ORT 1.20; decodes file paths and the `content://` URIs gallery photos use) + `BPETokenizer` (CLIP-exact vocab), `NativePdfModule`, `SherpaOnnxModule`, `StorageModule`, `DocumentAccessModule`, `IndexingJobService` + `IndexingSchedulerModule`. The package name is still `ai.runanywhere.starter` (rebrand pending).
+### Native modules (`android/app/src/main/java/com/pinpointer/app/`)
+`MobileCLIPModule` (own thread, int8 models, ORT 1.20; decodes file paths and the `content://` URIs gallery photos use) + `BPETokenizer` (CLIP-exact vocab), `NativePdfModule`, `SherpaOnnxModule`, `StorageModule`, `DocumentAccessModule`, `IndexingJobService` + `IndexingSchedulerModule`. The package name and application ID are `com.pinpointer.app`.
 
 ## Rules
 

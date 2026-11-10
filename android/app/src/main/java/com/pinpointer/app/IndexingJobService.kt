@@ -1,4 +1,4 @@
-package ai.runanywhere.starter
+package com.pinpointer.app
 
 import android.app.job.JobParameters
 import android.app.job.JobService
