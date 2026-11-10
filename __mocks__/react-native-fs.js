@@ -15,6 +15,8 @@ const RNFS = {
   copyFile: jest.fn(async (_src, _dest) => {}),
   moveFile: jest.fn(async (_src, _dest) => {}),
   hash: jest.fn(async () => ''),
+  existsAssets: jest.fn(async (_path) => true),
+  readDirAssets: jest.fn(async (_path) => []),
   // Path constants used across the app
   DocumentDirectoryPath: '/mock/DocumentDirectoryPath',
   CachesDirectoryPath: '/mock/CachesDirectoryPath',

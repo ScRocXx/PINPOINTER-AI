@@ -10,7 +10,8 @@
  * Native calls run on dedicated encoder threads (see MobileCLIPModule.kt).
  */
 
-import { NativeModules } from 'react-native';
+import { NativeModules, Platform } from 'react-native';
+import RNFS from 'react-native-fs';
 import { AppLogger } from '../utils/AppLogger';
 
 const { MobileCLIPModule } = NativeModules;
@@ -76,6 +77,26 @@ export const warmUpText = async (): Promise<boolean> => {
     return true;
   } catch (e) {
     AppLogger.warn('EmbeddingService', 'Text encoder warm-up failed', e);
+    return false;
+  }
+};
+
+/** The CLIP model files inside the APK (gitignored, made by scripts/export_mobileclip.py). */
+export const CLIP_MODEL_ASSETS = ['models/clip/vision_encoder_int8.onnx', 'models/clip/text_encoder_int8.onnx'] as const;
+
+/**
+ * True when this build carries the CLIP models, so "search by what's in a
+ * photo" works. Without them search falls back to the words in photos.
+ * Only looks for the files; nothing is loaded.
+ */
+export const areClipModelsAvailable = async (): Promise<boolean> => {
+  if (!MobileCLIPModule) return false;
+  if (Platform.OS !== 'android' || typeof RNFS.existsAssets !== 'function') return true;
+  try {
+    const found = await Promise.all(CLIP_MODEL_ASSETS.map((path) => RNFS.existsAssets(path)));
+    return found.every(Boolean);
+  } catch (e) {
+    AppLogger.warn('EmbeddingService', 'Could not look for the CLIP models', e);
     return false;
   }
 };
