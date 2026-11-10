@@ -668,6 +668,28 @@ describe('PinpointerScreen — drawer and navigation', () => {
     await renderScreen();
     expect(actions.handleDeepSync).not.toHaveBeenCalled();
   });
+
+  test('hides the tab bar while searching or while the menu is open', async () => {
+    const setOptions = jest.fn();
+    (useNavigation as jest.Mock).mockReturnValue({ ...mockNav, setOptions });
+    await renderScreen();
+    expect(setOptions).toHaveBeenLastCalledWith({ tabBarHidden: false });
+    await press(screen.getByLabelText('Open menu'));
+    expect(setOptions).toHaveBeenLastCalledWith({ tabBarHidden: true });
+  });
+
+  test('hides the tab bar when it opens in search mode', async () => {
+    const setOptions = jest.fn();
+    (useNavigation as jest.Mock).mockReturnValue({ ...mockNav, setOptions });
+    state.isSearching = true;
+    await renderScreen();
+    expect(setOptions).toHaveBeenLastCalledWith({ tabBarHidden: true });
+  });
+
+  test('works outside the tabs, where navigation has no setOptions', async () => {
+    await renderScreen();
+    expect(screen.getAllByText('Pinpointer').length).toBeGreaterThan(0);
+  });
 });
 
 
