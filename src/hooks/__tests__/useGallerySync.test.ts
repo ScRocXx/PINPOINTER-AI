@@ -649,6 +649,17 @@ describe('useGallerySync', () => {
       expect(backfill).toHaveBeenCalledTimes(1);
     });
 
+    it('does not start a backfill or record a sync time when a quick sync is paused', async () => {
+      quickSync.mockResolvedValue({ processed: 7, wasCancelled: true });
+      const { result } = await renderHook(() => useGallerySync());
+      await act(async () => {
+        await result.current.handleQuickSync();
+      });
+      expect(result.current.isSyncing).toBe(false);
+      expect(result.current.lastSyncTime).toBeNull();
+      expect(backfill).not.toHaveBeenCalled();
+    });
+
     it('does not start a backfill when a deep sync is paused', async () => {
       fullSync.mockResolvedValue({ processed: 2, wasCancelled: true });
       const { result } = await renderHook(() => useGallerySync());

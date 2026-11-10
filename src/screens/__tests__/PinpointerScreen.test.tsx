@@ -42,6 +42,10 @@ jest.mock('../../database', () => ({
   extractSnippet: jest.fn((content: string) => content),
 }));
 
+jest.mock('../../utils/MissingFiles', () => ({
+  forgetIfGone: jest.fn(async () => false),
+}));
+
 jest.mock('../../utils/DocumentClassifier', () => ({
   classifyDocument: jest.fn(() => ({ emoji: '📄', category: 'OTHER', confidence: 1 })),
 }));
@@ -70,6 +74,7 @@ import { PinpointerScreen } from '../PinpointerScreen';
 import { usePinpointerShared } from '../../hooks/PinpointerContext';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { addRecentPhoto } from '../../utils/RecentPhotos';
+import { forgetIfGone } from '../../utils/MissingFiles';
 import { extractSnippet } from '../../database';
 import { classifyDocument } from '../../utils/DocumentClassifier';
 import type { DocumentRecord } from '../../database';
@@ -456,6 +461,18 @@ describe('PinpointerScreen — search results', () => {
     expect(addRecentPhoto).toHaveBeenCalledWith('file:///photos/cat.jpg');
     await refresh(r);
     expect(screen.getByLabelText('Close image')).toBeTruthy();
+  });
+
+  test('tapping a photo deleted from the phone removes it from search instead of opening it', async () => {
+    (forgetIfGone as jest.Mock).mockResolvedValueOnce(true);
+    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    await withResults();
+    await press(screen.getByLabelText('View file: my cat photo at home '));
+    await waitFor(() => {
+      expect(alertSpy).toHaveBeenCalledWith('File Not Found', expect.stringContaining('removed from search'));
+    });
+    expect(forgetIfGone).toHaveBeenCalledWith('file:///photos/cat.jpg', 'IMAGE');
+    expect(actions.setSelectedImage).not.toHaveBeenCalled();
   });
 
   test('closing the image modal clears the selected image', async () => {

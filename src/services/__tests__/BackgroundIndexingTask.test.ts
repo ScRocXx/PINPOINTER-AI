@@ -1,7 +1,7 @@
 /**
  * Tests for the background indexing headless task and its scheduler wrapper.
  * IndexingService is mocked; the task's job is to check permission, open the
- * database, run deep sync then backfill, and stop on time or on request.
+ * database, run deep sync, drop deleted files, backfill, and stop on time or on request.
  */
 import { DeviceEventEmitter, NativeModules, PermissionsAndroid, Platform } from 'react-native';
 import {
@@ -14,7 +14,7 @@ import { setupDatabase } from '../../database';
 import { loadSavedCursor } from '../../utils/GallerySync';
 
 jest.mock('../IndexingService', () => ({
-  IndexingService: { deepGallerySync: jest.fn(), backfill: jest.fn(), pause: jest.fn() },
+  IndexingService: { deepGallerySync: jest.fn(), pruneMissing: jest.fn(), backfill: jest.fn(), pause: jest.fn() },
 }));
 jest.mock('../../database', () => ({ setupDatabase: jest.fn() }));
 jest.mock('../../utils/GallerySync', () => ({ loadSavedCursor: jest.fn() }));
@@ -23,6 +23,7 @@ jest.mock('../../utils/AppLogger', () => ({
 }));
 
 const deep = IndexingService.deepGallerySync as jest.Mock;
+const prune = IndexingService.pruneMissing as jest.Mock;
 const backfill = IndexingService.backfill as jest.Mock;
 const pause = IndexingService.pause as jest.Mock;
 
@@ -39,6 +40,7 @@ beforeEach(() => {
   checkSpy = jest.spyOn(PermissionsAndroid, 'check').mockResolvedValue(true);
   (loadSavedCursor as jest.Mock).mockResolvedValue('cursor_40');
   deep.mockResolvedValue({ processed: 12, wasCancelled: false });
+  prune.mockResolvedValue(2);
   backfill.mockResolvedValue(3);
 });
 
@@ -49,12 +51,14 @@ afterEach(() => {
 });
 
 describe('runBackgroundIndexing', () => {
-  test('opens the database, resumes deep sync from the saved cursor, then backfills', async () => {
+  test('opens the database, resumes deep sync from the saved cursor, drops deleted files, then backfills', async () => {
     await expect(runBackgroundIndexing({ budgetMs: 1000 })).resolves.toBe('finished');
 
     expect(setupDatabase).toHaveBeenCalled();
     expect(deep).toHaveBeenCalledWith(undefined, 'cursor_40');
+    expect(prune).toHaveBeenCalledTimes(1);
     expect(backfill).toHaveBeenCalledTimes(1);
+    expect(prune.mock.invocationCallOrder[0]).toBeLessThan(backfill.mock.invocationCallOrder[0]);
     expect(pause).not.toHaveBeenCalled();
   });
 
@@ -97,6 +101,18 @@ describe('runBackgroundIndexing', () => {
 
     finish({ processed: 4, wasCancelled: true });
     await expect(run).resolves.toBe('stopped');
+    expect(prune).not.toHaveBeenCalled();
+    expect(backfill).not.toHaveBeenCalled();
+  });
+
+  test('a stop during the clean-up skips the backfill', async () => {
+    prune.mockImplementation(async () => {
+      DeviceEventEmitter.emit(STOP_EVENT);
+      return 0;
+    });
+
+    await expect(runBackgroundIndexing({ budgetMs: 60_000 })).resolves.toBe('stopped');
+    expect(pause).toHaveBeenCalledTimes(1);
     expect(backfill).not.toHaveBeenCalled();
   });
 

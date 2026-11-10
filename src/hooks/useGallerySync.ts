@@ -95,9 +95,11 @@ export const useGallerySync = () => {
             setIsSyncing(true);
             setIsPaused(false);
 
-            await IndexingService.quickGallerySync((count) => setSyncCount(count));
+            const { wasCancelled } = await IndexingService.quickGallerySync((count) => setSyncCount(count));
 
             setIsSyncing(false);
+            // Paused: not a finished sync, and no backfill behind the user's back.
+            if (wasCancelled) return;
             const now = Date.now();
             setLastSyncTime(now);
             await AsyncStorage.setItem('gallery_last_sync_time', now.toString());

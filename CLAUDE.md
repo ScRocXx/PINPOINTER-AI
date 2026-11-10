@@ -18,12 +18,13 @@ npm start                   # Metro
 npm run android             # build + install (needs Android SDK, a device or emulator)
 npx tsc --noEmit            # type check (must be clean)
 npm run lint                # eslint (must be clean)
-npx jest                    # 37 suites / ~1100 tests (must all pass). Slow on the D: drive; use --silent
+npx jest                    # 38 suites / ~1110 tests (must all pass). Slow on the D: drive; use --silent (--runInBand if workers run out of memory)
 cd android && ./gradlew assembleDebug    # native compile check
 adb shell cmd jobscheduler run -f ai.runanywhere.starter 4711   # force the charging-time indexing job
 ```
 
 - CLIP models (`android/app/src/main/assets/models/clip/vision_encoder_int8.onnx`, `text_encoder_int8.onnx`, vocab) are gitignored and made with `scripts/export_mobileclip.py`. Without them semantic search is off, and the app falls back to text search.
+- `react-native-screens` is pinned to exactly `4.23.0` in `package.json`. Only `@react-navigation/stack` uses it, and 4.30.1 fails React Native 0.83's codegen (`generateCodegenSchemaFromJavaScript`), which breaks the Android build. Upgrade it only together with React Native.
 - `fix_aar.py` (untracked) strips `libonnxruntime.so` from the sherpa-onnx AAR so it doesn't clash with `onnxruntime-android` 1.20.0 (`pickFirst`). If STT or CLIP crashes at load, check this first.
 - Done means: tsc clean, lint clean, all Jest tests pass, and for native changes, `assembleDebug` builds.
 
@@ -39,10 +40,11 @@ adb shell cmd jobscheduler run -f ai.runanywhere.starter 4711   # force the char
 - `search.ts`: hybrid search (RRF, FTS weighted 2×) with a vector cutoff **`MAX_VECTOR_DISTANCE = 1.26`** (to be tuned on a phone), falling back to FTS-only, then LIKE + synonyms + Soundex. Indian-language queries are matched through the sound and concept keys.
 
 ### Indexing: one queue
-- `src/services/IndexingService.ts` is **the only place indexing runs**: one queue, one job at a time. Jobs: `gallery-quick`, `gallery-quick-background`, `gallery-deep`, `documents`, `backfill`. User-started jobs go before background ones, and the backfill yields. Calling sync twice reuses the running job.
+- `src/services/IndexingService.ts` is **the only place indexing runs**: one queue, one job at a time. Jobs: `gallery-quick`, `gallery-quick-background`, `gallery-deep`, `documents`, `backfill`, `prune`. User-started jobs go before background ones, and the backfill yields. Calling sync twice reuses the running job.
 - `src/utils/GallerySync.ts`: gallery loops (quick, deep with a saved cursor, embedding backfill).
-- `src/utils/DocumentSync.ts`: PDF crawl (Download/, Documents/, plus copies of picked or shared PDFs from `PdfImport`).
-- `src/services/BackgroundIndexingTask.ts` + native `IndexingJobService.kt` / `IndexingSchedulerModule.kt`: a JobScheduler job (**id 4711**, every 6 h with 2 h flex, only while charging with battery and storage not low, persisted). It runs a headless JS task that resumes deep sync and then the backfill, stops after 8 min or on unplug, never asks for permissions, and counts limited photo access.
+- `src/utils/DocumentSync.ts`: PDF crawl (Download/, Documents/, plus copies of picked or shared PDFs from `PdfImport`). Newest first; a `limit` counts only PDFs that still need work.
+- `src/utils/MissingFiles.ts`: removes deleted photos and PDFs from the index (`removeDocument`). `pruneMissingFiles` is the `prune` job; `forgetIfGone` runs when a result is tapped. A file only counts as gone when we may look (full photo access, All Files Access, or our own imported copy) and `RNFS.stat` says it doesn't exist.
+- `src/services/BackgroundIndexingTask.ts` + native `IndexingJobService.kt` / `IndexingSchedulerModule.kt`: a JobScheduler job (**id 4711**, every 6 h with 2 h flex, only while charging with battery and storage not low, persisted). It runs a headless JS task that resumes deep sync, then the prune, then the backfill, stops after 8 min or on unplug, never asks for permissions, and counts limited photo access.
 - `src/utils/VisionPipeline.ts`: resize → ML Kit OCR (Latin + Devanagari) → garbage filter → labels as a fallback → CLIP image embedding (`EmbeddingService` → `MobileCLIPModule`).
 - `src/utils/DocumentPipeline.ts`: 5-phase PDF pipeline (native text for digital PDFs, raster + OCR for scanned ones; 500 chars/page, 2000 total, pages 1–3).
 
@@ -67,7 +69,7 @@ adb shell cmd jobscheduler run -f ai.runanywhere.starter 4711   # force the char
 - Entry: `src/App.tsx` (GestureHandlerRootView → ModelServiceProvider → PinpointerProvider; `setupDatabase()` and `scheduleBackgroundIndexing()` on mount). `index.js` also registers the headless task.
 
 ### Native modules (`android/app/src/main/java/ai/runanywhere/starter/`)
-`MobileCLIPModule` (own thread, int8 models, ORT 1.20) + `BPETokenizer` (CLIP-exact vocab), `NativePdfModule`, `SherpaOnnxModule`, `StorageModule`, `DocumentAccessModule`, `IndexingJobService` + `IndexingSchedulerModule`. The package name is still `ai.runanywhere.starter` (rebrand pending).
+`MobileCLIPModule` (own thread, int8 models, ORT 1.20; decodes file paths and the `content://` URIs gallery photos use) + `BPETokenizer` (CLIP-exact vocab), `NativePdfModule`, `SherpaOnnxModule`, `StorageModule`, `DocumentAccessModule`, `IndexingJobService` + `IndexingSchedulerModule`. The package name is still `ai.runanywhere.starter` (rebrand pending).
 
 ## Rules
 

@@ -514,6 +514,17 @@ describe('performFullGallerySync', () => {
     expect(getEmbeddingCount()).toBe(1);
   });
 
+  test('a vector that fails to save is recorded as failed, not done', async () => {
+    analyzeImageMock.mockResolvedValue(visionResult(uriFor(0), { embedding: new Float32Array(512) }));
+    jest.spyOn(DatabaseVectors, 'indexEmbedding').mockReturnValue(false);
+    mockGallery(1);
+
+    await runFullSync(jest.fn());
+
+    expect(isFileIndexed(uriFor(0))).toBe(true);
+    expect(getFileState(uriFor(0))).toMatchObject({ ocr_status: 'done', embed_status: 'failed' });
+  });
+
   test('returns immediately when already cancelled before starting', async () => {
     const result = await runFullSync(jest.fn(), { current: true });
 

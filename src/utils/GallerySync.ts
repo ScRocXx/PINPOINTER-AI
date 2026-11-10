@@ -76,9 +76,12 @@ export const __resetEncoderProven = () => { encoderProven = false; };
 const recordEmbedding = (uri: string, docId: number, embedding: Float32Array | null | undefined): boolean => {
     if (embedding) {
         encoderProven = true;
-        indexEmbedding(docId, embedding);
-        markEmbedDone(uri);
-        return true;
+        if (indexEmbedding(docId, embedding)) {
+            markEmbedDone(uri);
+            return true;
+        }
+        markStageFailed(uri, 'embed', 'vector write failed');
+        return false;
     }
     if (encoderProven) markStageFailed(uri, 'embed', 'no embedding returned');
     return false;

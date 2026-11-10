@@ -5,6 +5,7 @@ import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../navigation/types';
 import { addRecentPhoto } from '../utils/RecentPhotos';
+import { forgetIfGone } from '../utils/MissingFiles';
 import { DocumentRecord, extractSnippet } from '../database';
 import { classifyDocument } from '../utils/DocumentClassifier';
 import RNFS from 'react-native-fs';
@@ -341,6 +342,11 @@ export const PinpointerScreen: React.FC = () => {
                 style={styles.resultItem}
                 onPress={async () => {
                     Vibration.vibrate(10);
+                    // A file deleted from the phone is taken out of search right away.
+                    if (await forgetIfGone(item.filePath, item.type)) {
+                        Alert.alert('File Not Found', 'This file was deleted from your phone, so it was removed from search.');
+                        return;
+                    }
                     if (item.type === 'DOCUMENT') {
                         const cleanPath = item.filePath.replace('file://', '');
                         const exists = await RNFS.exists(cleanPath).catch(() => false);

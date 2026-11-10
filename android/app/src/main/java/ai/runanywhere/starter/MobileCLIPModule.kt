@@ -2,6 +2,7 @@ package ai.runanywhere.starter
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.net.Uri
 import android.util.Log
 import com.facebook.react.bridge.*
 import ai.onnxruntime.OnnxTensor
@@ -88,19 +89,31 @@ class MobileCLIPModule(reactContext: ReactApplicationContext) : ReactContextBase
     }
 
     /**
+     * Gallery photos arrive as content:// URIs (CameraRoll), which decodeFile
+     * can't open; everything else is a plain file path.
+     */
+    private fun decode(path: String, options: BitmapFactory.Options): Bitmap? =
+        if (path.startsWith("content://")) {
+            reactApplicationContext.contentResolver.openInputStream(Uri.parse(path))
+                ?.use { BitmapFactory.decodeStream(it, null, options) }
+        } else {
+            BitmapFactory.decodeFile(path, options)
+        }
+
+    /**
      * Decode at reduced resolution, resize the short edge to 256 and centre-crop
      * to 256x256, as the model's preprocessor_config.json specifies.
      */
     private fun loadSquareBitmap(path: String): Bitmap? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeFile(path, bounds)
+        decode(path, bounds)
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
 
         var sample = 1
         while (bounds.outWidth / (sample * 2) >= IMAGE_SIZE && bounds.outHeight / (sample * 2) >= IMAGE_SIZE) {
             sample *= 2
         }
-        val decoded = BitmapFactory.decodeFile(path, BitmapFactory.Options().apply { inSampleSize = sample })
+        val decoded = decode(path, BitmapFactory.Options().apply { inSampleSize = sample })
             ?: return null
 
         val scale = IMAGE_SIZE.toFloat() / minOf(decoded.width, decoded.height)

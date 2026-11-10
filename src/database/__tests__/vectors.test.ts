@@ -57,7 +57,7 @@ afterEach(() => {
 
 describe('indexEmbedding', () => {
   test('stores a 512-dim embedding so hasEmbedding returns true afterwards', () => {
-    indexEmbedding(7, makeEmbedding(1));
+    expect(indexEmbedding(7, makeEmbedding(1))).toBe(true);
     expect(hasEmbedding(7)).toBe(true);
   });
 
@@ -123,7 +123,7 @@ describe('indexEmbedding', () => {
     const warnSpy = jest.spyOn(console, 'warn');
     jest.spyOn(connectionModule, 'isVecAvailable').mockReturnValue(false);
 
-    indexEmbedding(20, makeEmbedding());
+    expect(indexEmbedding(20, makeEmbedding())).toBe(false);
 
     expect(getDbSpy).not.toHaveBeenCalled();
     expect(warnSpy).not.toHaveBeenCalled();
@@ -140,7 +140,7 @@ describe('indexEmbedding', () => {
       });
     const warnSpy = jest.spyOn(console, 'warn');
 
-    expect(() => indexEmbedding(21, makeEmbedding())).not.toThrow();
+    expect(indexEmbedding(21, makeEmbedding())).toBe(false);
     expect(warnSpy).toHaveBeenCalledWith('[DB] Vector index failed:', expect.any(Error));
     expect(hasEmbedding(21)).toBe(false);
   });

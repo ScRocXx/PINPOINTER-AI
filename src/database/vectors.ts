@@ -5,9 +5,9 @@ import { getDb, isVecAvailable } from './connection';
 import { AppLogger } from '../utils/AppLogger';
 import { CURRENT_EMBED_MODEL, MAX_ATTEMPTS } from './fileState';
 
-/** Store a 512-dim float32 embedding vector for a document */
-export const indexEmbedding = (documentId: number, embedding: Float32Array) => {
-  if (!isVecAvailable()) return;
+/** Store a 512-dim float32 embedding vector for a document. Returns false when it wasn't stored. */
+export const indexEmbedding = (documentId: number, embedding: Float32Array): boolean => {
+  if (!isVecAvailable()) return false;
   try {
     const db = getDb();
     db.executeSync('DELETE FROM vec_index WHERE document_id = ?', [documentId]);
@@ -16,8 +16,10 @@ export const indexEmbedding = (documentId: number, embedding: Float32Array) => {
       [documentId, new Uint8Array(embedding.buffer)]
     );
     AppLogger.info('DB', `Vector indexed ✅ doc_id=${documentId}`);
+    return true;
   } catch (e) {
     AppLogger.warn('DB', 'Vector index failed:', e);
+    return false;
   }
 };
 
