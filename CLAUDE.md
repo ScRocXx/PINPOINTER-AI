@@ -18,7 +18,7 @@ npm start                   # Metro
 npm run android             # build + install (needs Android SDK, a device or emulator)
 npx tsc --noEmit            # type check (must be clean)
 npm run lint                # eslint (must be clean)
-npx jest                    # 38 suites / ~1110 tests (must all pass). Slow on the D: drive; use --silent (--runInBand if workers run out of memory)
+npx jest                    # 50 suites / ~1400 tests (must all pass). Slow on the D: drive; use --silent (--runInBand if workers run out of memory)
 cd android && ./gradlew assembleDebug    # native compile check
 adb shell cmd jobscheduler run -f ai.runanywhere.starter 4711   # force the charging-time indexing job
 ```
@@ -64,9 +64,19 @@ adb shell cmd jobscheduler run -f ai.runanywhere.starter 4711   # force the char
 ### State and UI
 - `src/hooks/PinpointerContext.tsx` provides one `usePinpointer()`. **Screens must use `usePinpointerShared()`.** A second instance means duplicate sync engines and listeners.
 - Hooks (`useGallerySync`, `useDocumentSync`) only handle permissions, alerts and progress. They call `IndexingService` and must never run sync loops themselves.
-- Screens: `PinpointerScreen` (home/search), `HomeScreen` (drawer), `gallery`, `DocumentVaultScreen`, `SmartClipboardScreen`. Point & Speak and Speech-to-Text were removed.
+- Navigation (`src/App.tsx`, `src/navigation/`): a stack whose `Main` route is Pinpointer's own bottom-tab navigator (`MainTabs.tsx`, built on React Navigation's `TabRouter`, no extra package). Tabs: `Pinpointer` (Home/search), `Gallery` (Photos), `DocumentVault` (Papers), `Settings`; the raised Scan button in the middle opens `SmartClipboard` on the stack. Tabs mount on first visit and stay mounted. Screens type navigation with `RootStackParamList` (all routes by name) and hide the bar with `setOptions({ tabBarHidden: true })`.
+- Screens: `PinpointerScreen` (home/search), `HomeScreen` (drawer), `gallery`, `DocumentVaultScreen`, `SmartClipboardScreen`, `SettingsScreen`. Point & Speak and Speech-to-Text were removed.
 - Voice: sherpa-onnx Whisper base.en STT (`SherpaOnnxModule`, `useVoiceRecording`). TTS is off.
-- Entry: `src/App.tsx` (GestureHandlerRootView → ModelServiceProvider → PinpointerProvider; `setupDatabase()` and `scheduleBackgroundIndexing()` on mount). `index.js` also registers the headless task.
+- Entry: `src/App.tsx` (GestureHandlerRootView → SafeAreaProvider → LanguageProvider → ToastProvider → ModelServiceProvider → PinpointerProvider; `setupDatabase()` and `scheduleBackgroundIndexing()` on mount). `index.js` also registers the headless task.
+
+### Design system (`src/theme/`, `src/components/ui/`, `src/i18n/`)
+- Launch look: light, high-contrast. Spec: the design concept (https://claude.ai/artifact/5J9fnr87FASsXKzmC6j82E) and `src/components/ui/README.md` (the guide to every part).
+- `theme/`: `Colors` (semantic, all text pairs ≥ 4.5:1, checked by `theme/__tests__`), `Beam` (cyan → violet gradient, only on things that find), `Tints`, `Space`/`GUTTER`/`Radius`/`Touch`/`Elevation` (`boxShadow`), `Type` (Mukta, Latin + Devanagari, min 16sp, body 18sp), `Duration`/`Ease`/`Spring`/`Stagger`. `AppColors` is the old dark palette, kept only until every screen is restyled.
+- Fonts: `android/app/src/main/assets/fonts/Mukta-*.ttf` (OFL), one family per weight; never add `fontWeight` to a Mukta style.
+- `components/ui/`: 25 shared parts (AppText, Icon, Button, IconButton, SearchField, Chip/Tag, Card/ListRow, ProgressBar/Ring/Card, EmptyState, Sheet, Toast, TabBar, Screen, the beam, lock-on corners, the mark...).
+- `i18n/`: every string in English and Hindi (`strings.ts`, plain words, jargon glossary at the top), `useStrings()` → `t()`, `ago()`, `setLang()`; the choice is saved in AsyncStorage, Hindi phones start in Hindi.
+- `utils/PinnedItems.ts` + `hooks/usePinnedItems.ts`: "Important" stars, AsyncStorage, synced across screens (titles must be masked).
+- `hooks/useReducedMotion.ts`, `hooks/useScreenFocus.ts` (focus that also works outside a navigator).
 
 ### Native modules (`android/app/src/main/java/ai/runanywhere/starter/`)
 `MobileCLIPModule` (own thread, int8 models, ORT 1.20; decodes file paths and the `content://` URIs gallery photos use) + `BPETokenizer` (CLIP-exact vocab), `NativePdfModule`, `SherpaOnnxModule`, `StorageModule`, `DocumentAccessModule`, `IndexingJobService` + `IndexingSchedulerModule`. The package name is still `ai.runanywhere.starter` (rebrand pending).
@@ -77,6 +87,7 @@ adb shell cmd jobscheduler run -f ai.runanywhere.starter 4711   # force the char
 - Indexing → only through `IndexingService`. Record per-file progress in `files` (`fileState.ts`).
 - PII → mask before storing (content **and** title). Search history is still unmasked in AsyncStorage (known gap).
 - Logging → `AppLogger`, not `console.log`.
+- UI → build from `src/components/ui` and `src/theme` tokens; text through `AppText` and `t()` (add every string to `en` and `hi`); 48dp minimum touch (56dp for main actions); respect Reduce Motion; the beam only on things that find. Restyled screens drop `AppColors`.
 - Imports are relative (no path aliases).
 - Tests live in `__tests__/` next to the code. Native modules are mocked in `jest.setup.js` and `__mocks__/`. Add or adjust tests with every change.
 - Don't commit: model files, `.claude/settings.local.json`, crash logs, `graphify-out/` (gitignored, regenerate with `graphify update .`).

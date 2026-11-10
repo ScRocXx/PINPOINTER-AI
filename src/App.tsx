@@ -4,6 +4,7 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator, TransitionPresets } from '@react-navigation/stack';
 import { StatusBar, StyleSheet } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ModelServiceProvider } from './services/ModelService';
 import { PinpointerProvider } from './hooks/PinpointerContext';
 import { AppColors } from './theme';
@@ -13,13 +14,32 @@ import {
   SmartClipboardScreen,
   GalleryScreen,
   DocumentVaultScreen,
+  SettingsScreen,
 } from './screens';
 import { setupDatabase, closeDatabase } from './database';
-import { RootStackParamList } from './navigation/types';
+import { MainTabParamList, StackParamList } from './navigation/types';
+import { createMainTabNavigator } from './navigation/MainTabs';
+import { LanguageProvider } from './i18n';
+import { ToastProvider } from './components/ui';
 import { AppLogger } from './utils/AppLogger';
 import { scheduleBackgroundIndexing } from './services/BackgroundIndexingTask';
 
-const Stack = createStackNavigator<RootStackParamList>();
+const Stack = createStackNavigator<StackParamList>();
+const Tabs = createMainTabNavigator<MainTabParamList>();
+
+/** The four tabs, with Scan in the middle of the bar. */
+const MainTabs: React.FC = () => (
+  <Tabs.Navigator initialRouteName="Pinpointer" onScanPress={navigation => navigation.navigate('SmartClipboard')}>
+    <Tabs.Screen name="Pinpointer" component={PinpointerScreen} options={{ tabLabelKey: 'tab.home', tabIcon: 'home' }} />
+    <Tabs.Screen name="Gallery" component={GalleryScreen} options={{ tabLabelKey: 'tab.photos', tabIcon: 'photos' }} />
+    <Tabs.Screen
+      name="DocumentVault"
+      component={DocumentVaultScreen}
+      options={{ tabLabelKey: 'tab.papers', tabIcon: 'papers' }}
+    />
+    <Tabs.Screen name="Settings" component={SettingsScreen} options={{ tabLabelKey: 'tab.settings', tabIcon: 'settings' }} />
+  </Tabs.Navigator>
+);
 
 /**
  * App root: initializes the SQLite database, wires the navigation stack,
@@ -50,12 +70,15 @@ const App: React.FC = () => {
 
   return (
     <GestureHandlerRootView style={styles.root}>
+      <SafeAreaProvider>
+      <LanguageProvider>
+      <ToastProvider>
       <ModelServiceProvider>
         <PinpointerProvider>
         <StatusBar barStyle="light-content" backgroundColor={AppColors.primaryDark} />
         <NavigationContainer>
           <Stack.Navigator
-            initialRouteName="Pinpointer" // This makes your UI the main screen
+            initialRouteName="Main" // The tabs; Home/search is the first tab
             screenOptions={{
               headerStyle: {
                 backgroundColor: AppColors.primaryDark,
@@ -68,24 +91,19 @@ const App: React.FC = () => {
               ...TransitionPresets.SlideFromRightIOS,
             }}
           >
-            {/* --- Pinpointer Screen --- */}
-            <Stack.Screen
-              name="Pinpointer"
-              component={PinpointerScreen}
-              options={{ headerShown: false }}
-            />
+            {/* Home, Photos, Papers, Settings */}
+            <Stack.Screen name="Main" component={MainTabs} options={{ headerShown: false }} />
 
-            {/* Existing Hackathon Screens */}
+            {/* Opened on top of the tabs */}
             <Stack.Screen name="Home" component={HomeScreen} options={{ headerShown: false }} />
-            <Stack.Screen name="Gallery" component={GalleryScreen} options={{ headerShown: false }} />
-
-            {/* New Feature Screens */}
             <Stack.Screen name="SmartClipboard" component={SmartClipboardScreen} options={{ title: 'Scan Images' }} />
-            <Stack.Screen name="DocumentVault" component={DocumentVaultScreen} options={{ headerShown: false }} />
           </Stack.Navigator>
         </NavigationContainer>
         </PinpointerProvider>
       </ModelServiceProvider>
+      </ToastProvider>
+      </LanguageProvider>
+      </SafeAreaProvider>
     </GestureHandlerRootView>
   );
 };
