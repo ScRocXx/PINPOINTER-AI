@@ -87,6 +87,12 @@ export type MainTabNavigatorProps = DefaultNavigatorOptions<
     onScanPress: (navigation: NavigationHelpers<ParamListBase, MainTabNavigationEventMap>) => void;
     /** Replace the bar (tests, previews). */
     tabBar?: (props: MainTabBarProps) => React.ReactNode;
+    /**
+     * A notice that sits just above the bar (the "only some photos" banner),
+     * given the open tab's route name. Hidden with the bar. It brings its own
+     * margins, so nothing shows when it renders nothing.
+     */
+    banner?: (routeName: string) => React.ReactNode;
   };
 
 /** The default bar: the shared TabBar, translated, above the gesture bar. */
@@ -149,6 +155,7 @@ function MainTabNavigator({
   UNSTABLE_router,
   onScanPress,
   tabBar,
+  banner,
 }: MainTabNavigatorProps) {
   const { state, descriptors, navigation, NavigationContent } = useNavigationBuilder<
     TabNavigationState<ParamListBase>,
@@ -203,6 +210,11 @@ function MainTabNavigator({
             );
           })}
         </View>
+        {banner && !descriptors[focusedKey]?.options.tabBarHidden ? (
+          <View testID="tab-banner">
+            {banner(state.routes[state.index].name)}
+          </View>
+        ) : null}
         {tabBar ? tabBar(barProps) : <MainTabBar {...barProps} />}
       </View>
     </NavigationContent>
