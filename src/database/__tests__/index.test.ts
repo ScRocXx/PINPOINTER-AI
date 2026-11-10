@@ -28,6 +28,7 @@ const EXPECTED_EXPORTS = [
   'commitTransaction',
   'extractSnippet',
   'getAllDocuments',
+  'getDocumentByPath',
   'getDocumentId',
   'getEmbeddingCount',
   'getFileState',
