@@ -65,6 +65,7 @@ export const Colors = {
 
   // Lines
   line: Palette.ink200, // dividers (decorative)
+  lineMedium: Palette.ink300, // idle step dots, drawn text lines in pictures (never text)
   lineStrong: Palette.ink400, // field and chip borders, 3.4:1
 
   // Brand and interaction
@@ -103,6 +104,23 @@ export const Beam = {
   locations: [0, 0.58, 1],
   start: { x: 0, y: 0.3 },
   end: { x: 1, y: 0.7 },
+} as const;
+
+/**
+ * Drawn stand-ins for people's own photos in the first-run pictures: a sky,
+ * a sunset, a family, a medicine strip. Decoration only, never text and
+ * never the beam. In the app the real photos are the colour.
+ */
+export const Art = {
+  sky: ['#BFE3F2', '#7CB8D9', '#3E7A5E', '#2F5D47'],
+  sunset: ['#FCE3B0', '#F6B47A', '#C9716A'],
+  warm: ['#FDE7C8', '#F7B989', '#E59A6E'],
+  dusk: ['#D8C3E8', '#9C7BC4', '#4E3A78'],
+  shore: ['#9FD0E8', '#E9F4F9', '#C8B79A', '#A88F6C'],
+  strip: ['#F1EFF6', '#CFCBDB'],
+  people: ['#8A4F3D', '#6B3D30', '#5C3A2E', '#4A2E24'],
+  /** The ID card's top stripe. */
+  flag: [Palette.marigold400, Palette.white, Palette.green700],
 } as const;
 
 /** Tile tints for categories (background + matching ink, all 4.5:1+). */

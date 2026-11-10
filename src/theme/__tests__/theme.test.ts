@@ -29,6 +29,7 @@ describe('colours', () => {
     ['onPrimary on primaryPressed', Colors.onPrimary, Colors.primaryPressed],
     ['onPrimarySoft on primarySoft', Colors.onPrimarySoft, Colors.primarySoft],
     ['found on surface', Colors.found, Colors.surface],
+    ['found on canvas', Colors.found, Colors.canvas],
     ['foundInk on foundSoft', Colors.foundInk, Colors.foundSoft],
     ['important on surface', Colors.important, Colors.surface],
     ['importantInk on importantSoft', Colors.importantInk, Colors.importantSoft],
