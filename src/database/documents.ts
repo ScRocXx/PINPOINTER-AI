@@ -172,6 +172,27 @@ export const clearIndex = () => {
   }
 };
 
+/**
+ * The indexed row for one file (a photo's content:// uri or a PDF path), or
+ * null when Pinpointer hasn't read it yet. The content comes back masked,
+ * without the search keys, so it can be shown as "Text in this photo".
+ */
+export const getDocumentByPath = (filePath: string): DocumentRecord | null => {
+  try {
+    const result = getDb().executeSync(
+      `SELECT id, title, content, filePath, type, detection_type, timestamp
+       FROM document_index
+       WHERE filePath = ?
+       LIMIT 1`,
+      [filePath]
+    );
+    return processResults(result)[0] ?? null;
+  } catch (e) {
+    AppLogger.warn('DB', 'getDocumentByPath failed:', e);
+    return null;
+  }
+};
+
 /** Returns all documents of type 'DOCUMENT' for the vault screen */
 export const getAllDocuments = (): DocumentRecord[] => {
   try {

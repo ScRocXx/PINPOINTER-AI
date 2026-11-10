@@ -14,6 +14,7 @@ export {
   getIndexedCount,
   clearIndex,
   getAllDocuments,
+  getDocumentByPath,
   removeDocument,
   listIndexedFiles,
 } from './documents';

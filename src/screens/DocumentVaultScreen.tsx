@@ -1,525 +1,518 @@
-import React, { useCallback, useState } from 'react';
-import {
-    View,
-    Text,
-    StyleSheet,
-    StatusBar,
-    ScrollView,
-    TouchableOpacity,
-    Linking,
-    NativeModules,
-} from 'react-native';
-import LinearGradient from 'react-native-linear-gradient';
-import { AppLogger } from '../utils/AppLogger';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Linking, NativeModules, ScrollView, StyleSheet, View } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
-import { useFocusEffect } from '@react-navigation/native';
+import {
+  AppText,
+  Button,
+  Card,
+  EmptyState,
+  Icon,
+  IconButton,
+  ListRow,
+  PressableScale,
+  ProgressCard,
+  Reveal,
+  Screen,
+  ScreenHeader,
+  SearchField,
+  SectionHeader,
+  Sheet,
+  SheetAction,
+  Tag,
+  useToast,
+} from '../components/ui';
+import { Colors, GUTTER, Radius, Space, Touch } from '../theme';
+import { formatWhen, useStrings } from '../i18n';
 import { RootStackParamList } from '../navigation/types';
-import { getAllDocuments, DocumentRecord } from '../database';
-import { classifyDocument, type DocumentCategory } from '../utils/DocumentClassifier';
+import { getAllDocuments, searchDocuments } from '../database';
+import { usePinpointerShared } from '../hooks/PinpointerContext';
+import { usePinnedItems } from '../hooks/usePinnedItems';
+import { describePlaces, usePdfPlaces } from '../hooks/usePdfPlaces';
+import { useScreenFocus } from '../hooks/useScreenFocus';
+import { forgetIfGone } from '../utils/MissingFiles';
+import { AppLogger } from '../utils/AppLogger';
+import {
+  PAPER_GROUPS,
+  PAPER_GROUP_LOOK,
+  Paper,
+  PaperGroup,
+  countByGroup,
+  matchesQuery,
+  tintOf,
+  toPaper,
+} from '../utils/PaperGroups';
 
-const { StorageModule } = NativeModules;
+/** Papers shown before "Show more". */
+export const PAPERS_PAGE = 30;
+const SEARCH_DELAY_MS = 250;
 
-type Props = {
-    navigation: StackNavigationProp<RootStackParamList, 'DocumentVault'>;
+const openPdf = (filePath: string): void => {
+  const { StorageModule } = NativeModules;
+  if (StorageModule?.openPDF) {
+    StorageModule.openPDF(filePath.replace('file://', ''));
+    return;
+  }
+  const uri = filePath.startsWith('file://') ? filePath : `file://${filePath}`;
+  Linking.openURL(uri).catch(e => AppLogger.warn('Papers', 'Could not open the PDF', e));
 };
-
-// ─── Category Grouping ──────────────────────────────────────────────────────
-
-interface CategoryGroup {
-    category: DocumentCategory;
-    emoji: string;
-    label: string;
-    documents: DocumentRecord[];
-    avgConfidence: number;
-}
-
-const groupDocumentsByCategory = (docs: DocumentRecord[]): CategoryGroup[] => {
-    const groups = new Map<DocumentCategory, CategoryGroup>();
-
-    for (const doc of docs) {
-        const fileName = doc.filePath.split('/').pop() || '';
-        const classification = classifyDocument(doc.content || '', fileName);
-
-        if (!groups.has(classification.category)) {
-            groups.set(classification.category, {
-                category: classification.category,
-                emoji: classification.emoji,
-                label: classification.label,
-                documents: [],
-                avgConfidence: 0,
-            });
-        }
-
-        const group = groups.get(classification.category)!;
-        group.documents.push(doc);
-        group.avgConfidence = (group.avgConfidence * (group.documents.length - 1) + classification.confidence) / group.documents.length;
-    }
-
-    // Sort: most documents first, then by name
-    return Array.from(groups.values()).sort((a, b) => b.documents.length - a.documents.length);
-};
-
-// ─── Category Colors ────────────────────────────────────────────────────────
-
-const CATEGORY_COLORS: Record<string, string> = {
-    AADHAAR_CARD: '#F59E0B',
-    PAN_CARD: '#3B82F6',
-    VOTER_ID: '#8B5CF6',
-    DRIVING_LICENSE: '#10B981',
-    PASSPORT: '#EF4444',
-    BANK_STATEMENT: '#06B6D4',
-    INVOICE: '#F97316',
-    RECEIPT: '#F97316',
-    SALARY_SLIP: '#22C55E',
-    TAX_RETURN: '#6366F1',
-    MARKSHEET: '#A855F7',
-    CERTIFICATE: '#EC4899',
-    RESUME: '#14B8A6',
-    INSURANCE: '#6366F1',
-    ELECTRICITY_BILL: '#FACC15',
-    PHONE_BILL: '#3B82F6',
-    MEDICAL_REPORT: '#EF4444',
-    PROPERTY_DOC: '#F59E0B',
-    EDUCATION: '#8B5CF6',
-    GENERAL_DOCUMENT: '#6B7280',
-};
-
-// ─── Screen Component ───────────────────────────────────────────────────────
 
 /**
- * Document vault: indexed documents grouped by AI-classified category.
- *
- * Loads the vault on focus, lets the user expand/collapse category sections,
- * and opens documents via the native StorageModule (or a file URL fallback).
+ * Papers: every PDF Pinpointer has read, newest first. Six big tiles (ID
+ * cards, Bills, Bank, Medical, Tax, Other) narrow the list; the search
+ * button finds a paper by any word in it, Hindi too. "Where Pinpointer
+ * looks" opens the folders screen, and "Add a folder or PDF" adds more.
  */
-export const DocumentVaultScreen: React.FC<Props> = ({ navigation }) => {
-    const [groups, setGroups] = useState<CategoryGroup[]>([]);
-    const [totalDocs, setTotalDocs] = useState(0);
-    const [expandedCategory, setExpandedCategory] = useState<DocumentCategory | null>(null);
+export const DocumentVaultScreen: React.FC = () => {
+  const navigation = useNavigation<StackNavigationProp<RootStackParamList>>();
+  const { t, ago } = useStrings();
+  const toast = useToast();
+  const focused = useScreenFocus();
+  const { isPinned, toggle } = usePinnedItems();
+  const places = usePdfPlaces();
+  const { isSyncingDocs, docSyncCount, totalDocs, lastDocSyncTime, handleDocumentSync } = usePinpointerShared();
 
-    useFocusEffect(
-        useCallback(() => {
-            const docs = getAllDocuments();
-            setTotalDocs(docs.length);
-            setGroups(groupDocumentsByCategory(docs));
-        }, [])
-    );
+  const [papers, setPapers] = useState<Paper[]>([]);
+  const [group, setGroup] = useState<PaperGroup | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [debounced, setDebounced] = useState('');
+  const [limit, setLimit] = useState(PAPERS_PAGE);
+  const [addOpen, setAddOpen] = useState(false);
 
-    const openDocument = (filePath: string) => {
-        try {
-            if (StorageModule && StorageModule.openPDF) {
-                StorageModule.openPDF(filePath.replace('file://', ''));
-            } else {
-                const uri = filePath.startsWith('file://') ? filePath : `file://${filePath}`;
-                Linking.openURL(uri);
-            }
-        } catch (e) {
-            AppLogger.warn('DocumentVault', 'Failed to open document:', e);
+  const load = useCallback(() => {
+    setPapers(getAllDocuments().map(toPaper));
+  }, []);
+
+  // Load when the tab is shown, and again when a document check starts or
+  // finishes, so papers already read stay on screen during a check.
+  useEffect(() => {
+    if (focused) {
+      load();
+    }
+  }, [focused, isSyncingDocs, load]);
+
+  useEffect(() => {
+    const id = setTimeout(() => setDebounced(query.trim()), SEARCH_DELAY_MS);
+    return () => clearTimeout(id);
+  }, [query]);
+
+  useEffect(() => setLimit(PAPERS_PAGE), [group, debounced]);
+
+  const counts = useMemo(() => countByGroup(papers), [papers]);
+
+  const shown: Paper[] = useMemo(() => {
+    if (debounced) {
+      // The search engine first (it understands Hindi and sound-alikes),
+      // then plain matches it missed, so nothing that contains the word hides.
+      const byPath = new Map(papers.map(p => [p.doc.filePath, p]));
+      const found: Paper[] = [];
+      const seen = new Set<string>();
+      for (const r of searchDocuments(debounced)) {
+        const p = r.type === 'DOCUMENT' ? byPath.get(r.filePath) : undefined;
+        if (p && !seen.has(p.doc.filePath)) {
+          found.push(p);
+          seen.add(p.doc.filePath);
         }
-    };
+      }
+      for (const p of papers) {
+        if (!seen.has(p.doc.filePath) && matchesQuery(p, debounced)) {
+          found.push(p);
+        }
+      }
+      return found;
+    }
+    return group ? papers.filter(p => p.group === group) : papers;
+  }, [debounced, group, papers]);
 
-    const identityDocs = groups.filter(g =>
-        ['AADHAAR_CARD', 'PAN_CARD', 'VOTER_ID', 'DRIVING_LICENSE', 'PASSPORT'].includes(g.category)
-    );
-    const financialDocs = groups.filter(g =>
-        ['BANK_STATEMENT', 'INVOICE', 'RECEIPT', 'SALARY_SLIP', 'TAX_RETURN'].includes(g.category)
-    );
-    const otherDocs = groups.filter(g =>
-        !['AADHAAR_CARD', 'PAN_CARD', 'VOTER_ID', 'DRIVING_LICENSE', 'PASSPORT',
-            'BANK_STATEMENT', 'INVOICE', 'RECEIPT', 'SALARY_SLIP', 'TAX_RETURN'].includes(g.category)
-    ).sort((a, b) => {
-        if (a.category === 'GENERAL_DOCUMENT') return 1;
-        if (b.category === 'GENERAL_DOCUMENT') return -1;
-        return 0; // retain existing size-based sorting for others
-    });
+  const open = useCallback(
+    async (paper: Paper) => {
+      if (await forgetIfGone(paper.doc.filePath, 'DOCUMENT')) {
+        toast.show(t('error.fileGone'), { icon: 'alert' });
+        load();
+        return;
+      }
+      try {
+        openPdf(paper.doc.filePath);
+      } catch (e) {
+        AppLogger.warn('Papers', 'Could not open the PDF', e);
+        toast.show(t('papers.openFailed'), { icon: 'alert' });
+      }
+    },
+    [load, t, toast],
+  );
 
-    const renderCategoryCard = (group: CategoryGroup) => {
-        const color = CATEGORY_COLORS[group.category] || '#6B7280';
-        const isExpanded = expandedCategory === group.category;
+  const star = useCallback(
+    async (paper: Paper) => {
+      const now = await toggle({ uri: paper.doc.filePath, kind: 'DOCUMENT', title: paper.title });
+      toast.show(t(now ? 'viewer.markedImportant' : 'viewer.removedImportant'), { icon: 'star' });
+    },
+    [t, toast, toggle],
+  );
 
-        return (
-            <TouchableOpacity
-                key={group.category}
-                activeOpacity={0.7}
-                onPress={() => setExpandedCategory(isExpanded ? null : group.category)}
-                style={styles.categoryCard}
-            >
-                <LinearGradient
-                    colors={[`${color}18`, `${color}08`]}
-                    style={styles.categoryCardGradient}
-                >
-                    <View style={styles.categoryHeader}>
-                        <Text style={styles.categoryEmoji}>{group.emoji}</Text>
-                        <View style={styles.flex1}>
-                            <Text style={styles.categoryLabel}>{group.label}</Text>
-                            <Text style={[styles.categoryCount, { color }]}>
-                                {group.documents.length} {group.documents.length === 1 ? 'document' : 'documents'}
-                            </Text>
-                        </View>
-                        <View style={[styles.countBadge, { backgroundColor: `${color}30`, borderColor: `${color}50` }]}>
-                            <Text style={[styles.countBadgeText, { color }]}>{group.documents.length}</Text>
-                        </View>
+  const closeSearch = () => {
+    setSearchOpen(false);
+    setQuery('');
+    setDebounced('');
+  };
+
+  const total = papers.length;
+
+  // Without All files access, check the chosen folders and picked PDFs
+  // quietly; with nothing to read yet, show where Pinpointer can look
+  // instead of a pop-up.
+  const findPapers = () => {
+    if (!places.ready || places.standard) {
+      handleDocumentSync();
+    } else if (places.folders.length > 0 || total > 0) {
+      handleDocumentSync(undefined, true);
+    } else {
+      navigation.navigate('PdfFolders');
+    }
+  };
+
+  const startAdd = () => {
+    if (places.canPick) {
+      setAddOpen(true);
+    } else {
+      navigation.navigate('PdfFolders');
+    }
+  };
+
+  const listTitle = group ? t(PAPER_GROUP_LOOK[group].label) : t('papers.recent');
+
+  const progress = isSyncingDocs ? (
+    <ProgressCard
+      title={t('progress.papersTitle')}
+      detail={totalDocs > 0 ? t('progress.countShort', { done: docSyncCount, total: totalDocs }) : undefined}
+      value={totalDocs > 0 ? docSyncCount / totalDocs : undefined}
+      state="running"
+      icon="papers"
+      style={styles.gutter}
+      testID="papers-progress"
+    />
+  ) : total > 0 ? (
+    <ProgressCard
+      title={t('progress.allPapersReady', { total })}
+      detail={t('progress.checked', { when: ago(lastDocSyncTime) })}
+      state="done"
+      icon="papers"
+      actionLabel={t('progress.checkAgain')}
+      onAction={findPapers}
+      style={styles.gutter}
+      testID="papers-ready"
+    />
+  ) : null;
+
+  return (
+    <Screen testID="papers-screen">
+      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" testID="papers-scroll">
+        <ScreenHeader
+          title={t('papers.title')}
+          subtitle={total > 0 ? t('papers.count', { n: total }) : undefined}
+          actions={
+            total > 0 ? (
+              <IconButton
+                icon={searchOpen ? 'close' : 'search'}
+                label={t(searchOpen ? 'papers.closeSearch' : 'papers.search')}
+                variant="tonal"
+                onPress={searchOpen ? closeSearch : () => setSearchOpen(true)}
+                testID="papers-search-toggle"
+              />
+            ) : undefined
+          }
+        />
+
+        {searchOpen ? (
+          <View style={styles.gutter}>
+            <SearchField
+              value={query}
+              onChangeText={setQuery}
+              placeholder={t('papers.searchPlaceholder')}
+              autoFocus
+              returnKeyType="search"
+              testID="papers-search"
+            />
+          </View>
+        ) : null}
+
+        {progress}
+
+        {!searchOpen && total > 0 ? (
+          <View
+            style={styles.grid}
+            accessibilityRole="radiogroup"
+            accessibilityLabel={t('papers.categories')}
+            testID="papers-groups"
+          >
+            {PAPER_GROUPS.map((g, i) => {
+              const look = PAPER_GROUP_LOOK[g];
+              const tint = tintOf(g);
+              const selected = group === g;
+              const n = counts[g];
+              return (
+                <Reveal key={g} index={i} style={styles.tileSlot}>
+                  <PressableScale
+                    onPress={() => setGroup(selected ? null : g)}
+                    disabled={n === 0}
+                    accessibilityRole="radio"
+                    accessibilityLabel={t('papers.categoryLabel', { name: t(look.label), n })}
+                    accessibilityState={{ selected, checked: selected, disabled: n === 0 }}
+                    style={[styles.tile, selected ? styles.tileOn : null, n === 0 ? styles.tileEmpty : null]}
+                    testID={`papers-group-${g}`}
+                  >
+                    <View style={[styles.tileIcon, { backgroundColor: tint.bg }]}>
+                      <Icon name={look.icon} size={24} color={tint.ink} strokeWidth={1.9} />
                     </View>
+                    <AppText variant="labelStrong" numberOfLines={2}>
+                      {t(look.label)}
+                    </AppText>
+                    <AppText variant="small" color={selected ? 'onPrimarySoft' : 'textMuted'}>
+                      {String(n)}
+                    </AppText>
+                    {selected ? (
+                      <View style={styles.tileCheck}>
+                        <Icon name="check" size={16} color={Colors.onPrimary} strokeWidth={2.5} />
+                      </View>
+                    ) : null}
+                  </PressableScale>
+                </Reveal>
+              );
+            })}
+          </View>
+        ) : null}
 
-                    {isExpanded && (
-                        <View style={styles.documentsList}>
-                            {group.documents.map((doc, idx) => (
-                                <TouchableOpacity
-                                    key={doc.id || idx}
-                                    style={styles.documentItem}
-                                    onPress={() => openDocument(doc.filePath)}
-                                    activeOpacity={0.6}
-                                >
-                                    <Text style={styles.documentIcon}>📄</Text>
-                                    <View style={styles.flex1}>
-                                        <Text style={styles.documentTitle} numberOfLines={1}>
-                                            {doc.title || 'Untitled'}
-                                        </Text>
-                                        <Text style={styles.documentPath} numberOfLines={1}>
-                                            {doc.filePath.split('/').pop()}
-                                        </Text>
-                                    </View>
-                                    <Text style={styles.openArrow}>→</Text>
-                                </TouchableOpacity>
-                            ))}
-                        </View>
-                    )}
-                </LinearGradient>
-            </TouchableOpacity>
-        );
-    };
+        {!searchOpen ? (
+          <Card flush style={[styles.gutter, styles.where]}>
+            <ListRow
+              icon="folder"
+              title={t('papers.whereLooks')}
+              subtitle={places.ready ? describePlaces(t, places) : undefined}
+              onPress={() => navigation.navigate('PdfFolders')}
+              last
+              testID="papers-where"
+            />
+          </Card>
+        ) : null}
 
-    const renderSection = (title: string, icon: string, sectionGroups: CategoryGroup[]) => {
-        if (sectionGroups.length === 0) return null;
-        const totalInSection = sectionGroups.reduce((sum, g) => sum + g.documents.length, 0);
+        {total === 0 && !isSyncingDocs ? (
+          <EmptyState
+            icon="papers"
+            title={t('papers.emptyTitle')}
+            body={t('papers.emptyBody')}
+            actionLabel={t('progress.findNewPapers')}
+            onAction={findPapers}
+            secondaryLabel={t('papers.add')}
+            onSecondary={startAdd}
+            testID="papers-empty"
+          />
+        ) : null}
 
-        return (
-            <View style={styles.section}>
-                <View style={styles.sectionHeader}>
-                    <Text style={styles.sectionIcon}>{icon}</Text>
-                    <Text style={styles.sectionTitle}>{title}</Text>
-                    <Text style={styles.sectionCount}>{totalInSection}</Text>
-                </View>
-                {sectionGroups.map(renderCategoryCard)}
+        {total > 0 && debounced && shown.length === 0 ? (
+          <EmptyState
+            icon="search"
+            title={t('papers.noMatchTitle', { q: debounced })}
+            body={t('papers.noMatchBody')}
+            testID="papers-no-match"
+          />
+        ) : null}
+
+        {shown.length > 0 ? (
+          <>
+            {!debounced ? (
+              <SectionHeader
+                title={listTitle}
+                actionLabel={group ? t('papers.showAll') : undefined}
+                onAction={group ? () => setGroup(null) : undefined}
+              />
+            ) : (
+              <View style={styles.searchGap} />
+            )}
+            <View style={styles.list}>
+              {shown.slice(0, limit).map((paper, i) => (
+                <Reveal key={paper.doc.filePath} index={i} playKey={`${group ?? 'all'}|${debounced}`}>
+                  <PaperRow
+                    paper={paper}
+                    when={formatWhen(t, ago, paper.doc.timestamp)}
+                    pinned={isPinned(paper.doc.filePath)}
+                    onOpen={() => open(paper)}
+                    onStar={() => star(paper)}
+                    testID={`paper-${i}`}
+                  />
+                </Reveal>
+              ))}
             </View>
-        );
-    };
+            {shown.length > limit ? (
+              <Button
+                label={t('search.showMore', { n: Math.min(PAPERS_PAGE, shown.length - limit) })}
+                onPress={() => setLimit(l => l + PAPERS_PAGE)}
+                variant="ghost"
+                style={styles.more}
+                testID="papers-more"
+              />
+            ) : null}
+          </>
+        ) : null}
 
-    return (
-        <View style={styles.container}>
-            <StatusBar barStyle="light-content" backgroundColor="#05050A" />
+        {total > 0 && !searchOpen ? (
+          <Button
+            label={t('papers.add')}
+            icon="plus"
+            variant="secondary"
+            block
+            onPress={startAdd}
+            style={[styles.gutter, styles.add]}
+            testID="papers-add"
+          />
+        ) : null}
+      </ScrollView>
 
-            {/* Background Glow */}
-            <View style={styles.backgroundGlowWrap}>
-                <View style={styles.glowTop} />
-                <View style={styles.glowBottom} />
-            </View>
-
-            <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-                {/* Header */}
-                <View style={styles.header}>
-                    <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-                        <Text style={styles.backArrow}>←</Text>
-                    </TouchableOpacity>
-                    <View style={styles.headerTextContainer}>
-                        <Text style={styles.headerTitle}>Document Vault</Text>
-                        <Text style={styles.headerSubtitle}>AI-classified by Pinpointer</Text>
-                    </View>
-                </View>
-
-                {/* Stats Bar */}
-                <LinearGradient
-                    colors={['rgba(139, 92, 246, 0.15)', 'rgba(99, 102, 241, 0.08)']}
-                    style={styles.statsBar}
-                >
-                    <View style={styles.statItem}>
-                        <Text style={styles.statNumber}>{totalDocs}</Text>
-                        <Text style={styles.statLabel}>Documents</Text>
-                    </View>
-                    <View style={styles.statDivider} />
-                    <View style={styles.statItem}>
-                        <Text style={styles.statNumber}>{groups.length}</Text>
-                        <Text style={styles.statLabel}>Categories</Text>
-                    </View>
-                    <View style={styles.statDivider} />
-                    <View style={styles.statItem}>
-                        <Text style={styles.statNumber}>{identityDocs.reduce((s, g) => s + g.documents.length, 0)}</Text>
-                        <Text style={styles.statLabel}>ID Cards</Text>
-                    </View>
-                </LinearGradient>
-
-                {/* Empty State */}
-                {totalDocs === 0 && (
-                    <View style={styles.emptyState}>
-                        <Text style={styles.emptyEmoji}>📂</Text>
-                        <Text style={styles.emptyTitle}>No documents indexed yet</Text>
-                        <Text style={styles.emptySubtitle}>
-                            Run "Scan Docs" from the Pinpointer dashboard to discover and classify all PDFs on your device.
-                        </Text>
-                    </View>
-                )}
-
-                {/* Category Sections */}
-                {renderSection('Identity Documents', '🪪', identityDocs)}
-                {renderSection('Financial Documents', '💰', financialDocs)}
-                {renderSection('Other Documents', '📁', otherDocs)}
-
-                {/* Privacy Footer */}
-                <View style={styles.privacyFooter}>
-                    <Text style={styles.privacyIcon}>◈</Text>
-                    <Text style={styles.privacyText}>
-                        All classification is done on-device. No data leaves your phone.
-                    </Text>
-                </View>
-            </ScrollView>
+      <Sheet visible={addOpen} onClose={() => setAddOpen(false)} title={t('papers.addTitle')} testID="papers-add-sheet">
+        <SheetAction
+          icon="folder"
+          label={t('papers.chooseFolder')}
+          hint={t('papers.chooseFolderHint')}
+          onPress={() => {
+            setAddOpen(false);
+            places.addFolder();
+          }}
+          testID="papers-add-folder"
+        />
+        <SheetAction
+          icon="papers"
+          label={t('papers.pickPdfs')}
+          hint={t('papers.pickPdfsHint')}
+          onPress={() => {
+            setAddOpen(false);
+            places.addFiles();
+          }}
+          testID="papers-add-files"
+        />
+        <View style={styles.tip}>
+          <Icon name="share" size={20} color={Colors.textMuted} strokeWidth={2} />
+          <AppText variant="small" color="textSecondary" style={styles.flex}>
+            {t('papers.shareTip')}
+          </AppText>
         </View>
-    );
+      </Sheet>
+    </Screen>
+  );
 };
 
-// ─── Styles ─────────────────────────────────────────────────────────────────
+interface PaperRowProps {
+  paper: Paper;
+  when: string;
+  pinned: boolean;
+  onOpen: () => void;
+  onStar: () => void;
+  testID?: string;
+}
+
+/** One paper: a tinted icon, its name, when it was added, its kind and a star. */
+const PaperRow: React.FC<PaperRowProps> = ({ paper, when, pinned, onOpen, onStar, testID }) => {
+  const { t } = useStrings();
+  const look = PAPER_GROUP_LOOK[paper.group];
+  const tint = tintOf(paper.group);
+  const title = paper.title || t('papers.untitled');
+  const added = t('papers.added', { when });
+  return (
+    <Card style={styles.rowCard} testID={testID}>
+      <PressableScale
+        onPress={onOpen}
+        pressedScale={0.985}
+        accessibilityRole="button"
+        accessibilityLabel={`${title}, ${t(look.kind)}, ${added}`}
+        style={styles.rowMain}
+        testID={testID ? `${testID}-open` : undefined}
+      >
+        <View style={[styles.rowIcon, { backgroundColor: tint.bg }]}>
+          <Icon name="papers" size={26} color={tint.ink} strokeWidth={1.75} />
+        </View>
+        <View style={styles.flex}>
+          <AppText variant="bodyStrong" numberOfLines={2}>
+            {title}
+          </AppText>
+          <View style={styles.meta}>
+            <Tag label={t(look.kind)} tone={look.tint} />
+            <AppText variant="small" color="textMuted" numberOfLines={1} style={styles.flexShrink}>
+              {added}
+            </AppText>
+          </View>
+        </View>
+      </PressableScale>
+      <IconButton
+        icon="star"
+        label={t('common.important')}
+        accessibilityHint={t(pinned ? 'viewer.unmarkImportant' : 'viewer.markImportant')}
+        selected={pinned}
+        filled={pinned}
+        iconColor={pinned ? Colors.important : Colors.textMuted}
+        fillColor={Colors.importantStar}
+        onPress={onStar}
+        testID={testID ? `${testID}-star` : undefined}
+      />
+    </Card>
+  );
+};
+
+const TILE_GAP = Space.sm + 2;
 
 const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: '#05050A',
-    },
-    flex1: { flex: 1 },
-    backgroundGlowWrap: {
-        ...StyleSheet.absoluteFillObject,
-        overflow: 'hidden',
-    },
-    glowTop: {
-        position: 'absolute',
-        top: -120,
-        right: -200,
-        width: 500,
-        height: 300,
-        backgroundColor: 'rgba(99, 102, 241, 0.08)',
-        transform: [{ rotate: '25deg' }],
-        borderRadius: 250,
-    },
-    glowBottom: {
-        position: 'absolute',
-        bottom: -80,
-        left: -150,
-        width: 600,
-        height: 250,
-        backgroundColor: 'rgba(168, 85, 247, 0.06)',
-        transform: [{ rotate: '-20deg' }],
-        borderRadius: 300,
-    },
-    scroll: {
-        flex: 1,
-    },
-    scrollContent: {
-        padding: 20,
-        paddingBottom: 40,
-    },
-    header: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        marginBottom: 24,
-        paddingTop: 16,
-    },
-    backButton: {
-        width: 44,
-        height: 44,
-        borderRadius: 22,
-        backgroundColor: 'rgba(255, 255, 255, 0.06)',
-        borderWidth: 1,
-        borderColor: 'rgba(255, 255, 255, 0.1)',
-        justifyContent: 'center',
-        alignItems: 'center',
-        marginRight: 16,
-    },
-    backArrow: {
-        fontSize: 20,
-        color: '#E2E8F0',
-    },
-    headerTextContainer: {
-        flex: 1,
-    },
-    headerTitle: {
-        fontSize: 26,
-        fontWeight: '700',
-        color: '#F1F5F9',
-        letterSpacing: -0.5,
-    },
-    headerSubtitle: {
-        fontSize: 13,
-        color: '#8B5CF6',
-        marginTop: 2,
-        letterSpacing: 0.5,
-    },
-
-    // Stats Bar
-    statsBar: {
-        flexDirection: 'row',
-        borderRadius: 16,
-        padding: 16,
-        marginBottom: 24,
-        borderWidth: 1,
-        borderColor: 'rgba(139, 92, 246, 0.2)',
-    },
-    statItem: {
-        flex: 1,
-        alignItems: 'center',
-    },
-    statNumber: {
-        fontSize: 24,
-        fontWeight: '700',
-        color: '#F1F5F9',
-    },
-    statLabel: {
-        fontSize: 11,
-        color: '#94A3B8',
-        marginTop: 4,
-        textTransform: 'uppercase',
-        letterSpacing: 1,
-    },
-    statDivider: {
-        width: 1,
-        backgroundColor: 'rgba(139, 92, 246, 0.3)',
-    },
-
-    // Sections
-    section: {
-        marginBottom: 24,
-    },
-    sectionHeader: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        marginBottom: 12,
-    },
-    sectionIcon: {
-        fontSize: 18,
-        marginRight: 8,
-    },
-    sectionTitle: {
-        fontSize: 16,
-        fontWeight: '600',
-        color: '#CBD5E1',
-        flex: 1,
-    },
-    sectionCount: {
-        fontSize: 14,
-        fontWeight: '700',
-        color: '#8B5CF6',
-    },
-
-    // Category Cards
-    categoryCard: {
-        marginBottom: 10,
-        borderRadius: 14,
-        overflow: 'hidden',
-    },
-    categoryCardGradient: {
-        padding: 14,
-        borderRadius: 14,
-        borderWidth: 1,
-        borderColor: 'rgba(255, 255, 255, 0.06)',
-    },
-    categoryHeader: {
-        flexDirection: 'row',
-        alignItems: 'center',
-    },
-    categoryEmoji: {
-        fontSize: 28,
-        marginRight: 14,
-    },
-    categoryLabel: {
-        fontSize: 15,
-        fontWeight: '600',
-        color: '#E2E8F0',
-    },
-    categoryCount: {
-        fontSize: 12,
-        marginTop: 2,
-    },
-    countBadge: {
-        width: 36,
-        height: 36,
-        borderRadius: 18,
-        justifyContent: 'center',
-        alignItems: 'center',
-        borderWidth: 1,
-    },
-    countBadgeText: {
-        fontSize: 15,
-        fontWeight: '700',
-    },
-
-    // Document List (Expanded)
-    documentsList: {
-        marginTop: 12,
-        borderTopWidth: 1,
-        borderTopColor: 'rgba(255, 255, 255, 0.06)',
-        paddingTop: 10,
-    },
-    documentItem: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingVertical: 8,
-        paddingHorizontal: 4,
-    },
-    documentIcon: {
-        fontSize: 16,
-        marginRight: 10,
-    },
-    documentTitle: {
-        fontSize: 13,
-        fontWeight: '500',
-        color: '#CBD5E1',
-    },
-    documentPath: {
-        fontSize: 11,
-        color: '#64748B',
-        marginTop: 1,
-    },
-    openArrow: {
-        fontSize: 16,
-        color: '#8B5CF6',
-        marginLeft: 8,
-    },
-
-    // Empty State
-    emptyState: {
-        alignItems: 'center',
-        paddingVertical: 60,
-    },
-    emptyEmoji: {
-        fontSize: 48,
-        marginBottom: 16,
-    },
-    emptyTitle: {
-        fontSize: 18,
-        fontWeight: '600',
-        color: '#CBD5E1',
-        marginBottom: 8,
-    },
-    emptySubtitle: {
-        fontSize: 14,
-        color: '#64748B',
-        textAlign: 'center',
-        lineHeight: 20,
-        paddingHorizontal: 40,
-    },
-
-    // Privacy Footer
-    privacyFooter: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        paddingTop: 16,
-        opacity: 0.5,
-    },
-    privacyIcon: {
-        fontSize: 14,
-        color: '#8B5CF6',
-        marginRight: 8,
-    },
-    privacyText: {
-        fontSize: 12,
-        color: '#64748B',
-    },
+  content: { paddingBottom: Space.huge },
+  flex: { flex: 1 },
+  flexShrink: { flexShrink: 1 },
+  gutter: { marginHorizontal: GUTTER, marginBottom: Space.md },
+  grid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    paddingHorizontal: GUTTER,
+    gap: TILE_GAP,
+    marginBottom: Space.lg,
+  },
+  tileSlot: { width: '31.5%', flexGrow: 1 },
+  tile: {
+    minHeight: 120,
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.md - 2,
+    borderWidth: 1.5,
+    borderColor: Colors.line,
+    padding: Space.md,
+    gap: Space.xs + 2,
+  },
+  tileOn: { borderColor: Colors.primary, backgroundColor: Colors.primarySoft },
+  tileEmpty: { opacity: 0.55 },
+  tileIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: Radius.xs + 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tileCheck: {
+    position: 'absolute',
+    top: Space.sm,
+    right: Space.sm,
+    width: 24,
+    height: 24,
+    borderRadius: Radius.pill,
+    backgroundColor: Colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  where: { marginBottom: 0 },
+  searchGap: { height: Space.sm },
+  list: { paddingHorizontal: GUTTER, gap: Space.md },
+  rowCard: { flexDirection: 'row', alignItems: 'center', paddingVertical: Space.sm, paddingLeft: Space.md, paddingRight: Space.xs },
+  rowMain: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: Space.md, minHeight: Touch.comfortable },
+  rowIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: Radius.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  meta: { flexDirection: 'row', alignItems: 'center', gap: Space.sm, marginTop: Space.xxs },
+  more: { alignSelf: 'center', marginTop: Space.sm },
+  add: { marginTop: Space.xl },
+  tip: { flexDirection: 'row', alignItems: 'center', gap: Space.md, paddingVertical: Space.md },
 });

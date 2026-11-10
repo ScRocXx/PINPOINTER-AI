@@ -23,6 +23,7 @@ import {
   getIndexedCount,
   clearIndex,
   getAllDocuments,
+  getDocumentByPath,
   removeDocument,
   listIndexedFiles,
 } from '../documents';
@@ -479,5 +480,39 @@ describe('getAllDocuments', () => {
     const docs = getAllDocuments();
     expect(docs).toHaveLength(1);
     expect(docs[0].filePath).toBe('/mixed.pdf');
+  });
+});
+
+// ─── getDocumentByPath ──────────────────────────────────────────────────────
+
+describe('getDocumentByPath', () => {
+  test('returns null for a file that was never read', () => {
+    expect(getDocumentByPath('content://media/external/images/media/1')).toBeNull();
+  });
+
+  test('returns the row for that one file, masked and without search keys', () => {
+    indexDocument(null, 'Aadhaar 1234 5678 9012 ration card', 'content://media/1', 'IMAGE', 'TEXT');
+    indexDocument('Other', 'something else', 'content://media/2', 'IMAGE', 'TEXT');
+
+    const doc = getDocumentByPath('content://media/1');
+    expect(doc).not.toBeNull();
+    expect(doc?.filePath).toBe('content://media/1');
+    expect(doc?.type).toBe('IMAGE');
+    expect(doc?.content).toContain('ration card');
+    expect(doc?.content).not.toContain('1234 5678 9012');
+    expect(doc?.content).not.toContain('\u2063');
+  });
+
+  test('returns null when the database fails', () => {
+    closeDatabase();
+    __resetAll();
+    const spy = jest.spyOn(OpSqlite, 'open').mockImplementation(() => {
+      throw new Error('boom');
+    });
+    try {
+      expect(getDocumentByPath('/x.pdf')).toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
