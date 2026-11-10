@@ -31,11 +31,12 @@ import { scheduleBackgroundIndexing } from './services/BackgroundIndexingTask';
 const Stack = createStackNavigator<StackParamList>();
 const Tabs = createMainTabNavigator<MainTabParamList>();
 
-/** Tabs where photos are searched or browsed, so "only some photos" matters there. */
-const PHOTO_TABS = new Set(['Pinpointer', 'Gallery']);
-
+/**
+ * "Only some photos" matters where photos are searched. The Photos tab says
+ * it in its own page, so the one above the bar is for Home only.
+ */
 const photoBanner = (routeName: string) =>
-  PHOTO_TABS.has(routeName) ? <PhotoAccessBanner style={styles.tabBanner} /> : null;
+  routeName === 'Pinpointer' ? <PhotoAccessBanner style={styles.tabBanner} /> : null;
 
 /** The four tabs, with Scan in the middle of the bar. */
 const MainTabs: React.FC = () => (
