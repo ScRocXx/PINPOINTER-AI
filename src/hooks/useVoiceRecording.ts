@@ -8,6 +8,7 @@ import {
     NativeEventEmitter,
 } from 'react-native';
 import { AppLogger } from '../utils/AppLogger';
+import { createSilenceDetector, subscribeMicLevel } from '../utils/MicLevel';
 
 const { SherpaOnnxModule } = NativeModules;
 const sherpaEmitter = new NativeEventEmitter(SherpaOnnxModule);
@@ -16,47 +17,91 @@ const sherpaEmitter = new NativeEventEmitter(SherpaOnnxModule);
  * useVoiceRecording — handles mic recording and STT via sherpa-onnx (on-device Whisper).
  * 100% offline. No internet needed. No Google dependency.
  *
+ * Listening ends by itself after the person stops speaking (or cancels when
+ * nothing was said), so a tap on stop is optional. The live mic level is not
+ * React state: the meter subscribes to it directly (`utils/MicLevel`).
+ *
  * @param onTranscription Called with the trimmed transcript when recognition completes.
- * @returns Recording/transcribing flags, live audio level, duration, and
- * `startListening` / `stopListening` controls.
+ * @returns Recording/transcribing flags and `startListening` / `stopListening`
+ * / `cancelListening` controls.
  */
 export const useVoiceRecording = (onTranscription: (text: string) => void) => {
     const [isRecording, setIsRecording] = useState(false);
     const [isTranscribing, setIsTranscribing] = useState(false);
     const [isModelLoading] = useState(false);
-    const [audioLevel, setAudioLevel] = useState(0);
-    const [recordingDuration, setRecordingDuration] = useState(0);
 
-    const recordingStartRef = useRef(0);
-    const audioLevelInterval = useRef<ReturnType<typeof setInterval> | null>(null);
+    // Set while we cancel on purpose: the "end" event that follows must not
+    // show "Understanding…", because no words will come.
+    const cancellingRef = useRef(false);
+    // One stop or cancel per recording, whoever asks first (tap or silence).
+    const endingRef = useRef(false);
+    const levelUnsubRef = useRef<(() => void) | null>(null);
+
+    const stopLevelWatch = useCallback(() => {
+        levelUnsubRef.current?.();
+        levelUnsubRef.current = null;
+    }, []);
+
+    const stopListening = useCallback(async () => {
+        if (endingRef.current) return;
+        endingRef.current = true;
+        stopLevelWatch();
+        try {
+            await SherpaOnnxModule.stopRecognition();
+            setIsRecording(false);
+        } catch (error) {
+            AppLogger.error('VoiceRecording', 'Stop failed', error);
+        }
+    }, [stopLevelWatch]);
+
+    const cancelListening = useCallback(async () => {
+        if (endingRef.current) return;
+        endingRef.current = true;
+        cancellingRef.current = true;
+        stopLevelWatch();
+        try {
+            await SherpaOnnxModule.cancelRecognition();
+        } catch (error) {
+            AppLogger.warn('VoiceRecording', 'Cancel failed', error);
+        }
+        setIsRecording(false);
+        setIsTranscribing(false);
+    }, [stopLevelWatch]);
+
+    // Refs so the native listeners (set up once) always call the latest ones.
+    const stopRef = useRef(stopListening);
+    const cancelRef = useRef(cancelListening);
+    useEffect(() => {
+        stopRef.current = stopListening;
+        cancelRef.current = cancelListening;
+    }, [stopListening, cancelListening]);
 
     useEffect(() => {
         const onSpeechStart = sherpaEmitter.addListener('onSpeechStart', () => {
             setIsRecording(true);
             setIsTranscribing(false);
-            recordingStartRef.current = Date.now();
+            endingRef.current = false;
+            cancellingRef.current = false;
 
-            // Simulate audio level updates via interval while recording.
-            // Clear any previous interval first so a repeated start event can't leak one.
-            if (audioLevelInterval.current) {
-                clearInterval(audioLevelInterval.current);
-            }
-            audioLevelInterval.current = setInterval(() => {
-                if (recordingStartRef.current > 0) {
-                    setRecordingDuration(Date.now() - recordingStartRef.current);
-                    // Simulate audio level (sherpa-onnx doesn't provide real-time levels)
-                    setAudioLevel(0.3 + Math.random() * 0.5);
-                }
-            }, 200);
+            // End by itself once the person has finished speaking.
+            levelUnsubRef.current?.();
+            const detector = createSilenceDetector(Date.now());
+            levelUnsubRef.current = subscribeMicLevel(level => {
+                const verdict = detector.push(level);
+                if (verdict === 'stop') stopRef.current();
+                else if (verdict === 'cancel') cancelRef.current();
+            });
         });
 
         const onSpeechEnd = sherpaEmitter.addListener('onSpeechEnd', () => {
+            levelUnsubRef.current?.();
+            levelUnsubRef.current = null;
             setIsRecording(false);
-            setIsTranscribing(true);
-            setAudioLevel(0);
-            if (audioLevelInterval.current) {
-                clearInterval(audioLevelInterval.current);
-                audioLevelInterval.current = null;
+            if (cancellingRef.current) {
+                cancellingRef.current = false;
+                setIsTranscribing(false);
+            } else {
+                setIsTranscribing(true);
             }
         });
 
@@ -69,13 +114,10 @@ export const useVoiceRecording = (onTranscription: (text: string) => void) => {
         });
 
         const onSpeechError = sherpaEmitter.addListener('onSpeechError', (error: unknown) => {
+            levelUnsubRef.current?.();
+            levelUnsubRef.current = null;
             setIsRecording(false);
             setIsTranscribing(false);
-            setAudioLevel(0);
-            if (audioLevelInterval.current) {
-                clearInterval(audioLevelInterval.current);
-                audioLevelInterval.current = null;
-            }
             AppLogger.error('VoiceRecording', 'Speech recognition error', error);
         });
 
@@ -84,11 +126,14 @@ export const useVoiceRecording = (onTranscription: (text: string) => void) => {
             onSpeechEnd.remove();
             onSpeechResults.remove();
             onSpeechError.remove();
-            if (audioLevelInterval.current) {
-                clearInterval(audioLevelInterval.current);
-            }
         };
     }, [onTranscription]);
+
+    // Only on unmount: a new onTranscription must not cut off a live recording's level.
+    useEffect(() => () => {
+        levelUnsubRef.current?.();
+        levelUnsubRef.current = null;
+    }, []);
 
     const startListening = useCallback(async () => {
         try {
@@ -112,17 +157,9 @@ export const useVoiceRecording = (onTranscription: (text: string) => void) => {
         }
     }, []);
 
-    const stopListening = useCallback(async () => {
-        try {
-            await SherpaOnnxModule.stopRecognition();
-            setIsRecording(false);
-            setAudioLevel(0);
-        } catch (error) {
-            AppLogger.error('VoiceRecording', 'Stop failed', error);
-        }
-    }, []);
-
     const cleanupRecording = useCallback(() => {
+        levelUnsubRef.current?.();
+        levelUnsubRef.current = null;
         SherpaOnnxModule.cancelRecognition().catch(() => {});
     }, []);
 
@@ -130,10 +167,9 @@ export const useVoiceRecording = (onTranscription: (text: string) => void) => {
         isRecording,
         isTranscribing,
         isModelLoading,
-        audioLevel,
-        recordingDuration,
         startListening,
         stopListening,
+        cancelListening,
         cleanupRecording,
     };
 };

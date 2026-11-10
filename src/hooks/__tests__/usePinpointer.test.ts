@@ -102,10 +102,9 @@ describe('usePinpointer — composition wiring', () => {
             isRecording: false,
             isTranscribing: false,
             isModelLoading: false,
-            audioLevel: 0,
-            recordingDuration: 0,
             startListening: jest.fn(),
             stopListening: jest.fn(),
+            cancelListening: jest.fn(),
             cleanupRecording: jest.fn(),
         };
 
@@ -167,10 +166,9 @@ describe('usePinpointer — composition wiring', () => {
         expect(result.current.isRecording).toBe(false);
         expect(result.current.isTranscribing).toBe(false);
         expect(result.current.isModelLoading).toBe(false);
-        expect(result.current.audioLevel).toBe(0);
-        expect(result.current.recordingDuration).toBe(0);
         expect(result.current.startListening).toBe(voiceState.startListening);
         expect(result.current.stopListening).toBe(voiceState.stopListening);
+        expect(result.current.cancelListening).toBe(voiceState.cancelListening);
     });
 
     test('own image-viewer state starts null and updates via setSelectedImage', async () => {

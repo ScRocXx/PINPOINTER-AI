@@ -12,13 +12,9 @@
  * - SherpaOnnxModule is mocked in jest.setup.js as jest.fn methods; controlled
  *   per-test via mockResolvedValue / mockRejectedValue.
  * - PermissionsAndroid / Alert / Vibration are spied per-test.
- * - The hook's 200ms audio-level interval is driven deterministically: we
- *   capture the real callback via a setInterval spy and invoke it manually
- *   while controlling the clock with jest.setSystemTime. (Advancing fake
- *   timers does not reliably fire the hook's interval in this RNTL v14 +
- *   fake-timers environment, so manual invocation tests the actual logic.)
- * - clearInterval is spied to prove the interval is torn down on speech end,
- *   error, and unmount.
+ * - The live mic level ("onSpeechVolume") goes to the same spy: the hook
+ *   subscribes on speech start and the tests feed levels with emit(), with
+ *   the clock set by jest.setSystemTime, to drive the auto-stop on silence.
  *
  * NOTE: @testing-library/react-native v14 is fully async — renderHook,
  * rerender, unmount and act all return promises and must be awaited.
@@ -64,8 +60,6 @@ type Listener = (...args: any[]) => void;
 const listeners: Record<string, Listener[]> = {};
 const removals: jest.Mock[] = [];
 let addListenerSpy: jest.SpyInstance;
-let setIntervalSpy: jest.SpyInstance;
-let clearIntervalSpy: jest.SpyInstance;
 
 async function emit(event: string, ...args: any[]): Promise<void> {
     await act(() => {
@@ -79,30 +73,10 @@ function listenerCount(event: string): number {
     return listeners[event]?.length ?? 0;
 }
 
-/** Index of the hook's 200ms audio-level interval in the setInterval spy. */
-function hookIntervalIndex(): number {
-    const idx = setIntervalSpy.mock.calls.findIndex((c) => c[1] === 200);
-    if (idx === -1) {
-        throw new Error('hook 200ms interval was not registered');
-    }
-    return idx;
-}
-
-/** The actual callback the hook registered with setInterval(…, 200). */
-function hookIntervalCallback(): () => void {
-    return setIntervalSpy.mock.calls[hookIntervalIndex()][0] as () => void;
-}
-
-/** The timer id the hook stored for its 200ms interval. */
-function hookTimerId(): unknown {
-    return setIntervalSpy.mock.results[hookIntervalIndex()].value;
-}
-
-async function fireHookInterval(): Promise<void> {
-    const cb = hookIntervalCallback();
-    await act(() => {
-        cb();
-    });
+/** Feed one mic level reading at time `at`. */
+async function level(value: number, at: number): Promise<void> {
+    jest.setSystemTime(at);
+    await emit('onSpeechVolume', { level: value });
 }
 
 // ---------------------------------------------------------------------------
@@ -138,8 +112,6 @@ beforeEach(() => {
             removals.push(remove);
             return { remove };
         }) as unknown as typeof NativeEventEmitter.prototype.addListener);
-    setIntervalSpy = jest.spyOn(global, 'setInterval');
-    clearIntervalSpy = jest.spyOn(global, 'clearInterval');
 });
 
 afterEach(() => {
@@ -178,10 +150,9 @@ describe('useVoiceRecording — initial state and event wiring', () => {
         expect(result.current.isRecording).toBe(false);
         expect(result.current.isTranscribing).toBe(false);
         expect(result.current.isModelLoading).toBe(false);
-        expect(result.current.audioLevel).toBe(0);
-        expect(result.current.recordingDuration).toBe(0);
         expect(typeof result.current.startListening).toBe('function');
         expect(typeof result.current.stopListening).toBe('function');
+        expect(typeof result.current.cancelListening).toBe('function');
         expect(typeof result.current.cleanupRecording).toBe('function');
     });
 
@@ -258,67 +229,130 @@ describe('useVoiceRecording — onSpeechStart', () => {
         expect(result.current.isTranscribing).toBe(false);
     });
 
-    test('registers a 200ms interval that drives duration and audio level', async () => {
+    test('listens to the live mic level only while recording', async () => {
         await renderHook(() => useVoiceRecording(jest.fn()));
+        expect(listenerCount('onSpeechVolume')).toBe(0);
 
         await emit('onSpeechStart');
+        expect(listenerCount('onSpeechVolume')).toBe(1);
 
-        // The hook's simulation interval: setInterval(cb, 200)
-        expect(hookIntervalIndex()).toBeGreaterThanOrEqual(0);
-        expect(setIntervalSpy.mock.calls[hookIntervalIndex()][1]).toBe(200);
+        await emit('onSpeechEnd');
+        expect(listenerCount('onSpeechVolume')).toBe(0);
     });
 
-    test('interval callback updates recordingDuration deterministically', async () => {
-        const { result } = await renderHook(() => useVoiceRecording(jest.fn()));
-        jest.setSystemTime(1_000_000);
-
+    test('repeated speech-start events keep one level listener', async () => {
+        await renderHook(() => useVoiceRecording(jest.fn()));
         await emit('onSpeechStart');
-        expect(result.current.recordingDuration).toBe(0);
+        await emit('onSpeechStart');
+        expect(listenerCount('onSpeechVolume')).toBe(1);
+    });
+});
 
-        jest.setSystemTime(1_000_200);
-        await fireHookInterval();
-        expect(result.current.recordingDuration).toBe(200);
+// ---------------------------------------------------------------------------
+// Ending by itself: a pause after speech stops, silence cancels
+// ---------------------------------------------------------------------------
 
-        jest.setSystemTime(1_001_200);
-        await fireHookInterval();
-        expect(result.current.recordingDuration).toBe(1200);
+describe('useVoiceRecording — ends by itself', () => {
+    test('a pause after speaking stops and reads the words', async () => {
+        await renderHook(() => useVoiceRecording(jest.fn()));
+        jest.setSystemTime(1_000);
+        await emit('onSpeechStart');
+
+        await level(0.7, 1_500); // speaking
+        await level(0.1, 2_500); // pause, not long enough yet
+        expect(stopRecognition).not.toHaveBeenCalled();
+
+        await level(0.1, 3_200); // 1.7 s after the last loud reading
+        expect(stopRecognition).toHaveBeenCalledTimes(1);
+        expect(cancelRecognition).not.toHaveBeenCalled();
     });
 
-    test('interval callback updates audioLevel from Math.random in [0.3, 0.8)', async () => {
-        jest.spyOn(Math, 'random').mockReturnValue(0.5);
-        const { result } = await renderHook(() => useVoiceRecording(jest.fn()));
-
+    test('stops only once, even if more quiet readings arrive', async () => {
+        await renderHook(() => useVoiceRecording(jest.fn()));
+        jest.setSystemTime(0);
         await emit('onSpeechStart');
-        await fireHookInterval();
-
-        // 0.3 + 0.5 * 0.5 = 0.55
-        expect(result.current.audioLevel).toBeCloseTo(0.55, 5);
+        await level(0.8, 100);
+        await level(0.0, 2_000);
+        await level(0.0, 2_100);
+        expect(stopRecognition).toHaveBeenCalledTimes(1);
     });
 
-    test('repeated speech-start events restart the duration clock', async () => {
+    test('when nothing is said, it cancels instead of guessing words', async () => {
         const { result } = await renderHook(() => useVoiceRecording(jest.fn()));
-        jest.setSystemTime(10_000);
-
+        jest.setSystemTime(0);
         await emit('onSpeechStart');
-        jest.setSystemTime(15_000);
-        await fireHookInterval();
-        expect(result.current.recordingDuration).toBe(5000);
 
-        // Second start re-arms recordingStartRef; duration restarts.
-        // (Source does not clear the previous interval first — the newest
-        // callback wins the state update.)
-        jest.setSystemTime(99_000);
+        await level(0.05, 3_000);
+        expect(cancelRecognition).not.toHaveBeenCalled();
+        await level(0.05, 6_100);
+        expect(cancelRecognition).toHaveBeenCalledTimes(1);
+        expect(stopRecognition).not.toHaveBeenCalled();
+
+        // The native "end" that follows a cancel must not show "Understanding…".
+        await emit('onSpeechEnd');
+        expect(result.current.isRecording).toBe(false);
+        expect(result.current.isTranscribing).toBe(false);
+    });
+
+    test('a tap on stop wins over the silence check', async () => {
+        const { result } = await renderHook(() => useVoiceRecording(jest.fn()));
+        jest.setSystemTime(0);
         await emit('onSpeechStart');
-        const latest = setIntervalSpy.mock.calls
-            .map((c, i) => ({ c, i }))
-            .filter(({ c }) => c[1] === 200)
-            .pop();
-        expect(latest).toBeDefined();
-        jest.setSystemTime(99_400);
-        await act(() => {
-            (latest!.c[0] as () => void)();
+        await level(0.9, 200);
+        await act(async () => {
+            await result.current.stopListening();
         });
-        expect(result.current.recordingDuration).toBe(400);
+        await level(0.0, 5_000);
+        expect(stopRecognition).toHaveBeenCalledTimes(1);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// cancelListening — the person backs out
+// ---------------------------------------------------------------------------
+
+describe('useVoiceRecording — cancelListening', () => {
+    test('cancels the native session and resets both flags', async () => {
+        const { result } = await renderHook(() => useVoiceRecording(jest.fn()));
+        await emit('onSpeechStart');
+
+        await act(async () => {
+            await result.current.cancelListening();
+        });
+        await emit('onSpeechEnd');
+
+        expect(cancelRecognition).toHaveBeenCalledTimes(1);
+        expect(result.current.isRecording).toBe(false);
+        expect(result.current.isTranscribing).toBe(false);
+        expect(listenerCount('onSpeechVolume')).toBe(0);
+    });
+
+    test('a failed cancel is logged and still resets the screen', async () => {
+        cancelRecognition.mockRejectedValueOnce(new Error('gone'));
+        const { result } = await renderHook(() => useVoiceRecording(jest.fn()));
+        await emit('onSpeechStart');
+        await act(async () => {
+            await result.current.cancelListening();
+        });
+        expect(result.current.isRecording).toBe(false);
+        expect(AppLogger.warn).toHaveBeenCalledWith('VoiceRecording', 'Cancel failed', expect.any(Error));
+    });
+
+    test('the next recording can stop again after a cancel', async () => {
+        const { result } = await renderHook(() => useVoiceRecording(jest.fn()));
+        await emit('onSpeechStart');
+        await act(async () => {
+            await result.current.cancelListening();
+        });
+        await emit('onSpeechEnd');
+
+        await emit('onSpeechStart');
+        await act(async () => {
+            await result.current.stopListening();
+        });
+        expect(stopRecognition).toHaveBeenCalledTimes(1);
+        await emit('onSpeechEnd');
+        expect(result.current.isTranscribing).toBe(true);
     });
 });
 
@@ -327,7 +361,7 @@ describe('useVoiceRecording — onSpeechStart', () => {
 // ---------------------------------------------------------------------------
 
 describe('useVoiceRecording — onSpeechEnd', () => {
-    test('flips to transcribing state and zeroes the audio level', async () => {
+    test('flips to transcribing state', async () => {
         const { result } = await renderHook(() => useVoiceRecording(jest.fn()));
 
         await emit('onSpeechStart');
@@ -337,25 +371,6 @@ describe('useVoiceRecording — onSpeechEnd', () => {
 
         expect(result.current.isRecording).toBe(false);
         expect(result.current.isTranscribing).toBe(true);
-        expect(result.current.audioLevel).toBe(0);
-    });
-
-    test('clears the duration interval so the clock cannot tick further', async () => {
-        const { result } = await renderHook(() => useVoiceRecording(jest.fn()));
-        jest.setSystemTime(7_000);
-
-        await emit('onSpeechStart');
-        const timerId = hookTimerId();
-        jest.setSystemTime(7_800);
-        await fireHookInterval();
-        expect(result.current.recordingDuration).toBe(800);
-
-        await emit('onSpeechEnd');
-
-        expect(clearIntervalSpy).toHaveBeenCalledWith(timerId);
-        // The cleared interval is gone: no new 200ms interval was registered.
-        const intervals = setIntervalSpy.mock.calls.filter((c) => c[1] === 200);
-        expect(intervals).toHaveLength(1);
     });
 });
 
@@ -429,19 +444,17 @@ describe('useVoiceRecording — onSpeechResults', () => {
 // ---------------------------------------------------------------------------
 
 describe('useVoiceRecording — onSpeechError', () => {
-    test('resets recording state, clears the interval, and logs the error', async () => {
+    test('resets recording state, stops the level listener, and logs the error', async () => {
         const { result } = await renderHook(() => useVoiceRecording(jest.fn()));
 
         await emit('onSpeechStart');
-        const timerId = hookTimerId();
 
         const err = new Error('mic failed');
         await emit('onSpeechError', err);
 
         expect(result.current.isRecording).toBe(false);
         expect(result.current.isTranscribing).toBe(false);
-        expect(result.current.audioLevel).toBe(0);
-        expect(clearIntervalSpy).toHaveBeenCalledWith(timerId);
+        expect(listenerCount('onSpeechVolume')).toBe(0);
         expect(logError).toHaveBeenCalledWith(
             'VoiceRecording',
             'Speech recognition error',
@@ -456,8 +469,6 @@ describe('useVoiceRecording — onSpeechError', () => {
         expect(result.current.isRecording).toBe(false);
         expect(result.current.isTranscribing).toBe(false);
         expect(logError).toHaveBeenCalledTimes(1);
-        // No interval ever existed, so nothing was cleared.
-        expect(clearIntervalSpy).not.toHaveBeenCalled();
     });
 });
 
@@ -597,11 +608,7 @@ describe('useVoiceRecording — stopListening', () => {
         const { result } = await renderHook(() => useVoiceRecording(jest.fn()));
 
         await emit('onSpeechStart');
-        // Simulate a mid-recording audio level via the interval callback.
-        jest.spyOn(Math, 'random').mockReturnValue(0.5);
-        await fireHookInterval();
         expect(result.current.isRecording).toBe(true);
-        expect(result.current.audioLevel).toBeCloseTo(0.55, 5);
 
         await act(async () => {
             await result.current.stopListening();
@@ -609,7 +616,7 @@ describe('useVoiceRecording — stopListening', () => {
 
         expect(stopRecognition).toHaveBeenCalledTimes(1);
         expect(result.current.isRecording).toBe(false);
-        expect(result.current.audioLevel).toBe(0);
+        expect(listenerCount('onSpeechVolume')).toBe(0);
     });
 
     test('stop without a prior start still calls the native module without throwing', async () => {
@@ -670,24 +677,25 @@ describe('useVoiceRecording — cleanupRecording', () => {
 // ---------------------------------------------------------------------------
 
 describe('useVoiceRecording — unmount safety', () => {
-    test('unmount during recording clears the audio-level interval', async () => {
+    test('unmount during recording stops the level listener', async () => {
         const { unmount } = await renderHook(() => useVoiceRecording(jest.fn()));
 
         await emit('onSpeechStart');
-        const timerId = hookTimerId();
+        expect(listenerCount('onSpeechVolume')).toBe(1);
 
         await unmount();
 
-        expect(clearIntervalSpy).toHaveBeenCalledWith(timerId);
+        expect(listenerCount('onSpeechVolume')).toBe(0);
     });
 
-    test('unmount while idle leaves listeners removed and no interval behind', async () => {
+    test('unmount while idle leaves every listener removed', async () => {
         const { unmount } = await renderHook(() => useVoiceRecording(jest.fn()));
 
         await unmount();
 
         expect(removals).toHaveLength(4);
-        // No interval was ever created, so clearInterval was never needed.
-        expect(clearIntervalSpy).not.toHaveBeenCalled();
+        for (const remove of removals) {
+            expect(remove).toHaveBeenCalledTimes(1);
+        }
     });
 });
