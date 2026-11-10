@@ -8,7 +8,7 @@ doesn't change.
 ```bash
 cd tools/preview
 npm install            # once
-npm run dev            # http://localhost:5199/#kit  (#kit-hi, #settings, #settings-hi)
+npm run dev            # http://localhost:5199/#kit  (#settings, #models, #welcome, #photos, #files, #ready...; add -hi for Hindi)
 npm run shots -- out   # PNGs of every story at 390x844 (2x), plus -full.png for long pages
 npm run shots -- out settings   # only some stories
 ```
