@@ -2,12 +2,12 @@ import 'react-native-gesture-handler'; // Must be at the top!
 import React, { useEffect } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator, TransitionPresets } from '@react-navigation/stack';
-import { StatusBar, StyleSheet } from 'react-native';
+import { StatusBar, StyleSheet, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ModelServiceProvider } from './services/ModelService';
 import { PinpointerProvider } from './hooks/PinpointerContext';
-import { AppColors } from './theme';
+import { AppColors, Colors, GUTTER, Space } from './theme';
 import {
   HomeScreen,
   PinpointerScreen,
@@ -16,21 +16,34 @@ import {
   DocumentVaultScreen,
   SettingsScreen,
   PdfFoldersScreen,
+  FirstRunScreen,
 } from './screens';
 import { setupDatabase, closeDatabase } from './database';
 import { MainTabParamList, StackParamList } from './navigation/types';
 import { createMainTabNavigator } from './navigation/MainTabs';
 import { LanguageProvider } from './i18n';
 import { ToastProvider } from './components/ui';
+import { PhotoAccessBanner } from './components/PhotoAccessBanner';
+import { useFirstRunGate } from './hooks/useFirstRun';
 import { AppLogger } from './utils/AppLogger';
 import { scheduleBackgroundIndexing } from './services/BackgroundIndexingTask';
 
 const Stack = createStackNavigator<StackParamList>();
 const Tabs = createMainTabNavigator<MainTabParamList>();
 
+/** Tabs where photos are searched or browsed, so "only some photos" matters there. */
+const PHOTO_TABS = new Set(['Pinpointer', 'Gallery']);
+
+const photoBanner = (routeName: string) =>
+  PHOTO_TABS.has(routeName) ? <PhotoAccessBanner style={styles.tabBanner} /> : null;
+
 /** The four tabs, with Scan in the middle of the bar. */
 const MainTabs: React.FC = () => (
-  <Tabs.Navigator initialRouteName="Pinpointer" onScanPress={navigation => navigation.navigate('SmartClipboard')}>
+  <Tabs.Navigator
+    initialRouteName="Pinpointer"
+    onScanPress={navigation => navigation.navigate('SmartClipboard')}
+    banner={photoBanner}
+  >
     <Tabs.Screen name="Pinpointer" component={PinpointerScreen} options={{ tabLabelKey: 'tab.home', tabIcon: 'home' }} />
     <Tabs.Screen name="Gallery" component={GalleryScreen} options={{ tabLabelKey: 'tab.photos', tabIcon: 'photos' }} />
     <Tabs.Screen
@@ -69,6 +82,10 @@ const App: React.FC = () => {
     };
   }, []);
 
+  // After the database is set up (effects run in order): a new install opens
+  // the welcome steps, everyone else goes straight to Home.
+  const firstRun = useFirstRunGate();
+
   return (
     <GestureHandlerRootView style={styles.root}>
       <SafeAreaProvider>
@@ -77,9 +94,14 @@ const App: React.FC = () => {
       <ModelServiceProvider>
         <PinpointerProvider>
         <StatusBar barStyle="light-content" backgroundColor={AppColors.primaryDark} />
+        {firstRun === 'checking' ? (
+          // A blank canvas for the few milliseconds the flag takes to read.
+          <View style={styles.checking} testID="first-run-checking" />
+        ) : (
         <NavigationContainer>
           <Stack.Navigator
-            initialRouteName="Main" // The tabs; Home/search is the first tab
+            // A new install starts with the welcome; otherwise the tabs (Home first)
+            initialRouteName={firstRun === 'show' ? 'FirstRun' : 'Main'}
             screenOptions={{
               headerStyle: {
                 backgroundColor: AppColors.primaryDark,
@@ -92,6 +114,13 @@ const App: React.FC = () => {
               ...TransitionPresets.SlideFromRightIOS,
             }}
           >
+            {/* Welcome and permissions, once */}
+            <Stack.Screen
+              name="FirstRun"
+              component={FirstRunScreen}
+              options={{ headerShown: false, gestureEnabled: false, cardStyle: { backgroundColor: Colors.canvas } }}
+            />
+
             {/* Home, Photos, Papers, Settings */}
             <Stack.Screen name="Main" component={MainTabs} options={{ headerShown: false }} />
 
@@ -101,6 +130,7 @@ const App: React.FC = () => {
             <Stack.Screen name="PdfFolders" component={PdfFoldersScreen} options={{ headerShown: false }} />
           </Stack.Navigator>
         </NavigationContainer>
+        )}
         </PinpointerProvider>
       </ModelServiceProvider>
       </ToastProvider>
@@ -116,4 +146,6 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
   },
+  checking: { flex: 1, backgroundColor: Colors.canvas },
+  tabBanner: { marginHorizontal: GUTTER, marginBottom: Space.sm },
 });

@@ -5,3 +5,4 @@ export * from './gallery';
 export * from './DocumentVaultScreen';
 export * from './SettingsScreen';
 export * from './PdfFoldersScreen';
+export * from './FirstRunScreen';

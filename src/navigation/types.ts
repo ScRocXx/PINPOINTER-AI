@@ -13,6 +13,8 @@ export type MainTabParamList = {
 
 /** Screens that open on top of the tabs. */
 export type StackParamList = {
+  /** Welcome and permissions, shown once on a new install (see FirstRun.ts). */
+  FirstRun: undefined;
   Main: NavigatorScreenParams<MainTabParamList> | undefined;
   /** The old feature-card home. Still shown as the side menu. */
   Home: undefined;
