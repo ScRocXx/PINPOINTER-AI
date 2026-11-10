@@ -3,3 +3,5 @@ coverage/
 node_modules/
 android/
 ios/
+# Browser preview tool: its own project, tsconfig and dependencies.
+tools/preview/

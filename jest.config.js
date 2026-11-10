@@ -29,6 +29,8 @@ module.exports = {
   },
 
   testMatch: ['**/__tests__/**/*.test.[jt]s?(x)'],
+  // tools/preview is a separate browser project with its own node_modules.
+  modulePathIgnorePatterns: ['<rootDir>/tools/'],
   testTimeout: 15000,
 
   collectCoverageFrom: [
