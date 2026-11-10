@@ -1,0 +1,17 @@
+{
+  "name": "pinpointer-preview",
+  "private": true,
+  "description": "Browser preview of the Pinpointer UI kit and screens (react-native-web). Not part of the app.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "shots": "node shots.mjs"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "4.3.4",
+    "react-dom": "19.2.0",
+    "react-native-web": "0.21.2",
+    "vite": "6.0.7"
+  }
+}

@@ -17,7 +17,7 @@ module.exports = {
 
   // Don't transform node_modules except RN-ecosystem packages that ship uncompiled code
   transformIgnorePatterns: [
-    'node_modules/(?!(@react-native|react-native|@react-native-async-storage|@react-native-camera-roll|@react-native-clipboard|@react-native-ml-kit|react-native-fs|react-native-image-resizer|react-native-image-picker|react-native-linear-gradient|react-native-svg|react-native-gesture-handler|react-native-safe-area-context|@runanywhere|@op-engineering)/)',
+    'node_modules/(?!(@react-native|@react-navigation|react-native|@react-native-async-storage|@react-native-camera-roll|@react-native-clipboard|@react-native-ml-kit|react-native-fs|react-native-image-resizer|react-native-image-picker|react-native-linear-gradient|react-native-svg|react-native-gesture-handler|react-native-safe-area-context|@runanywhere|@op-engineering)/)',
   ],
 
   moduleNameMapper: {
@@ -29,6 +29,8 @@ module.exports = {
   },
 
   testMatch: ['**/__tests__/**/*.test.[jt]s?(x)'],
+  // tools/preview is a separate browser project with its own node_modules.
+  modulePathIgnorePatterns: ['<rootDir>/tools/'],
   testTimeout: 15000,
 
   collectCoverageFrom: [

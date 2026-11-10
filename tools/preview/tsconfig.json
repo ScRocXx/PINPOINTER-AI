@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "lib": ["es2020", "dom", "dom.iterable"],
+    "types": [],
+    "noEmit": true
+  },
+  "include": ["src", "../../src/**/*.d.ts"],
+  "exclude": ["node_modules"]
+}
