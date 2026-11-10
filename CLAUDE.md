@@ -24,6 +24,7 @@ adb shell cmd jobscheduler run -f ai.runanywhere.starter 4711   # force the char
 ```
 
 - CLIP models (`android/app/src/main/assets/models/clip/vision_encoder_int8.onnx`, `text_encoder_int8.onnx`, vocab) are gitignored and made with `scripts/export_mobileclip.py`. Without them semantic search is off, and the app falls back to text search.
+- `react-native-screens` is pinned to exactly `4.23.0` in `package.json`. Only `@react-navigation/stack` uses it, and 4.30.1 fails React Native 0.83's codegen (`generateCodegenSchemaFromJavaScript`), which breaks the Android build. Upgrade it only together with React Native.
 - `fix_aar.py` (untracked) strips `libonnxruntime.so` from the sherpa-onnx AAR so it doesn't clash with `onnxruntime-android` 1.20.0 (`pickFirst`). If STT or CLIP crashes at load, check this first.
 - Done means: tsc clean, lint clean, all Jest tests pass, and for native changes, `assembleDebug` builds.
 
