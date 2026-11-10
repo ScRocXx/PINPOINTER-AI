@@ -28,7 +28,10 @@ export {
   markEmbedSkipped,
   markStageFailed,
   getIndexingStats,
+  countCheckedFiles,
 } from './fileState';
 export type { FileKind, FileState, IndexingStats, PendingWork, Stage, StageStatus } from './fileState';
 export { beginTransaction, commitTransaction, rollbackTransaction } from './transactions';
 export { searchDocuments, extractSnippet } from './search';
+export { getCollectionPreview, getSimilarPhotos } from './collections';
+export type { CollectionPreview } from './collections';

@@ -15,6 +15,7 @@
  * one or two common spellings per word.
  */
 import { bhashaKey, containsIndic, normalizeIndic, romanize } from './IndicText';
+import { collectionForQuery } from './Collections';
 
 export interface Concept {
     /** Stable id, lowercase a-z only. Becomes the token `qc<id>`. */
@@ -171,8 +172,12 @@ export const conceptsForText = (words: string[]): string[] => {
  *  - Latin words that are a Hinglish spelling of a concept (dawai, bijli,
  *    or a misspelling with the same sound key) become English too; English
  *    words and unknown Latin words pass through as typed.
+ *  - A Home collection's name ("स्क्रीनशॉट", "ID cards") becomes that
+ *    collection's English phrase.
  */
 export const clipTextForQuery = (query: string, words: string[]): string | null => {
+    const collection = collectionForQuery(query);
+    if (collection) return collection.clip;
     const parts: string[] = [];
     for (const w of words) {
         if (!containsIndic(w) && englishWords.has(w.toLowerCase())) {
