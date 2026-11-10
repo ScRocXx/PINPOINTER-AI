@@ -9,7 +9,6 @@ import { ModelServiceProvider } from './services/ModelService';
 import { PinpointerProvider } from './hooks/PinpointerContext';
 import { AppColors } from './theme';
 import {
-  HomeScreen,
   PinpointerScreen,
   SmartClipboardScreen,
   GalleryScreen,
@@ -96,7 +95,6 @@ const App: React.FC = () => {
             <Stack.Screen name="Main" component={MainTabs} options={{ headerShown: false }} />
 
             {/* Opened on top of the tabs */}
-            <Stack.Screen name="Home" component={HomeScreen} options={{ headerShown: false }} />
             <Stack.Screen name="SmartClipboard" component={SmartClipboardScreen} options={{ headerShown: false }} />
             <Stack.Screen name="PdfFolders" component={PdfFoldersScreen} options={{ headerShown: false }} />
           </Stack.Navigator>
