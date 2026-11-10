@@ -73,6 +73,18 @@ Cyan (`Colors.found`) marks matches, marigold (`Colors.important`) marks
 | `LockOnCorners` | The corners. `searching` keeps them breathing while work runs. |
 | `PinMark` | The two-pin mark. |
 
+## Layout notes
+
+- Home's "Find quickly" grid: use **2 columns** on phones. At 3 columns a
+  390dp-wide phone breaks "Screenshots" mid-word and cuts "1,240 found".
+- Every tappable part is a `PressableScale`, whose `style` sits on the
+  pressable itself, so `flex: 1`, `alignSelf` and margins work as on a View.
+
+## Preview
+
+`tools/preview` renders these parts and screens in a browser and saves phone
+screenshots (`npm run dev`, `npm run shots`). See its README.
+
 ## Hooks and data
 
 - `useStrings()` → `{ lang, t, ago, setLang }`. `ago(ts)` gives "2 hours ago".

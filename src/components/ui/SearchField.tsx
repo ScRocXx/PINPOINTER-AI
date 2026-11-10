@@ -175,6 +175,7 @@ const styles = StyleSheet.create({
   input: {
     ...Type.body,
     flex: 1,
+    minWidth: 0,
     color: Colors.text,
     paddingVertical: Space.sm,
     includeFontPadding: false,

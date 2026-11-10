@@ -1,4 +1,5 @@
 import React from 'react';
+import { StyleSheet } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { Colors } from '../../theme';
 import { DOT_ICONS, FILLABLE_ICONS, ICON_PATHS, IconName } from './iconPaths';
@@ -40,6 +41,7 @@ export const Icon: React.FC<IconProps> = ({
       width={size}
       height={size}
       viewBox="0 0 24 24"
+      style={styles.noShrink}
       testID={testID ?? `icon-${name}`}
       accessible={!!accessibilityLabel}
       accessibilityLabel={accessibilityLabel}
@@ -59,3 +61,10 @@ export const Icon: React.FC<IconProps> = ({
 };
 
 export type { IconName };
+
+const styles = StyleSheet.create({
+  // Keep its size in a crowded row, and stay above an absolute fill (the
+  // beam) behind it. Both are already true on Android; this keeps the
+  // browser preview faithful.
+  noShrink: { flexShrink: 0, position: 'relative' },
+});

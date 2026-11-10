@@ -10,7 +10,10 @@ import {
 import { PRESS_SCALE, Spring } from '../../theme';
 import { useReducedMotion } from '../../hooks/useReducedMotion';
 
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+
 export interface PressableScaleProps extends Omit<PressableProps, 'style'> {
+  /** Applies to the pressable itself, so layout (flex, margins) works as on a View. */
   style?: StyleProp<ViewStyle>;
   /** How far it shrinks while pressed. Default 0.97. */
   pressedScale?: number;
@@ -61,14 +64,15 @@ export const PressableScale: React.FC<PressableScaleProps> = ({
   );
 
   return (
-    <Pressable
+    <AnimatedPressable
       {...rest}
       onPressIn={handlePressIn}
       onPressOut={handlePressOut}
       disabled={disabled}
       accessibilityState={{ disabled: !!disabled, ...(rest.accessibilityState ?? {}) }}
+      style={[style, { transform: [{ scale }] }]}
     >
-      <Animated.View style={[style, { transform: [{ scale }] }]}>{children}</Animated.View>
-    </Pressable>
+      {children}
+    </AnimatedPressable>
   );
 };

@@ -7,10 +7,8 @@ import { Segmented } from '../Segmented';
 import { SearchField } from '../SearchField';
 import { LanguageProvider } from '../../../i18n';
 import { Touch } from '../../../theme';
-import type { ReactTestInstance } from 'react-test-renderer';
 
-/** PressableScale puts the testID on the Pressable and the style on its child. */
-const face = (testID: string) => screen.getByTestId(testID).children[0] as unknown as ReactTestInstance;
+const face = (testID: string) => screen.getByTestId(testID);
 
 jest.mock('react-native-svg', () => require('./svgMock').default);
 
