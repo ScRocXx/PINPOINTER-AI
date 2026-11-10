@@ -18,6 +18,8 @@ export type StackParamList = {
   Home: undefined;
   /** Read text from a photo (the Scan button). */
   SmartClipboard: { scanUri?: string } | undefined;
+  /** Where Pinpointer looks for PDFs: add and remove folders (from Papers). */
+  PdfFolders: undefined;
 };
 
 /**

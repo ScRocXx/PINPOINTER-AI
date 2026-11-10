@@ -1,615 +1,310 @@
 /**
- * Component tests for DocumentVaultScreen (src/screens/DocumentVaultScreen.tsx).
+ * DocumentVaultScreen (the Papers tab).
  *
- * Strategy:
- *  - '../../database' is mocked (getAllDocuments: jest.fn()) so the vault is
- *    driven by fixed fixtures instead of the real DB.
- *  - '../../utils/DocumentClassifier' is mocked (classifyDocument: jest.fn())
- *    with a per-test content→category map, making grouping, sectioning and
- *    sorting fully deterministic.
- *  - '@react-navigation/native' useFocusEffect is mocked with a captured
- *    callback, so refocus reloads can be triggered explicitly.
- *  - StorageModule.openPDF comes from the repo's jest.setup.js stub;
- *    Linking.openURL is a cast of the RN preset mock.
- *  - Category cards / document rows / back button are pressed by their label
- *    text; RNTL v14's fireEvent walks up the tree to the nearest press
- *    handler, so pressing a nested label triggers the enclosing
- *    TouchableOpacity's onPress.
- *
- * RNTL v14: render / fireEvent / act are async and awaited.
+ * - The database, the classifier (content → category), the shared Pinpointer
+ *   state, where-we-look (usePdfPlaces) and the missing-file check are
+ *   mocked, so each test says which papers the phone has.
+ * - '@react-navigation/native' is mocked wholesale; Screen and
+ *   useScreenFocus fall back to "focused" without a navigator.
+ * - Toasts fall back to TalkBack announcements without a provider, so they
+ *   are checked through AccessibilityInfo.
  */
 import React from 'react';
-import {
-  Linking,
-  NativeModules,
-} from 'react-native';
-import {
-  act,
-  fireEvent,
-  render,
-  RenderResult,
-} from '@testing-library/react-native';
-import { useFocusEffect } from '@react-navigation/native';
-
-import { DocumentVaultScreen } from '../DocumentVaultScreen';
-import { getAllDocuments } from '../../database';
-import { classifyDocument } from '../../utils/DocumentClassifier';
-import type {
-  ClassificationResult,
-  DocumentCategory,
-} from '../../utils/DocumentClassifier';
+import { AccessibilityInfo, NativeModules } from 'react-native';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useNavigation } from '@react-navigation/native';
+import { DocumentVaultScreen, PAPERS_PAGE } from '../DocumentVaultScreen';
+import { getAllDocuments, searchDocuments } from '../../database';
 import type { DocumentRecord } from '../../database';
+import { classifyDocument, type DocumentCategory } from '../../utils/DocumentClassifier';
+import { usePinpointerShared } from '../../hooks/PinpointerContext';
+import { usePdfPlaces } from '../../hooks/usePdfPlaces';
+import { forgetIfGone } from '../../utils/MissingFiles';
+import { resetPinnedCacheForTests } from '../../utils/PinnedItems';
+import { translate } from '../../i18n/strings';
 
-jest.mock('../../database', () => ({
-  getAllDocuments: jest.fn(),
+jest.mock('@react-navigation/native', () => ({ useNavigation: jest.fn() }));
+jest.mock('../../database', () => ({ getAllDocuments: jest.fn(), searchDocuments: jest.fn(() => []) }));
+jest.mock('../../utils/DocumentClassifier', () => ({ classifyDocument: jest.fn() }));
+jest.mock('../../hooks/PinpointerContext', () => ({ usePinpointerShared: jest.fn() }));
+jest.mock('../../hooks/usePdfPlaces', () => ({
+  ...jest.requireActual('../../hooks/usePdfPlaces'),
+  usePdfPlaces: jest.fn(),
+}));
+jest.mock('../../utils/MissingFiles', () => ({ forgetIfGone: jest.fn(async () => false) }));
+
+type Vars = Record<string, string | number>;
+const t = (key: Parameters<typeof translate>[1], vars?: Vars) => translate('en', key, vars);
+
+const navigate = jest.fn();
+const openPDF = NativeModules.StorageModule.openPDF as jest.Mock;
+let announce: jest.SpyInstance;
+
+const shared = {
+  isSyncingDocs: false,
+  docSyncCount: 0,
+  totalDocs: 0,
+  lastDocSyncTime: Date.now() - 60_000,
+  handleDocumentSync: jest.fn(),
+};
+
+const places = {
+  ready: true,
+  standard: true,
+  canAskStandard: true,
+  canPick: true,
+  folders: [] as { uri: string; name: string }[],
+  refresh: jest.fn(),
+  addFolder: jest.fn(),
+  addFiles: jest.fn(),
+  removeFolder: jest.fn(),
+  allowStandard: jest.fn(),
+};
+
+// The category of a paper comes from its text: "cat:BANK_STATEMENT …".
+(classifyDocument as jest.Mock).mockImplementation((content: string) => ({
+  category: (content.match(/^cat:(\w+)/)?.[1] ?? 'GENERAL_DOCUMENT') as DocumentCategory,
+  label: '',
+  emoji: '',
+  confidence: 90,
 }));
 
-jest.mock('../../utils/DocumentClassifier', () => ({
-  classifyDocument: jest.fn(),
-}));
-
-jest.mock('@react-navigation/native', () => ({
-  useFocusEffect: jest.fn(),
-}));
-
-// ─── Mock handles ───────────────────────────────────────────────────────────
-
-const getAllDocumentsMock = getAllDocuments as jest.Mock;
-const classifyMock = classifyDocument as jest.Mock;
-const useFocusEffectMock = useFocusEffect as jest.Mock;
-const openURLMock = Linking.openURL as jest.Mock;
-const storageModule = NativeModules.StorageModule as { openPDF?: jest.Mock };
-
-let capturedFocusCallback: (() => void) | undefined;
-
-// Default classification: consult the per-test map, else GENERAL_DOCUMENT.
-(classifyDocument as jest.Mock).mockImplementation(
-  (content: string): ClassificationResult =>
-    classificationByContent.get(content) ??
-    asCategory('GENERAL_DOCUMENT', 'General Document', '📁', 50),
-);
-
-// ─── Fixtures ───────────────────────────────────────────────────────────────
-
-let docSeq = 0;
-
-const makeDoc = (overrides: Partial<DocumentRecord> = {}): DocumentRecord => {
-  docSeq += 1;
+let seq = 0;
+const paper = (title: string, category: DocumentCategory, over: Partial<DocumentRecord> = {}): DocumentRecord => {
+  seq += 1;
   return {
-    id: docSeq,
-    title: `Doc ${docSeq}`,
-    content: `content-${docSeq}`,
-    filePath: `/docs/doc-${docSeq}.pdf`,
+    id: seq,
+    title,
+    content: `cat:${category} ${title.toLowerCase()} text`,
+    filePath: `/storage/emulated/0/Download/paper-${seq}.pdf`,
     type: 'DOCUMENT',
     detection_type: 'TEXT',
-    timestamp: 1_700_000_000_000,
-    ...overrides,
+    timestamp: Date.now() - seq * 60_000,
+    ...over,
   };
 };
 
-const asCategory = (
-  category: DocumentCategory,
-  label: string,
-  emoji = '📄',
-  confidence = 90,
-): ClassificationResult => ({ category, emoji, label, confidence });
+let DOCS: DocumentRecord[] = [];
 
-// Content string → classification, consulted by the default mock implementation.
-const classificationByContent = new Map<string, ClassificationResult>();
+const titles = () =>
+  screen.queryAllByTestId(/^paper-\d+$/).map(row => within(row).getAllByText(/./)[0].props.children as string);
 
-const setClassification = (content: string, result: ClassificationResult) => {
-  classificationByContent.set(content, result);
+const renderPapers = async () => {
+  const view = await render(<DocumentVaultScreen />);
+  await waitFor(() => expect(getAllDocuments).toHaveBeenCalled());
+  return view;
 };
 
-type NavProp = React.ComponentProps<typeof DocumentVaultScreen>['navigation'];
-
-const makeNavigation = () => ({
-  goBack: jest.fn(),
-  navigate: jest.fn(),
+beforeEach(() => {
+  seq = 0;
+  DOCS = [
+    paper('Aadhaar card', 'AADHAAR_CARD'),
+    paper('Light bill March', 'ELECTRICITY_BILL'),
+    paper('SBI statement', 'BANK_STATEMENT'),
+    paper('Phone bill', 'PHONE_BILL'),
+    paper('Rent agreement', 'GENERAL_DOCUMENT'),
+  ];
+  (getAllDocuments as jest.Mock).mockReset().mockImplementation(() => DOCS);
+  (searchDocuments as jest.Mock).mockReset().mockReturnValue([]);
+  (useNavigation as jest.Mock).mockReturnValue({ navigate });
+  navigate.mockClear();
+  openPDF.mockClear();
+  Object.assign(shared, { isSyncingDocs: false, docSyncCount: 0, totalDocs: 0 });
+  shared.handleDocumentSync.mockClear();
+  (usePinpointerShared as jest.Mock).mockImplementation(() => shared);
+  Object.assign(places, { ready: true, standard: true, canPick: true, folders: [] });
+  places.addFolder.mockClear();
+  places.addFiles.mockClear();
+  (usePdfPlaces as jest.Mock).mockImplementation(() => places);
+  (forgetIfGone as jest.Mock).mockReset().mockResolvedValue(false);
+  announce = jest.spyOn(AccessibilityInfo, 'announceForAccessibility').mockImplementation(() => {});
+  resetPinnedCacheForTests();
+  (AsyncStorage as unknown as { __reset: () => void }).__reset();
 });
 
-const renderScreen = async (navigation = makeNavigation()) => {
-  const screen = await render(
-    <DocumentVaultScreen navigation={navigation as unknown as NavProp} />,
-  );
-  // Run the captured focus-effect callback explicitly, the way real
-  // navigation would after the screen gains focus.
-  await act(async () => {
-    capturedFocusCallback?.();
-  });
-  return { screen, navigation };
-};
-
-// ─── Press helpers ──────────────────────────────────────────────────────────
-
-/**
- * Press the element showing `text`. RNTL v14's fireEvent walks up the tree
- * to the nearest press handler, so pressing a nested label triggers the
- * enclosing TouchableOpacity's onPress.
- */
-const pressText = async (screen: RenderResult, text: string) => {
-  await fireEvent.press(screen.getByText(text));
-};
-
-/** All non-empty text leaves of the rendered host tree, in document order. */
-const textOrder = (screen: RenderResult): string[] => {
-  const out: string[] = [];
-  const walk = (node: unknown): void => {
-    if (typeof node === 'string') {
-      const t = node.trim();
-      if (t) out.push(t);
-      return;
-    }
-    if (typeof node === 'number') return;
-    if (Array.isArray(node)) {
-      node.forEach(walk);
-      return;
-    }
-    if (node !== null && typeof node === 'object' && 'children' in node) {
-      walk((node as { children?: unknown }).children);
-    }
-  };
-  walk(screen.toJSON());
-  return out;
-};
-
-/** Position of a label's text in document order (-1 when absent). */
-const indexOfText = (screen: RenderResult, label: string): number =>
-  textOrder(screen).indexOf(label);
-
-// ─── Suite ──────────────────────────────────────────────────────────────────
+afterEach(() => {
+  jest.restoreAllMocks();
+});
 
 describe('DocumentVaultScreen', () => {
-  beforeEach(() => {
-    jest.spyOn(console, 'log').mockImplementation(() => {});
-    jest.spyOn(console, 'warn').mockImplementation(() => {});
-    jest.spyOn(console, 'error').mockImplementation(() => {});
-
-    docSeq = 0;
-    classificationByContent.clear();
-    capturedFocusCallback = undefined;
-
-    getAllDocumentsMock.mockReset();
-    getAllDocumentsMock.mockReturnValue([]);
-    classifyMock.mockClear();
-    openURLMock.mockClear();
-    useFocusEffectMock.mockReset();
-    // Store-only: the real useFocusEffect runs its callback in an effect
-    // (after commit). Invoking it here during render would setState mid-render
-    // and loop forever, so renderScreen() runs it inside act() instead.
-    useFocusEffectMock.mockImplementation((cb: () => void) => {
-      capturedFocusCallback = cb;
-    });
-    if (storageModule.openPDF) {
-      storageModule.openPDF.mockClear();
-    }
+  it('lists every paper with its kind and when it was added', async () => {
+    await renderPapers();
+    expect(screen.getByRole('header', { name: t('papers.title') })).toBeTruthy();
+    expect(screen.getByText(t('papers.count', { n: 5 }))).toBeTruthy();
+    expect(screen.getByRole('header', { name: t('papers.recent') })).toBeTruthy();
+    expect(titles()).toEqual(['Aadhaar card', 'Light bill March', 'SBI statement', 'Phone bill', 'Rent agreement']);
+    const first = screen.getByTestId('paper-0');
+    expect(within(first).getByText(t('papers.kind.id'))).toBeTruthy();
+    expect(within(first).getByText(/^Added /)).toBeTruthy();
+    expect(screen.getByTestId('papers-ready')).toBeTruthy();
+    expect(screen.getByText(t('progress.allPapersReady', { total: 5 }))).toBeTruthy();
   });
 
-  afterEach(() => {
-    jest.restoreAllMocks();
+  it('shows six tiles with counts and narrows the list to one kind', async () => {
+    await renderPapers();
+    const bills = screen.getByTestId('papers-group-bills');
+    expect(bills.props.accessibilityLabel).toBe(t('papers.categoryLabel', { name: t('papers.cat.bills'), n: 2 }));
+    expect(screen.getByTestId('papers-group-medical').props.accessibilityState).toMatchObject({ disabled: true });
+
+    await fireEvent.press(bills);
+    expect(titles()).toEqual(['Light bill March', 'Phone bill']);
+    expect(screen.getByRole('header', { name: t('papers.cat.bills') })).toBeTruthy();
+    expect(screen.getByTestId('papers-group-bills').props.accessibilityState).toMatchObject({ selected: true });
+
+    await fireEvent.press(screen.getByText(t('papers.showAll')));
+    expect(titles()).toHaveLength(5);
+
+    await fireEvent.press(screen.getByTestId('papers-group-bank'));
+    expect(titles()).toEqual(['SBI statement']);
+    await fireEvent.press(screen.getByTestId('papers-group-bank'));
+    expect(titles()).toHaveLength(5);
   });
 
-  // ── Header & navigation ──────────────────────────────────────────────
-
-  test('renders the header title and subtitle', async () => {
-    const { screen } = await renderScreen();
-    expect(screen.getByText('Document Vault')).toBeTruthy();
-    expect(screen.getByText('AI-classified by Pinpointer')).toBeTruthy();
+  it('does nothing when an empty tile is tapped', async () => {
+    await renderPapers();
+    await fireEvent.press(screen.getByTestId('papers-group-medical'));
+    expect(titles()).toHaveLength(5);
   });
 
-  test('back button calls navigation.goBack', async () => {
-    const { screen, navigation } = await renderScreen();
-    await pressText(screen, '←');
-    expect(navigation.goBack).toHaveBeenCalledTimes(1);
+  it('finds papers by any word: the search engine first, then plain matches', async () => {
+    (searchDocuments as jest.Mock).mockReturnValue([DOCS[3], { ...DOCS[0], type: 'IMAGE' }]);
+    await renderPapers();
+    await fireEvent.press(screen.getByTestId('papers-search-toggle'));
+    expect(screen.queryByTestId('papers-groups')).toBeNull();
+    await fireEvent.changeText(screen.getByTestId('papers-search-input'), 'bill');
+    await waitFor(() => expect(titles()).toEqual(['Phone bill', 'Light bill March']));
+    expect(searchDocuments).toHaveBeenCalledWith('bill');
   });
 
-  // ── Data loading ─────────────────────────────────────────────────────
+  it('says so when nothing matches, and closing search shows everything again', async () => {
+    await renderPapers();
+    await fireEvent.press(screen.getByTestId('papers-search-toggle'));
+    await fireEvent.changeText(screen.getByTestId('papers-search-input'), 'passport');
+    await waitFor(() => expect(screen.getByTestId('papers-no-match')).toBeTruthy());
+    expect(screen.getByText(t('papers.noMatchTitle', { q: 'passport' }))).toBeTruthy();
 
-  test('calls getAllDocuments once when the screen gains focus', async () => {
-    await renderScreen();
-    expect(getAllDocumentsMock).toHaveBeenCalledTimes(1);
+    await fireEvent.press(screen.getByTestId('papers-search-toggle'));
+    expect(screen.queryByTestId('papers-search-input')).toBeNull();
+    expect(titles()).toHaveLength(5);
   });
 
-  test('passes each document content and filename to classifyDocument', async () => {
-    const doc = makeDoc({ content: 'aadhaar-content', filePath: '/docs/my-aadhaar.pdf' });
-    getAllDocumentsMock.mockReturnValue([doc]);
-    setClassification('aadhaar-content', asCategory('AADHAAR_CARD', 'Aadhaar Card', '🪪', 95));
-
-    await renderScreen();
-
-    expect(classifyMock).toHaveBeenCalledTimes(1);
-    expect(classifyMock).toHaveBeenCalledWith('aadhaar-content', 'my-aadhaar.pdf');
+  it('opens a paper in the PDF reader', async () => {
+    await renderPapers();
+    await fireEvent.press(screen.getByTestId('paper-2-open'));
+    await waitFor(() => expect(openPDF).toHaveBeenCalledWith(DOCS[2].filePath));
+    expect(forgetIfGone).toHaveBeenCalledWith(DOCS[2].filePath, 'DOCUMENT');
   });
 
-  test('classifies empty content as an empty string with the filename', async () => {
-    const doc = makeDoc({ content: '', filePath: '/docs/empty.pdf' });
-    getAllDocumentsMock.mockReturnValue([doc]);
-
-    await renderScreen();
-
-    expect(classifyMock).toHaveBeenCalledWith('', 'empty.pdf');
+  it('drops a paper that is no longer on the phone', async () => {
+    await renderPapers();
+    (forgetIfGone as jest.Mock).mockResolvedValue(true);
+    DOCS = DOCS.filter((_, i) => i !== 1);
+    await fireEvent.press(screen.getByTestId('paper-1-open'));
+    await waitFor(() => expect(announce).toHaveBeenCalledWith(t('error.fileGone')));
+    expect(openPDF).not.toHaveBeenCalled();
+    expect(titles()).not.toContain('Light bill March');
   });
 
-  // ── Empty state ──────────────────────────────────────────────────────
-
-  test('shows the empty state and zero stats when no documents are indexed', async () => {
-    const { screen } = await renderScreen();
-
-    expect(screen.getByText('No documents indexed yet')).toBeTruthy();
-    expect(screen.getByText('📂')).toBeTruthy();
-    expect(
-      screen.getByText('Run "Scan Docs" from the Pinpointer dashboard to discover and classify all PDFs on your device.'),
-    ).toBeTruthy();
-    // All three stats (Documents / Categories / ID Cards) read 0.
-    expect(screen.getAllByText('0')).toHaveLength(3);
-    expect(screen.queryByText('Identity Documents')).toBeNull();
-    expect(screen.queryByText('Financial Documents')).toBeNull();
-    expect(screen.queryByText('Other Documents')).toBeNull();
+  it('marks a paper Important with the star', async () => {
+    await renderPapers();
+    await fireEvent.press(screen.getByTestId('paper-0-star'));
+    await waitFor(() => expect(announce).toHaveBeenCalledWith(t('viewer.markedImportant')));
+    await waitFor(() => expect(screen.getByTestId('paper-0-star').props.accessibilityState).toMatchObject({ selected: true }));
+    await fireEvent.press(screen.getByTestId('paper-0-star'));
+    await waitFor(() => expect(announce).toHaveBeenCalledWith(t('viewer.removedImportant')));
   });
 
-  // ── Grouping & sections ──────────────────────────────────────────────
-
-  test('renders identity, financial and other sections for mixed documents', async () => {
-    const aadhaar = makeDoc({ content: 'c-aadhaar', filePath: '/docs/a.pdf' });
-    const invoice = makeDoc({ content: 'c-invoice', filePath: '/docs/i.pdf' });
-    const marksheet = makeDoc({ content: 'c-marksheet', filePath: '/docs/m.pdf' });
-    getAllDocumentsMock.mockReturnValue([aadhaar, invoice, marksheet]);
-    setClassification('c-aadhaar', asCategory('AADHAAR_CARD', 'Aadhaar Card', '🪪', 95));
-    setClassification('c-invoice', asCategory('INVOICE', 'Invoice', '🧾', 88));
-    setClassification('c-marksheet', asCategory('MARKSHEET', 'Marksheet', '🎓', 92));
-
-    const { screen } = await renderScreen();
-
-    expect(screen.getByText('Identity Documents')).toBeTruthy();
-    expect(screen.getByText('Financial Documents')).toBeTruthy();
-    expect(screen.getByText('Other Documents')).toBeTruthy();
-    expect(screen.getByText('Aadhaar Card')).toBeTruthy();
-    expect(screen.getByText('Invoice')).toBeTruthy();
-    expect(screen.getByText('Marksheet')).toBeTruthy();
+  it('shows the first page and loads more on "Show more"', async () => {
+    DOCS = Array.from({ length: PAPERS_PAGE + 4 }, (_, i) => paper(`Paper ${i + 1}`, 'GENERAL_DOCUMENT'));
+    await renderPapers();
+    expect(titles()).toHaveLength(PAPERS_PAGE);
+    await fireEvent.press(screen.getByText(t('search.showMore', { n: 4 })));
+    expect(titles()).toHaveLength(PAPERS_PAGE + 4);
+    expect(screen.queryByTestId('papers-more')).toBeNull();
   });
 
-  test('omits the financial section when there are no financial documents', async () => {
-    const aadhaar = makeDoc({ content: 'c-aadhaar', filePath: '/docs/a.pdf' });
-    getAllDocumentsMock.mockReturnValue([aadhaar]);
-    setClassification('c-aadhaar', asCategory('AADHAAR_CARD', 'Aadhaar Card', '🪪', 95));
-
-    const { screen } = await renderScreen();
-
-    expect(screen.getByText('Identity Documents')).toBeTruthy();
-    expect(screen.queryByText('Financial Documents')).toBeNull();
-    expect(screen.queryByText('Other Documents')).toBeNull();
+  it('says where it looks and opens the folders screen', async () => {
+    places.folders = [{ uri: 'u', name: 'Bills' }];
+    await renderPapers();
+    expect(screen.getByText(t('papers.whereBothOne'))).toBeTruthy();
+    await fireEvent.press(screen.getByTestId('papers-where'));
+    expect(navigate).toHaveBeenCalledWith('PdfFolders');
   });
 
-  test('groups same-category documents into a single card with a plural count', async () => {
-    const d1 = makeDoc({ content: 'c-aadhaar', filePath: '/docs/a1.pdf' });
-    const d2 = makeDoc({ content: 'c-aadhaar', filePath: '/docs/a2.pdf' });
-    getAllDocumentsMock.mockReturnValue([d1, d2]);
-    setClassification('c-aadhaar', asCategory('AADHAAR_CARD', 'Aadhaar Card', '🪪', 95));
+  it('adds a folder or PDFs from the sheet', async () => {
+    await renderPapers();
+    await fireEvent.press(screen.getByTestId('papers-add'));
+    expect(screen.getByRole('header', { name: t('papers.addTitle') })).toBeTruthy();
+    await fireEvent.press(screen.getByTestId('papers-add-folder'));
+    expect(places.addFolder).toHaveBeenCalled();
 
-    const { screen } = await renderScreen();
-
-    expect(screen.getAllByText('Aadhaar Card')).toHaveLength(1);
-    expect(screen.getByText('2 documents')).toBeTruthy();
+    await fireEvent.press(screen.getByTestId('papers-add'));
+    await fireEvent.press(screen.getByTestId('papers-add-files'));
+    expect(places.addFiles).toHaveBeenCalled();
   });
 
-  test('uses the singular "1 document" count for single-document categories', async () => {
-    const doc = makeDoc({ content: 'c-pan', filePath: '/docs/p.pdf' });
-    getAllDocumentsMock.mockReturnValue([doc]);
-    setClassification('c-pan', asCategory('PAN_CARD', 'PAN Card', '💳', 93));
-
-    const { screen } = await renderScreen();
-
-    expect(screen.getByText('1 document')).toBeTruthy();
+  it('goes to the folders screen to add when the pickers are missing', async () => {
+    places.canPick = false;
+    await renderPapers();
+    await fireEvent.press(screen.getByTestId('papers-add'));
+    expect(navigate).toHaveBeenCalledWith('PdfFolders');
+    expect(screen.queryByTestId('papers-add-sheet')).toBeNull();
   });
 
-  test('sorts category groups by document count, most documents first', async () => {
-    const a1 = makeDoc({ content: 'c-aadhaar', filePath: '/docs/a1.pdf' });
-    const a2 = makeDoc({ content: 'c-aadhaar', filePath: '/docs/a2.pdf' });
-    const p1 = makeDoc({ content: 'c-pan', filePath: '/docs/p1.pdf' });
-    getAllDocumentsMock.mockReturnValue([p1, a1, a2]); // pan inserted first
-    setClassification('c-aadhaar', asCategory('AADHAAR_CARD', 'Aadhaar Card', '🪪', 95));
-    setClassification('c-pan', asCategory('PAN_CARD', 'PAN Card', '💳', 93));
-
-    const { screen } = await renderScreen();
-
-    expect(indexOfText(screen, 'Aadhaar Card')).toBeGreaterThanOrEqual(0);
-    expect(indexOfText(screen, 'Aadhaar Card')).toBeLessThan(indexOfText(screen, 'PAN Card'));
+  it('with no papers, offers to find them or add a folder', async () => {
+    DOCS = [];
+    await renderPapers();
+    expect(screen.getByText(t('papers.emptyTitle'))).toBeTruthy();
+    expect(screen.queryByTestId('papers-search-toggle')).toBeNull();
+    expect(screen.queryByTestId('papers-groups')).toBeNull();
+    await fireEvent.press(screen.getByText(t('progress.findNewPapers')));
+    expect(shared.handleDocumentSync).toHaveBeenCalledWith();
+    await fireEvent.press(screen.getByTestId('papers-empty-secondary'));
+    expect(screen.getByTestId('papers-add-sheet')).toBeTruthy();
   });
 
-  test('sorts GENERAL_DOCUMENT last within the Other section', async () => {
-    const general = makeDoc({ content: 'c-general', filePath: '/docs/g.pdf' });
-    const marksheet = makeDoc({ content: 'c-marksheet', filePath: '/docs/m.pdf' });
-    getAllDocumentsMock.mockReturnValue([general, marksheet]); // general inserted first
-    setClassification('c-general', asCategory('GENERAL_DOCUMENT', 'General Document', '📁', 50));
-    setClassification('c-marksheet', asCategory('MARKSHEET', 'Marksheet', '🎓', 92));
+  it('shows progress while papers are read, and the new list when done', async () => {
+    Object.assign(shared, { isSyncingDocs: true, docSyncCount: 2, totalDocs: 8 });
+    DOCS = [];
+    const view = await renderPapers();
+    expect(screen.getByTestId('papers-progress')).toBeTruthy();
+    expect(screen.getByText(t('progress.papersTitle'))).toBeTruthy();
+    expect(screen.queryByTestId('papers-empty')).toBeNull();
 
-    const { screen } = await renderScreen();
-
-    expect(screen.getByText('Other Documents')).toBeTruthy();
-    expect(indexOfText(screen, 'Marksheet')).toBeLessThan(indexOfText(screen, 'General Document'));
+    DOCS = [paper('New scan', 'RECEIPT')];
+    Object.assign(shared, { isSyncingDocs: false });
+    await act(async () => view.rerender(<DocumentVaultScreen />));
+    await waitFor(() => expect(titles()).toEqual(['New scan']));
+    expect(screen.queryByTestId('papers-progress')).toBeNull();
   });
 
-  // ── Stats bar ────────────────────────────────────────────────────────
-
-  test('stats bar shows labels and the total document count', async () => {
-    const docs = [
-      makeDoc({ content: 'c-aadhaar', filePath: '/docs/a1.pdf' }),
-      makeDoc({ content: 'c-aadhaar', filePath: '/docs/a2.pdf' }),
-      makeDoc({ content: 'c-pan', filePath: '/docs/p1.pdf' }),
-      makeDoc({ content: 'c-invoice', filePath: '/docs/i1.pdf' }),
-    ];
-    getAllDocumentsMock.mockReturnValue(docs);
-    setClassification('c-aadhaar', asCategory('AADHAAR_CARD', 'Aadhaar Card', '🪪', 95));
-    setClassification('c-pan', asCategory('PAN_CARD', 'PAN Card', '💳', 93));
-    setClassification('c-invoice', asCategory('INVOICE', 'Invoice', '🧾', 88));
-
-    const { screen } = await renderScreen();
-
-    expect(screen.getByText('Documents')).toBeTruthy();
-    expect(screen.getByText('Categories')).toBeTruthy();
-    expect(screen.getByText('ID Cards')).toBeTruthy();
-    // 4 docs total; per-group badges are 2/1/1 and section counts are 3/1,
-    // so the bare '4' only appears in the stats bar.
-    expect(screen.getByText('4')).toBeTruthy();
+  it('keeps papers already read on screen during a check', async () => {
+    Object.assign(shared, { isSyncingDocs: true, docSyncCount: 1, totalDocs: 3 });
+    await renderPapers();
+    expect(screen.getByTestId('papers-progress')).toBeTruthy();
+    expect(titles()).toHaveLength(5);
   });
 
-  // ── Expand / collapse ────────────────────────────────────────────────
-
-  test('tapping a category card expands it to reveal its documents', async () => {
-    const doc = makeDoc({ title: 'My Aadhaar', content: 'c-aadhaar', filePath: '/docs/aadhaar.pdf' });
-    getAllDocumentsMock.mockReturnValue([doc]);
-    setClassification('c-aadhaar', asCategory('AADHAAR_CARD', 'Aadhaar Card', '🪪', 95));
-
-    const { screen } = await renderScreen();
-
-    expect(screen.queryByText('My Aadhaar')).toBeNull();
-    await pressText(screen, 'Aadhaar Card');
-    expect(screen.getByText('My Aadhaar')).toBeTruthy();
-    expect(screen.getByText('aadhaar.pdf')).toBeTruthy();
+  it('without All files access, checks chosen folders quietly', async () => {
+    places.standard = false;
+    await renderPapers();
+    await fireEvent.press(screen.getByText(t('progress.checkAgain')));
+    expect(shared.handleDocumentSync).toHaveBeenCalledWith(undefined, true);
   });
 
-  test('tapping an expanded category card collapses it again', async () => {
-    const doc = makeDoc({ title: 'My Aadhaar', content: 'c-aadhaar', filePath: '/docs/aadhaar.pdf' });
-    getAllDocumentsMock.mockReturnValue([doc]);
-    setClassification('c-aadhaar', asCategory('AADHAAR_CARD', 'Aadhaar Card', '🪪', 95));
-
-    const { screen } = await renderScreen();
-
-    await pressText(screen, 'Aadhaar Card');
-    expect(screen.getByText('My Aadhaar')).toBeTruthy();
-    await pressText(screen, 'Aadhaar Card');
-    expect(screen.queryByText('My Aadhaar')).toBeNull();
+  it('with nothing it may read, shows where it can look instead of a pop-up', async () => {
+    places.standard = false;
+    DOCS = [];
+    await renderPapers();
+    await fireEvent.press(screen.getByText(t('progress.findNewPapers')));
+    expect(shared.handleDocumentSync).not.toHaveBeenCalled();
+    expect(navigate).toHaveBeenCalledWith('PdfFolders');
   });
 
-  test('expanding one category does not expand the others', async () => {
-    const a = makeDoc({ title: 'Aadhaar Doc', content: 'c-aadhaar', filePath: '/docs/a.pdf' });
-    const p = makeDoc({ title: 'PAN Doc', content: 'c-pan', filePath: '/docs/p.pdf' });
-    getAllDocumentsMock.mockReturnValue([a, p]);
-    setClassification('c-aadhaar', asCategory('AADHAAR_CARD', 'Aadhaar Card', '🪪', 95));
-    setClassification('c-pan', asCategory('PAN_CARD', 'PAN Card', '💳', 93));
-
-    const { screen } = await renderScreen();
-
-    await pressText(screen, 'Aadhaar Card');
-    expect(screen.getByText('Aadhaar Doc')).toBeTruthy();
-    expect(screen.queryByText('PAN Doc')).toBeNull();
-  });
-
-  test('shows "Untitled" for documents without a title', async () => {
-    const doc = makeDoc({ title: undefined, content: 'c-aadhaar', filePath: '/docs/notitled.pdf' });
-    getAllDocumentsMock.mockReturnValue([doc]);
-    setClassification('c-aadhaar', asCategory('AADHAAR_CARD', 'Aadhaar Card', '🪪', 95));
-
-    const { screen } = await renderScreen();
-
-    await pressText(screen, 'Aadhaar Card');
-    expect(screen.getByText('Untitled')).toBeTruthy();
-    expect(screen.getByText('notitled.pdf')).toBeTruthy();
-  });
-
-  // ── Opening documents ────────────────────────────────────────────────
-
-  test('tapping a document opens it via StorageModule with file:// stripped', async () => {
-    const doc = makeDoc({
-      title: 'My Aadhaar',
-      content: 'c-aadhaar',
-      filePath: 'file:///docs/aadhaar.pdf',
-    });
-    getAllDocumentsMock.mockReturnValue([doc]);
-    setClassification('c-aadhaar', asCategory('AADHAAR_CARD', 'Aadhaar Card', '🪪', 95));
-
-    const { screen } = await renderScreen();
-
-    await pressText(screen, 'Aadhaar Card');
-    await pressText(screen, 'My Aadhaar');
-
-    expect(storageModule.openPDF).toHaveBeenCalledTimes(1);
-    expect(storageModule.openPDF).toHaveBeenCalledWith('/docs/aadhaar.pdf');
-    expect(openURLMock).not.toHaveBeenCalled();
-  });
-
-  test('passes plain paths to StorageModule.openPDF unchanged', async () => {
-    const doc = makeDoc({
-      title: 'Plain Path',
-      content: 'c-aadhaar',
-      filePath: '/docs/plain.pdf',
-    });
-    getAllDocumentsMock.mockReturnValue([doc]);
-    setClassification('c-aadhaar', asCategory('AADHAAR_CARD', 'Aadhaar Card', '🪪', 95));
-
-    const { screen } = await renderScreen();
-
-    await pressText(screen, 'Aadhaar Card');
-    await pressText(screen, 'Plain Path');
-
-    expect(storageModule.openPDF).toHaveBeenCalledWith('/docs/plain.pdf');
-  });
-
-  test('falls back to Linking.openURL when StorageModule.openPDF is unavailable', async () => {
-    const original = storageModule.openPDF;
-    storageModule.openPDF = undefined;
-    try {
-      const doc = makeDoc({
-        title: 'Fallback Doc',
-        content: 'c-aadhaar',
-        filePath: 'file:///docs/fallback.pdf',
-      });
-      getAllDocumentsMock.mockReturnValue([doc]);
-      setClassification('c-aadhaar', asCategory('AADHAAR_CARD', 'Aadhaar Card', '🪪', 95));
-
-      const { screen } = await renderScreen();
-
-      await pressText(screen, 'Aadhaar Card');
-      await pressText(screen, 'Fallback Doc');
-
-      expect(openURLMock).toHaveBeenCalledTimes(1);
-      expect(openURLMock).toHaveBeenCalledWith('file:///docs/fallback.pdf');
-    } finally {
-      storageModule.openPDF = original;
-    }
-  });
-
-  test('Linking fallback prefixes file:// when the path lacks it', async () => {
-    const original = storageModule.openPDF;
-    storageModule.openPDF = undefined;
-    try {
-      const doc = makeDoc({
-        title: 'No Scheme Doc',
-        content: 'c-aadhaar',
-        filePath: '/docs/noscheme.pdf',
-      });
-      getAllDocumentsMock.mockReturnValue([doc]);
-      setClassification('c-aadhaar', asCategory('AADHAAR_CARD', 'Aadhaar Card', '🪪', 95));
-
-      const { screen } = await renderScreen();
-
-      await pressText(screen, 'Aadhaar Card');
-      await pressText(screen, 'No Scheme Doc');
-
-      expect(openURLMock).toHaveBeenCalledWith('file:///docs/noscheme.pdf');
-    } finally {
-      storageModule.openPDF = original;
-    }
-  });
-
-  test('warns but does not crash when StorageModule.openPDF throws', async () => {
-    storageModule.openPDF?.mockImplementation(() => {
-      throw new Error('native crash');
-    });
-    const doc = makeDoc({
-      title: 'Crash Doc',
-      content: 'c-aadhaar',
-      filePath: '/docs/crash.pdf',
-    });
-    getAllDocumentsMock.mockReturnValue([doc]);
-    setClassification('c-aadhaar', asCategory('AADHAAR_CARD', 'Aadhaar Card', '🪪', 95));
-
-    const { screen } = await renderScreen();
-
-    await pressText(screen, 'Aadhaar Card');
-    await pressText(screen, 'Crash Doc');
-
-    expect(console.warn).toHaveBeenCalledWith(
-      '[DocumentVault] Failed to open document:',
-      expect.any(Error),
-    );
-    // The list is still intact after the failed open.
-    expect(screen.getByText('Crash Doc')).toBeTruthy();
-  });
-
-  test('warns but does not crash when Linking.openURL throws', async () => {
-    const original = storageModule.openPDF;
-    storageModule.openPDF = undefined;
-    openURLMock.mockImplementation(() => {
-      throw new Error('cannot open url');
-    });
-    try {
-      const doc = makeDoc({
-        title: 'Bad Link Doc',
-        content: 'c-aadhaar',
-        filePath: '/docs/badlink.pdf',
-      });
-      getAllDocumentsMock.mockReturnValue([doc]);
-      setClassification('c-aadhaar', asCategory('AADHAAR_CARD', 'Aadhaar Card', '🪪', 95));
-
-      const { screen } = await renderScreen();
-
-      await pressText(screen, 'Aadhaar Card');
-      await pressText(screen, 'Bad Link Doc');
-
-      expect(console.warn).toHaveBeenCalledWith(
-        '[DocumentVault] Failed to open document:',
-        expect.any(Error),
-      );
-    } finally {
-      storageModule.openPDF = original;
-    }
-  });
-
-  // ── Refocus reload ───────────────────────────────────────────────────
-
-  test('reloads documents when the screen regains focus', async () => {
-    const first = makeDoc({ title: 'First Doc', content: 'c-aadhaar', filePath: '/docs/first.pdf' });
-    getAllDocumentsMock.mockReturnValue([first]);
-    setClassification('c-aadhaar', asCategory('AADHAAR_CARD', 'Aadhaar Card', '🪪', 95));
-
-    const { screen } = await renderScreen();
-    expect(getAllDocumentsMock).toHaveBeenCalledTimes(1);
-
-    const second = makeDoc({ title: 'Second Doc', content: 'c-pan', filePath: '/docs/second.pdf' });
-    getAllDocumentsMock.mockReturnValue([first, second]);
-    setClassification('c-pan', asCategory('PAN_CARD', 'PAN Card', '💳', 93));
-
-    await act(async () => {
-      capturedFocusCallback?.();
-    });
-
-    expect(getAllDocumentsMock).toHaveBeenCalledTimes(2);
-    expect(screen.getByText('Aadhaar Card')).toBeTruthy();
-    expect(screen.getByText('PAN Card')).toBeTruthy();
-  });
-
-  test('stats update when refocused with new data', async () => {
-    getAllDocumentsMock.mockReturnValue([]);
-    const { screen } = await renderScreen();
-    expect(screen.getByText('No documents indexed yet')).toBeTruthy();
-
-    const docs = [
-      makeDoc({ content: 'c-aadhaar', filePath: '/docs/a1.pdf' }),
-      makeDoc({ content: 'c-aadhaar', filePath: '/docs/a2.pdf' }),
-      makeDoc({ content: 'c-aadhaar', filePath: '/docs/a3.pdf' }),
-    ];
-    getAllDocumentsMock.mockReturnValue(docs);
-    setClassification('c-aadhaar', asCategory('AADHAAR_CARD', 'Aadhaar Card', '🪪', 95));
-
-    await act(async () => {
-      capturedFocusCallback?.();
-    });
-
-    // The same mounted screen re-rendered: empty state gone, stats updated.
-    expect(screen.queryByText('No documents indexed yet')).toBeNull();
-    expect(screen.getByText('Aadhaar Card')).toBeTruthy();
-    expect(screen.getByText('3 documents')).toBeTruthy();
-  });
-
-  // ── Footer ───────────────────────────────────────────────────────────
-
-  test('renders the on-device privacy footer', async () => {
-    const { screen } = await renderScreen();
-    expect(
-      screen.getByText('All classification is done on-device. No data leaves your phone.'),
-    ).toBeTruthy();
-  });
-
-  // ── Text component sanity ────────────────────────────────────────────
-
-  test('shows the classification emoji on each category card', async () => {
-    const doc = makeDoc({ content: 'c-aadhaar', filePath: '/docs/a.pdf' });
-    getAllDocumentsMock.mockReturnValue([doc]);
-    setClassification('c-aadhaar', asCategory('AADHAAR_CARD', 'Aadhaar Card', '🪪', 95));
-
-    const { screen } = await renderScreen();
-
-    expect(screen.getAllByText('🪪').length).toBeGreaterThan(0);
+  it('checks again from the ready card', async () => {
+    await renderPapers();
+    await fireEvent.press(screen.getByText(t('progress.checkAgain')));
+    expect(shared.handleDocumentSync).toHaveBeenCalledWith();
   });
 });

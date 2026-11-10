@@ -15,6 +15,7 @@ import {
   GalleryScreen,
   DocumentVaultScreen,
   SettingsScreen,
+  PdfFoldersScreen,
 } from './screens';
 import { setupDatabase, closeDatabase } from './database';
 import { MainTabParamList, StackParamList } from './navigation/types';
@@ -96,7 +97,8 @@ const App: React.FC = () => {
 
             {/* Opened on top of the tabs */}
             <Stack.Screen name="Home" component={HomeScreen} options={{ headerShown: false }} />
-            <Stack.Screen name="SmartClipboard" component={SmartClipboardScreen} options={{ title: 'Scan Images' }} />
+            <Stack.Screen name="SmartClipboard" component={SmartClipboardScreen} options={{ headerShown: false }} />
+            <Stack.Screen name="PdfFolders" component={PdfFoldersScreen} options={{ headerShown: false }} />
           </Stack.Navigator>
         </NavigationContainer>
         </PinpointerProvider>
