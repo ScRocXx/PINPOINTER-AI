@@ -9,11 +9,15 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Alert, AppState, Linking, NativeModules, PermissionsAndroid, Platform } from 'react-native';
 
 import {
+    allFilesAccessApplies,
     ensureDocumentAccess,
     ensurePhotoAccess,
+    getDocumentAccess,
     getPhotoAccess,
     hasDocumentAccess,
     hasPhotoAccess,
+    isLimitedAccessKept,
+    keepLimitedAccess,
     requestPhotoAccess,
 } from '../StoragePermissions';
 
@@ -344,5 +348,45 @@ describe('document access without All Files Access (folder picker and Share)', (
         await flush();
         press('Pick PDFs');
         expect(await result).toBe(false);
+    });
+});
+
+describe('first-run helpers', () => {
+    const modules = NativeModules as Record<string, unknown>;
+
+    afterEach(() => {
+        delete modules.DocumentAccessModule;
+    });
+
+    it('remembers "keep my choice" for limited photos, which also quiets the sync alert', async () => {
+        expect(await isLimitedAccessKept()).toBe(false);
+        await keepLimitedAccess();
+        expect(await isLimitedAccessKept()).toBe(true);
+
+        granted.add(P.READ_MEDIA_VISUAL_USER_SELECTED);
+        expect(await ensurePhotoAccess()).toBe(true);
+        expect(alertSpy).not.toHaveBeenCalled();
+    });
+
+    it('says PDFs need their own permission only on Android 11+', () => {
+        setPlatform('android', 30);
+        expect(allFilesAccessApplies()).toBe(true);
+        setPlatform('android', 29);
+        expect(allFilesAccessApplies()).toBe(false);
+        setPlatform('ios');
+        expect(allFilesAccessApplies()).toBe(false);
+    });
+
+    it('reads PDF access as all, folders or none', async () => {
+        (StorageModule.hasAllFilesAccess as jest.Mock).mockResolvedValue(true);
+        expect(await getDocumentAccess()).toBe('all');
+
+        (StorageModule.hasAllFilesAccess as jest.Mock).mockResolvedValue(false);
+        expect(await getDocumentAccess()).toBe('none');
+
+        modules.DocumentAccessModule = {
+            listPdfFolders: jest.fn(async () => [{ uri: 'content://tree/Bills', name: 'Bills' }]),
+        };
+        expect(await getDocumentAccess()).toBe('folders');
     });
 });

@@ -179,6 +179,36 @@ export const ensurePhotoAccess = async (): Promise<boolean> => {
     return false; // 'denied': the user just said no in the system dialog
 };
 
+/** True once the person chose to keep "Select photos" (limited access). */
+export const isLimitedAccessKept = async (): Promise<boolean> =>
+    !!(await AsyncStorage.getItem(LIMITED_OK_KEY).catch(() => null));
+
+/**
+ * Remember that the person wants to keep limited photo access, so neither the
+ * "only some photos" banner nor the sync alert asks again.
+ */
+export const keepLimitedAccess = async (): Promise<void> => {
+    await AsyncStorage.setItem(LIMITED_OK_KEY, '1').catch(() => undefined);
+};
+
+/**
+ * True when PDFs need their own permission ("All files access", Android 11+).
+ * Below Android 11 the photo permission already covers files.
+ */
+export const allFilesAccessApplies = (): boolean => Platform.OS === 'android' && apiLevel() >= ANDROID_11;
+
+/**
+ * all = every PDF in Download/ and Documents/; folders = only folders the
+ * person picked; none = no PDFs yet (shared and picked PDFs still work).
+ */
+export type DocumentAccess = 'all' | 'folders' | 'none';
+
+/** What Pinpointer may read for PDFs, without showing anything. */
+export const getDocumentAccess = async (): Promise<DocumentAccess> => {
+    if (await hasDocumentAccess()) return 'all';
+    return (await listPdfFolders()).length > 0 ? 'folders' : 'none';
+};
+
 /** True when Pinpointer may read PDFs in shared storage (Download, Documents). */
 export const hasDocumentAccess = async (): Promise<boolean> => {
     if (Platform.OS !== 'android') return true;
