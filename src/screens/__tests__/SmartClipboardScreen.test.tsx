@@ -1,126 +1,78 @@
 /**
- * Tests for SmartClipboardScreen — the OCR "scan to clipboard" screen.
+ * SmartClipboardScreen ("Read text from a photo", the Scan button).
  *
- * Strategy (all through the rendered UI):
- *   - '../../utils/VisionPipeline' mocked (analyzeImage: jest.fn())
- *   - '../../database' mocked ({ indexDocument: jest.fn() })
- *   - '@react-navigation/native' mocked (useRoute/useNavigation: jest.fn(),
- *     wired per-test in beforeEach)
- *   - 'react-native-image-picker' and '@react-native-clipboard/clipboard'
- *     come from the repo's root __mocks__ (in-memory jest.fn()s).
- *   - Alert.alert / Share.share / Vibration.vibrate are spied per test.
- *
- * Ground-truth notes (verified against the source, not assumed):
- *   - Clipboard.getString is never called by this screen; there is no
- *     "read clipboard on mount" behavior to test.
- *   - buildIndexableContent is imported but never used by the screen.
- *   - handleSave (which calls indexDocument) is defined but NOT wired to
- *     any button, so it is unreachable through the UI and not tested here.
- *
- * RNTL v14: render / fireEvent / waitFor / act are async — await them.
- * fireEvent.press on a text node climbs the fiber tree to the wrapping
- * pressable, so buttons are pressed via their visible labels.
+ * - '../../utils/VisionPipeline' is mocked: each test says what the photo
+ *   holds (words, only objects, nothing, or a failure).
+ * - 'react-native-image-picker' and '@react-native-clipboard/clipboard' come
+ *   from the repo's root __mocks__.
+ * - '@react-navigation/native' is mocked (useRoute / useNavigation).
+ * - Toasts fall back to TalkBack announcements without a provider, so they
+ *   are checked through AccessibilityInfo.
  */
 import React from 'react';
-import { Alert, Share, Vibration } from 'react-native';
-import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
-
-import { SmartClipboardScreen } from '../SmartClipboardScreen';
-import { analyzeImage, type VisionResult } from '../../utils/VisionPipeline';
+import { AccessibilityInfo, Share, Vibration } from 'react-native';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { launchCamera, launchImageLibrary } from 'react-native-image-picker';
 import Clipboard from '@react-native-clipboard/clipboard';
-
-jest.mock('../../utils/VisionPipeline', () => ({
-  analyzeImage: jest.fn(),
-}));
-jest.mock('../../database', () => ({
-  indexDocument: jest.fn(),
-}));
-jest.mock('@react-navigation/native', () => ({
-  useRoute: jest.fn(),
-  useNavigation: jest.fn(),
-}));
-
 import { useNavigation, useRoute } from '@react-navigation/native';
+import { AUTO_SCAN_DELAY_MS, SmartClipboardScreen, countWords, resetScanClipsForTests } from '../SmartClipboardScreen';
+import { analyzeImage, type VisionResult } from '../../utils/VisionPipeline';
+import { translate } from '../../i18n/strings';
 
-const analyzeImageMock = analyzeImage as jest.Mock;
-const launchCameraMock = launchCamera as jest.Mock;
-const launchImageLibraryMock = launchImageLibrary as jest.Mock;
-const clipboardSetStringMock = Clipboard.setString as jest.Mock;
-const useRouteMock = useRoute as jest.Mock;
-const useNavigationMock = useNavigation as jest.Mock;
-const mockSetParams = jest.fn();
+jest.mock('../../utils/VisionPipeline', () => ({ analyzeImage: jest.fn() }));
+jest.mock('@react-navigation/native', () => ({ useRoute: jest.fn(), useNavigation: jest.fn() }));
 
-let mockRouteParams: { scanUri?: string } = {};
+type Vars = Record<string, string | number>;
+const t = (key: Parameters<typeof translate>[1], vars?: Vars) => translate('en', key, vars);
 
-type Screen = Awaited<ReturnType<typeof render>>;
+const analyze = analyzeImage as jest.Mock;
+const camera = launchCamera as jest.Mock;
+const gallery = launchImageLibrary as jest.Mock;
+const setString = Clipboard.setString as jest.Mock;
 
-const PHOTO_URI = 'file:///photo.jpg';
+const nav = { goBack: jest.fn(), navigate: jest.fn(), setParams: jest.fn(), canGoBack: jest.fn(() => true) };
+let params: { scanUri?: string } | undefined;
+let announce: jest.SpyInstance;
+let vibrate: jest.SpyInstance;
+let share: jest.SpyInstance;
 
-const visionResult = (overrides: Partial<VisionResult> = {}): VisionResult => ({
+const PHOTO = 'file:///cache/photo.jpg';
+const BILL = 'Electricity bill\nAmount due 1240';
+
+const vision = (over: Partial<VisionResult> = {}): VisionResult => ({
   detection_type: 'TEXT',
-  raw_text: '',
+  raw_text: BILL,
   content: '',
   search_index: [],
   optimized_status: '',
   embedding: null,
-  ...overrides,
+  ...over,
 });
 
-const mockCameraPhoto = (uri: string = PHOTO_URI): void => {
-  launchCameraMock.mockResolvedValue({ assets: [{ uri }] });
-};
-
-let alertSpy: jest.SpyInstance;
-let shareSpy: jest.SpyInstance;
-let vibrateSpy: jest.SpyInstance;
-let consoleErrorSpy: jest.SpyInstance;
-
-/** Drive the full camera → analysis → result flow; resolves when result UI is up. */
-const scanViaCamera = async (  rawText: string,
-  detectionType: 'TEXT' | 'OBJECT' | 'EMPTY' = 'TEXT',
-  uri: string = PHOTO_URI,
-): Promise<Screen> => {
-  mockCameraPhoto(uri);
-  analyzeImageMock.mockResolvedValue(
-    visionResult({ detection_type: detectionType, raw_text: rawText, content: rawText }),
-  );
-  const screen = await render(<SmartClipboardScreen />);
-  await fireEvent.press(screen.getByText('Take Photo'));
-  if (detectionType === 'EMPTY') {
-    await waitFor(() =>
-      expect(alertSpy).toHaveBeenCalledWith('No Text Found', expect.anything()),
-    );
+/** Take a photo with the camera and wait until reading has finished. */
+const scan = async (result: VisionResult | Error = vision()) => {
+  camera.mockResolvedValueOnce({ assets: [{ uri: PHOTO }] });
+  if (result instanceof Error) {
+    analyze.mockRejectedValueOnce(result);
   } else {
-    await waitFor(() => expect(analyzeImageMock).toHaveBeenCalledWith(uri));
-    await waitFor(() => expect(screen.queryByText('Extracting text...')).toBeNull());
+    analyze.mockResolvedValueOnce(result);
   }
-  return screen;
+  await fireEvent.press(screen.getByTestId('scan-camera'));
+  await waitFor(() => expect(screen.queryByTestId('scan-reading')).toBeNull());
 };
 
 beforeEach(() => {
-  jest.spyOn(console, 'log').mockImplementation(() => {});
-  jest.spyOn(console, 'warn').mockImplementation(() => {});
-  consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-  alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
-  shareSpy = jest
-    .spyOn(Share, 'share')
-    .mockResolvedValue({ action: Share.sharedAction });
-  vibrateSpy = jest.spyOn(Vibration, 'vibrate').mockImplementation(() => {});
-
-  mockRouteParams = {};
-  mockSetParams.mockClear();
-  useRouteMock.mockReturnValue({ params: mockRouteParams });
-  useNavigationMock.mockReturnValue({
-    setParams: mockSetParams,
-    navigate: jest.fn(),
-    goBack: jest.fn(),
-  });
-
-  analyzeImageMock.mockReset();
-  launchCameraMock.mockReset().mockResolvedValue({ assets: [] });
-  launchImageLibraryMock.mockReset().mockResolvedValue({ assets: [] });
-  clipboardSetStringMock.mockClear();
+  jest.clearAllMocks();
+  params = undefined;
+  (useRoute as jest.Mock).mockImplementation(() => ({ key: 'scan', name: 'SmartClipboard', params }));
+  (useNavigation as jest.Mock).mockReturnValue(nav);
+  camera.mockResolvedValue({ assets: [] });
+  gallery.mockResolvedValue({ assets: [] });
+  resetScanClipsForTests();
+  announce = jest.spyOn(AccessibilityInfo, 'announceForAccessibility').mockImplementation(() => {});
+  vibrate = jest.spyOn(Vibration, 'vibrate').mockImplementation(() => {});
+  share = jest.spyOn(Share, 'share').mockResolvedValue({ action: 'sharedAction' });
+  jest.spyOn(console, 'error').mockImplementation(() => {});
 });
 
 afterEach(() => {
@@ -128,404 +80,175 @@ afterEach(() => {
 });
 
 describe('SmartClipboardScreen', () => {
-  describe('landing state', () => {
-    test('renders the hero title, subtitle, and both action buttons', async () => {
-      const screen = await render(<SmartClipboardScreen />);
-      expect(screen.getByText('Smart Clipboard')).toBeTruthy();
-      expect(
-        screen.getByText(
-          'Copy text from the real world — signs, books, labels, whiteboards',
-        ),
-      ).toBeTruthy();
-      expect(screen.getByText('Take Photo')).toBeTruthy();
-      expect(screen.getByText('Pick from Gallery')).toBeTruthy();
-    });
-
-    test('shows no history section before anything is copied', async () => {
-      const screen = await render(<SmartClipboardScreen />);
-      expect(screen.queryByText('📌 Recent Clips')).toBeNull();
-    });
-
-    test('does not clear route params when no scanUri is provided', async () => {
-      await render(<SmartClipboardScreen />);
-      expect(mockSetParams).not.toHaveBeenCalled();
-    });
+  it('starts with a plain explanation and two ways to get a photo', async () => {
+    await render(<SmartClipboardScreen />);
+    expect(screen.getByRole('header', { name: t('scan.title') })).toBeTruthy();
+    expect(screen.getByText(t('scan.intro'))).toBeTruthy();
+    expect(screen.getByText(t('scan.languages'))).toBeTruthy();
+    expect(screen.getByText(t('scan.takePhoto'))).toBeTruthy();
+    expect(screen.getByText(t('scan.pickPhoto'))).toBeTruthy();
+    expect(screen.queryByTestId('scan-clips')).toBeNull();
   });
 
-  describe('camera and gallery intents', () => {
-    test('Take Photo calls launchCamera with the expected options', async () => {
-      const screen = await render(<SmartClipboardScreen />);
-      await fireEvent.press(screen.getByText('Take Photo'));
-      expect(launchCameraMock).toHaveBeenCalledWith({
-        mediaType: 'photo',
-        quality: 0.5,
-        maxWidth: 1024,
-        maxHeight: 1024,
-        saveToPhotos: false,
-      });
-    });
+  it('reads the words from a camera photo and lets the person fix them', async () => {
+    await render(<SmartClipboardScreen />);
+    await scan();
+    expect(camera).toHaveBeenCalledWith(expect.objectContaining({ mediaType: 'photo', saveToPhotos: false }));
+    expect(analyze).toHaveBeenCalledWith(PHOTO);
+    expect(screen.getByRole('header', { name: t('scan.textFound') })).toBeTruthy();
+    expect(screen.getByTestId('scan-text').props.value).toBe(BILL);
+    expect(screen.getByText(t('scan.words', { n: 5 }))).toBeTruthy();
+    expect(screen.getByTestId('scan-photo-image').props.source).toEqual({ uri: PHOTO });
+    expect(vibrate).toHaveBeenCalledWith(30);
 
-    test('Pick from Gallery calls launchImageLibrary with the expected options', async () => {
-      const screen = await render(<SmartClipboardScreen />);
-      await fireEvent.press(screen.getByText('Pick from Gallery'));
-      expect(launchImageLibraryMock).toHaveBeenCalledWith({
-        mediaType: 'photo',
-        quality: 0.5,
-        maxWidth: 1024,
-        maxHeight: 1024,
-      });
-    });
-
-    test('cancelled camera picker does not start analysis', async () => {
-      const screen = await render(<SmartClipboardScreen />);
-      await fireEvent.press(screen.getByText('Take Photo'));
-      expect(launchCameraMock).toHaveBeenCalledTimes(1);
-      expect(analyzeImageMock).not.toHaveBeenCalled();
-      expect(screen.getByText('Take Photo')).toBeTruthy();
-    });
-
-    test('cancelled gallery picker does not start analysis', async () => {
-      const screen = await render(<SmartClipboardScreen />);
-      await fireEvent.press(screen.getByText('Pick from Gallery'));
-      expect(launchImageLibraryMock).toHaveBeenCalledTimes(1);
-      expect(analyzeImageMock).not.toHaveBeenCalled();
-      expect(screen.getByText('Take Photo')).toBeTruthy();
-    });
-
-    test('camera failure logs an error and stays on landing', async () => {
-      launchCameraMock.mockRejectedValue(new Error('permission denied'));
-      const screen = await render(<SmartClipboardScreen />);
-      await fireEvent.press(screen.getByText('Take Photo'));
-      await waitFor(() =>
-        expect(consoleErrorSpy).toHaveBeenCalledWith(
-          '[SmartClipboard] Camera error:',
-          expect.anything(),
-        ),
-      );
-      expect(analyzeImageMock).not.toHaveBeenCalled();
-      expect(screen.getByText('Take Photo')).toBeTruthy();
-    });
-
-    test('gallery failure logs an error and stays on landing', async () => {
-      launchImageLibraryMock.mockRejectedValue(new Error('picker exploded'));
-      const screen = await render(<SmartClipboardScreen />);
-      await fireEvent.press(screen.getByText('Pick from Gallery'));
-      await waitFor(() =>
-        expect(consoleErrorSpy).toHaveBeenCalledWith(
-          '[SmartClipboard] Gallery error:',
-          expect.anything(),
-        ),
-      );
-      expect(analyzeImageMock).not.toHaveBeenCalled();
-      expect(screen.getByText('Take Photo')).toBeTruthy();
-    });
+    await fireEvent.changeText(screen.getByTestId('scan-text'), 'Amount due');
+    expect(screen.getByText(t('scan.words', { n: 2 }))).toBeTruthy();
   });
 
-  describe('scan flow', () => {
-    test('shows the processing indicator while OCR runs', async () => {
-      let resolveAnalysis: (v: VisionResult) => void = () => {};
-      analyzeImageMock.mockImplementation(
-        () =>
-          new Promise<VisionResult>((res) => {
-            resolveAnalysis = res;
-          }),
-      );
-      mockCameraPhoto();
-      const screen = await render(<SmartClipboardScreen />);
-      await fireEvent.press(screen.getByText('Take Photo'));
-      await waitFor(() =>
-        expect(screen.getByText('Extracting text...')).toBeTruthy(),
-      );
-      expect(
-        screen.getByText('Running OCR (Hindi + English) on your image'),
-      ).toBeTruthy();
-      await act(async () => {
-        resolveAnalysis(visionResult({ raw_text: 'Hi' }));
-      });
-      await waitFor(() =>
-        expect(screen.queryByText('Extracting text...')).toBeNull(),
-      );
-    });
-
-    test('successful TEXT scan shows the badge, editor text, char count, and vibrates', async () => {
-      const screen = await scanViaCamera('Hello world');
-      expect(analyzeImageMock).toHaveBeenCalledWith(PHOTO_URI);
-      expect(screen.getByText('✅ Text Detected')).toBeTruthy();
-      expect(screen.getByPlaceholderText('No text extracted...').props.value).toBe(
-        'Hello world',
-      );
-      expect(screen.getByText('11 chars')).toBeTruthy();
-      expect(vibrateSpy).toHaveBeenCalledWith(50);
-    });
-
-    test('OBJECT scan shows the objects badge', async () => {
-      const screen = await scanViaCamera('a red car', 'OBJECT');
-      expect(screen.getByText('🏷️ Objects Detected')).toBeTruthy();
-      expect(screen.getByPlaceholderText('No text extracted...').props.value).toBe(
-        'a red car',
-      );
-    });
-
-    test('gallery scan works the same as a camera scan', async () => {
-      launchImageLibraryMock.mockResolvedValue({ assets: [{ uri: 'file:///gallery.jpg' }] });
-      analyzeImageMock.mockResolvedValue(visionResult({ raw_text: 'Gallery text' }));
-      const screen = await render(<SmartClipboardScreen />);
-      await fireEvent.press(screen.getByText('Pick from Gallery'));
-      await waitFor(() =>
-        expect(analyzeImageMock).toHaveBeenCalledWith('file:///gallery.jpg'),
-      );
-      await waitFor(() =>
-        expect(screen.getByPlaceholderText('No text extracted...').props.value).toBe(
-          'Gallery text',
-        ),
-      );
-    });
+  it('reads a photo picked from the gallery', async () => {
+    gallery.mockResolvedValueOnce({ assets: [{ uri: 'content://media/9' }] });
+    analyze.mockResolvedValueOnce(vision({ raw_text: 'Hello' }));
+    await render(<SmartClipboardScreen />);
+    await fireEvent.press(screen.getByTestId('scan-gallery'));
+    await waitFor(() => expect(screen.getByTestId('scan-text').props.value).toBe('Hello'));
+    expect(screen.getByText(t('scan.oneWord'))).toBeTruthy();
   });
 
-  describe('empty and error results', () => {
-    test('EMPTY result alerts "No Text Found" and shows an empty editor', async () => {
-      const screen = await scanViaCamera('', 'EMPTY');
-      expect(alertSpy).toHaveBeenCalledWith(
-        'No Text Found',
-        'Could not detect any text or objects in this image. Try a clearer photo.',
-      );
-      const editor = screen.getByPlaceholderText('No text extracted...');
-      expect(editor).toBeTruthy();
-      expect(editor.props.value).toBe('');
-    });
-
-    test('analysis failure alerts "Scan Error", logs, and returns to landing', async () => {
-      mockCameraPhoto();
-      analyzeImageMock.mockRejectedValue(new Error('ocr exploded'));
-      const screen = await render(<SmartClipboardScreen />);
-      await fireEvent.press(screen.getByText('Take Photo'));
-      await waitFor(() =>
-        expect(alertSpy).toHaveBeenCalledWith(
-          'Scan Error',
-          'Failed to process the image. Please try again.',
-        ),
-      );
-      expect(consoleErrorSpy).toHaveBeenCalledWith(
-        '[SmartClipboard] OCR error:',
-        expect.anything(),
-      );
-      await waitFor(() => expect(screen.getByText('Take Photo')).toBeTruthy());
-      expect(screen.queryByText('Extracting text...')).toBeNull();
-    });
+  it('shows "Reading the text…" with searching corners while it reads', async () => {
+    let finish: (v: VisionResult) => void = () => {};
+    camera.mockResolvedValueOnce({ assets: [{ uri: PHOTO }] });
+    analyze.mockImplementationOnce(() => new Promise<VisionResult>(r => (finish = r)));
+    await render(<SmartClipboardScreen />);
+    await fireEvent.press(screen.getByTestId('scan-camera'));
+    await waitFor(() => expect(screen.getByText(t('scan.reading'))).toBeTruthy());
+    expect(screen.getByTestId('scan-lock')).toBeTruthy();
+    await act(async () => finish(vision()));
+    await waitFor(() => expect(screen.getByTestId('scan-text-card')).toBeTruthy());
   });
 
-  describe('editing and copying', () => {
-    test('editing the text updates the character count', async () => {
-      const screen = await scanViaCamera('Hello world');
-      const editor = screen.getByPlaceholderText('No text extracted...');
-      await fireEvent.changeText(editor, 'Hi there');
-      expect(screen.getByText('8 chars')).toBeTruthy();
-    });
+  it('copies the (fixed) text, confirms it and remembers it', async () => {
+    await render(<SmartClipboardScreen />);
+    await scan();
+    await fireEvent.changeText(screen.getByTestId('scan-text'), '  Amount due 1240  ');
+    await fireEvent.press(screen.getByTestId('scan-copy'));
+    expect(setString).toHaveBeenCalledWith('Amount due 1240');
+    expect(announce).toHaveBeenCalledWith(t('common.copied'));
 
-    test('Copy writes trimmed text to the clipboard, vibrates, toasts, and records history', async () => {
-      const screen = await scanViaCamera('Hello world');
-      await fireEvent.press(screen.getByText('Copy'));
-      expect(clipboardSetStringMock).toHaveBeenCalledWith('Hello world');
-      expect(vibrateSpy).toHaveBeenCalledWith(30);
-      expect(await screen.findByText('✅ Copied to clipboard!')).toBeTruthy();
-      // History renders on the landing screen; go back to see it.
-      await fireEvent.press(screen.getByText('Scan Another'));
-      expect(screen.getByText('📌 Recent Clips')).toBeTruthy();
-      expect(screen.getByText('Hello world')).toBeTruthy();
-    });
-
-    test('Copy uses the edited (not original) text', async () => {
-      const screen = await scanViaCamera('Hello world');
-      await fireEvent.changeText(
-        screen.getByPlaceholderText('No text extracted...'),
-        'Edited text here',
-      );
-      await fireEvent.press(screen.getByText('Copy'));
-      expect(clipboardSetStringMock).toHaveBeenCalledWith('Edited text here');
-    });
-
-    test('Copy trims surrounding whitespace', async () => {
-      const screen = await scanViaCamera('Hello world');
-      await fireEvent.changeText(
-        screen.getByPlaceholderText('No text extracted...'),
-        '   padded   ',
-      );
-      await fireEvent.press(screen.getByText('Copy'));
-      expect(clipboardSetStringMock).toHaveBeenCalledWith('padded');
-    });
-
-    test('Copy is a no-op for empty text', async () => {
-      const screen = await scanViaCamera('Hello world');
-      await fireEvent.changeText(screen.getByPlaceholderText('No text extracted...'), '');
-      await fireEvent.press(screen.getByText('Copy'));
-      expect(clipboardSetStringMock).not.toHaveBeenCalled();
-      expect(screen.queryByText('✅ Copied to clipboard!')).toBeNull();
-      expect(screen.queryByText('📌 Recent Clips')).toBeNull();
-    });
-
-    test('Copy is a no-op for whitespace-only text', async () => {
-      const screen = await scanViaCamera('Hello world');
-      await fireEvent.changeText(
-        screen.getByPlaceholderText('No text extracted...'),
-        '   ',
-      );
-      await fireEvent.press(screen.getByText('Copy'));
-      expect(clipboardSetStringMock).not.toHaveBeenCalled();
-    });
+    await fireEvent.press(screen.getByTestId('scan-another'));
+    expect(screen.getByText(t('scan.copiedBefore'))).toBeTruthy();
+    const row = screen.getByTestId('scan-clip-0');
+    expect(row.props.accessibilityLabel).toBe(t('scan.copyAgain', { text: 'Amount due 1240' }));
+    setString.mockClear();
+    await fireEvent.press(row);
+    expect(setString).toHaveBeenCalledWith('Amount due 1240');
   });
 
-  describe('clipboard history', () => {
-    test('tapping a history item copies its text again', async () => {
-      const screen = await scanViaCamera('Hello world');
-      await fireEvent.press(screen.getByText('Copy'));
-      expect(clipboardSetStringMock).toHaveBeenCalledTimes(1);
-      // History lives on the landing screen; go back to reach it.
-      await fireEvent.press(screen.getByText('Scan Another'));
-      await fireEvent.press(screen.getByText('Hello world'));
-      expect(clipboardSetStringMock).toHaveBeenCalledTimes(2);
-      expect(clipboardSetStringMock).toHaveBeenLastCalledWith('Hello world');
-      expect(vibrateSpy).toHaveBeenCalledWith(30);
-      expect(await screen.findByText('✅ Copied to clipboard!')).toBeTruthy();
-    });
-
-    test('Clear empties the history section', async () => {
-      const screen = await scanViaCamera('Hello world');
-      await fireEvent.press(screen.getByText('Copy'));
-      await fireEvent.press(screen.getByText('Scan Another'));
-      expect(screen.getByText('📌 Recent Clips')).toBeTruthy();
-      await fireEvent.press(screen.getByText('Clear'));
-      expect(screen.queryByText('📌 Recent Clips')).toBeNull();
-    });
+  it('keeps earlier copies when the screen is opened again', async () => {
+    const first = await render(<SmartClipboardScreen />);
+    await scan();
+    await fireEvent.press(screen.getByTestId('scan-copy'));
+    await first.unmount();
+    await render(<SmartClipboardScreen />);
+    expect(screen.getByTestId('scan-clip-0')).toBeTruthy();
   });
 
-  describe('share and reset', () => {
-    test('Share shares the trimmed edited text', async () => {
-      const screen = await scanViaCamera('Hello world');
-      await fireEvent.press(screen.getByText('Share'));
-      expect(shareSpy).toHaveBeenCalledWith({ message: 'Hello world' });
-    });
-
-    test('Share is a no-op for empty text', async () => {
-      const screen = await scanViaCamera('Hello world');
-      await fireEvent.changeText(screen.getByPlaceholderText('No text extracted...'), '  ');
-      await fireEvent.press(screen.getByText('Share'));
-      expect(shareSpy).not.toHaveBeenCalled();
-    });
-
-    test('Scan Another resets back to the landing state', async () => {
-      const screen = await scanViaCamera('Hello world');
-      await fireEvent.press(screen.getByText('Scan Another'));
-      expect(screen.getByText('Take Photo')).toBeTruthy();
-      expect(screen.queryByText('✅ Text Detected')).toBeNull();
-      expect(screen.queryByText('📌 Recent Clips')).toBeNull();
-    });
+  it('shares the text', async () => {
+    await render(<SmartClipboardScreen />);
+    await scan();
+    await fireEvent.press(screen.getByTestId('scan-share'));
+    expect(share).toHaveBeenCalledWith({ message: BILL });
   });
 
-  describe('image preview modal', () => {
-    /**
-     * Minimal structural view of RNTL v14's element nodes
-     * (screen.root = { instance } wrapping these host-node objects).
-     */
-    type HostNode = {
-      type: unknown;
-      props?: { source?: { uri?: string } } | null;
-      children?: unknown;
-      unstable_fiber?: unknown;
-    };
-
-    type FiberLike = {
-      memoizedProps?: { onPress?: unknown } | null;
-      return?: FiberLike | null;
-    } | null;
-
-    /** Recursively collect host nodes rendering an <Image source={{uri}}> match. */
-    const findImagesByUri = (node: HostNode, uri: string): HostNode[] => {
-      const found: HostNode[] = [];
-      const visit = (current: HostNode): void => {
-        if (current.props?.source?.uri === uri) found.push(current);
-        const children = current.children;
-        if (Array.isArray(children)) {
-          for (const child of children) {
-            if (child !== null && typeof child === 'object') {
-              visit(child as HostNode);
-            }
-          }
-        }
-      };
-      visit(node);
-      return found;
-    };
-
-    /**
-     * Press the nearest onPress above a node via its fiber ancestry.
-     *
-     * RNTL v14's fireEvent.press resolves handlers by climbing fibers but
-     * stops at host-element boundaries, so it cannot reach the onPress of a
-     * touchable whose child is a *direct* host child (e.g. the <Image>
-     * preview or the ✕ label inside their TouchableOpacity wrappers).
-     * Walking fiber.return manually reaches the same onPress prop that
-     * React Native itself would invoke on a real tap.
-     */
-    const pressNearestOnPress = async (node: HostNode): Promise<void> => {
-      let fiber = node.unstable_fiber as FiberLike;
-      while (fiber) {
-        const onPress = fiber.memoizedProps?.onPress;
-        if (typeof onPress === 'function') {
-          await act(async () => {
-            (onPress as () => void)();
-          });
-          return;
-        }
-        fiber = fiber.return ?? null;
-      }
-      throw new Error('No onPress handler found above the pressed node');
-    };
-
-    /** Find the preview <Image> for the scanned photo. */
-    const findPreviewImage = (screen: Screen): HostNode => {
-      const hostRoot = (
-        screen.root as unknown as { instance: HostNode } | null
-      )?.instance;
-      if (!hostRoot) throw new Error('render produced no root');
-      const matches = findImagesByUri(hostRoot, PHOTO_URI);
-      expect(matches).toHaveLength(1);
-      return matches[0];
-    };
-
-    test('the result view shows a preview of the scanned photo', async () => {
-      const screen = await scanViaCamera('Hello world');
-      // Proves the preview <Image> renders the scanned photo's URI.
-      findPreviewImage(screen);
-    });
-
-    test('tapping the preview opens the fullscreen modal, and ✕ closes it', async () => {
-      const screen = await scanViaCamera('Hello world');
-      await pressNearestOnPress(findPreviewImage(screen));
-      expect(screen.getByText('✕')).toBeTruthy();
-      await pressNearestOnPress(screen.getByText('✕') as unknown as HostNode);
-      await waitFor(() => expect(screen.queryByText('✕')).toBeNull());
-    });
+  it('says "No words found" for a photo with no text, never success', async () => {
+    await render(<SmartClipboardScreen />);
+    await scan(vision({ detection_type: 'EMPTY', raw_text: '' }));
+    expect(screen.getByRole('header', { name: t('scan.noTextTitle') })).toBeTruthy();
+    expect(screen.getByText(t('scan.noTextBody'))).toBeTruthy();
+    expect(screen.queryByTestId('scan-text-card')).toBeNull();
+    expect(screen.queryByText(/success/i)).toBeNull();
+    expect(vibrate).not.toHaveBeenCalled();
   });
 
-  describe('auto-scan from route params', () => {
-    test('scanUri param is cleared and the image is processed after the transition delay', async () => {
-      mockRouteParams = { scanUri: 'file:///deep.jpg' };
-      useRouteMock.mockReturnValue({ params: mockRouteParams });
-      analyzeImageMock.mockResolvedValue(visionResult({ raw_text: 'Deep text' }));
-      const screen = await render(<SmartClipboardScreen />);
-      expect(mockSetParams).toHaveBeenCalledWith({ scanUri: undefined });
-      expect(screen.getByText('Extracting text...')).toBeTruthy();
-      await waitFor(
-        () => expect(analyzeImageMock).toHaveBeenCalledWith('file:///deep.jpg'),
-        { timeout: 3000 },
-      );
-      await waitFor(
-        () =>
-          expect(screen.getByPlaceholderText('No text extracted...').props.value).toBe(
-            'Deep text',
-          ),
-        { timeout: 3000 },
-      );
+  it('treats a photo of only objects ("dog, grass") as no words', async () => {
+    await render(<SmartClipboardScreen />);
+    await scan(vision({ detection_type: 'OBJECT', raw_text: 'Dog, Grass' }));
+    expect(screen.getByTestId('scan-no-text')).toBeTruthy();
+    expect(screen.queryByText('Dog, Grass')).toBeNull();
+    expect(vibrate).not.toHaveBeenCalled();
+  });
+
+  it('offers a new photo or another one after no words were found', async () => {
+    await render(<SmartClipboardScreen />);
+    await scan(vision({ detection_type: 'EMPTY', raw_text: '' }));
+    camera.mockClear();
+    await fireEvent.press(screen.getByTestId('scan-retry'));
+    expect(camera).toHaveBeenCalled();
+    await fireEvent.press(screen.getByTestId('scan-pick-another'));
+    expect(gallery).toHaveBeenCalled();
+  });
+
+  it('says plainly when the photo could not be read, and tries again', async () => {
+    await render(<SmartClipboardScreen />);
+    await scan(new Error('ocr failed'));
+    expect(screen.getByRole('header', { name: t('scan.errorTitle') })).toBeTruthy();
+    analyze.mockResolvedValueOnce(vision());
+    await fireEvent.press(screen.getByTestId('scan-retry'));
+    await waitFor(() => expect(screen.getByTestId('scan-text-card')).toBeTruthy());
+    expect(analyze).toHaveBeenLastCalledWith(PHOTO);
+  });
+
+  it('does nothing when the camera is cancelled', async () => {
+    await render(<SmartClipboardScreen />);
+    await fireEvent.press(screen.getByTestId('scan-camera'));
+    expect(analyze).not.toHaveBeenCalled();
+    expect(screen.getByTestId('scan-start')).toBeTruthy();
+  });
+
+  it('reads a photo it was opened with, once, after the screen slides in', async () => {
+    params = { scanUri: 'content://media/42' };
+    analyze.mockResolvedValue(vision({ raw_text: 'Ticket' }));
+    await render(<SmartClipboardScreen />);
+    expect(screen.getByTestId('scan-reading')).toBeTruthy();
+    expect(nav.setParams).toHaveBeenCalledWith({ scanUri: undefined });
+    // Reading waits for the screen to slide in.
+    expect(analyze).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByTestId('scan-text').props.value).toBe('Ticket'), {
+      timeout: AUTO_SCAN_DELAY_MS + 1500,
     });
+    expect(analyze).toHaveBeenCalledWith('content://media/42');
+    expect(analyze).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens the whole photo and closes it', async () => {
+    await render(<SmartClipboardScreen />);
+    await scan();
+    await fireEvent.press(screen.getByTestId('scan-photo'));
+    expect(screen.getByTestId('scan-photo-modal')).toBeTruthy();
+    await fireEvent.press(screen.getByTestId('scan-photo-close'));
+    expect(screen.queryByTestId('scan-photo-modal')).toBeNull();
+  });
+
+  it('closes the screen', async () => {
+    await render(<SmartClipboardScreen />);
+    await fireEvent.press(screen.getByTestId('scan-close'));
+    expect(nav.goBack).toHaveBeenCalled();
+  });
+
+  it('ignores a reading that finishes after leaving the screen', async () => {
+    let finish: (v: VisionResult) => void = () => {};
+    camera.mockResolvedValueOnce({ assets: [{ uri: PHOTO }] });
+    analyze.mockImplementationOnce(() => new Promise<VisionResult>(r => (finish = r)));
+    const view = await render(<SmartClipboardScreen />);
+    await fireEvent.press(screen.getByTestId('scan-camera'));
+    await view.unmount();
+    await act(async () => finish(vision()));
+    expect(vibrate).not.toHaveBeenCalled();
+  });
+});
+
+describe('countWords', () => {
+  it('counts words across lines and spaces', () => {
+    expect(countWords('  a  b\nc ')).toBe(3);
+    expect(countWords('')).toBe(0);
   });
 });
