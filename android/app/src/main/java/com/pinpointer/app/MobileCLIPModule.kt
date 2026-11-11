@@ -1,4 +1,4 @@
-package ai.runanywhere.starter
+package com.pinpointer.app
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory

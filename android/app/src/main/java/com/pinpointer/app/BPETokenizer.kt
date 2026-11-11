@@ -1,4 +1,4 @@
-package ai.runanywhere.starter
+package com.pinpointer.app
 
 import android.content.Context
 import java.io.BufferedReader

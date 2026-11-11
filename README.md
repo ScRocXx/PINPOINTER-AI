@@ -57,10 +57,14 @@ Users can't search this data. Finding a specific invoice, medical prescription, 
 
 ### 🧠 **Intelligent Vision Pipeline** (`VisionPipeline.ts`)
 
-Maximizes battery efficiency through sequential, early-exit optimization:
+Each photo goes through a short, ordered set of steps:
 
+1. **Resize** the image so the next steps use less memory and battery.
+2. **Read the text** with ML Kit OCR (Latin + Devanagari scripts), then filter out garbage text.
+3. **Label the image** with ML Kit only when no useful text was found.
+4. **Embed the image** with MobileCLIP so it can be found by what it shows ("dog on beach"), not only by its text.
 
-**Why This Matters**: By detecting text first and halting immediately, PinPointer avoids running resource-heavy Object Detection on 90% of images.
+**Why This Matters**: Labeling only runs when OCR finds nothing useful, so text-heavy images skip that step.
 
 ---
 
@@ -78,9 +82,14 @@ A sophisticated 5-phase hybrid parser engineered for PDF mastery:
 
 ---
 
-### ⚡ **High-Performance Hybrid Search** (`Database.ts`)
+### ⚡ **High-Performance Hybrid Search** (`src/database/search.ts`)
 
 Lightning-fast, fully offline search engine:
+
+- **Full-text search** with SQLite FTS5.
+- **Meaning search** with MobileCLIP vectors in sqlite-vec, merged with the text results (reciprocal rank fusion).
+- **Fallbacks** to synonyms and Soundex sound matching, so typos still find results.
+- **Indian-language search**: Hindi and other Indian scripts are matched through sound keys and a small concept table, so "बिल" and "bill" find the same documents.
 
 
 **Result**: Queries return in **<100ms** on a dataset of 50,000+ documents.
@@ -89,9 +98,8 @@ Lightning-fast, fully offline search engine:
 
 ### 🎙️ **Voice Intelligence**
 
-- 🗣️ **Speech-to-Text**: Local on-device transcription (no internet required)
-- 🔊 **Text-to-Speech**: Read search results aloud
-- 🧠 Powered by RunAnywhere SDK with ONNX models
+- 🗣️ **Voice Search**: Speak your query and it is transcribed on the device (no internet required)
+- 🧠 Powered by Whisper base.en through sherpa-onnx (English speech for now)
 - ✅ Fully offline, hands-free search
 
 ---
@@ -102,7 +110,7 @@ Lightning-fast, fully offline search engine:
 |---------|-------------|
 | **Zero Cloud Upload** | 100% local processing—data never leaves your device |
 | **PII Masking** | Sensitive info masked in the index itself (`XXXX-XXXX-1234`) |
-| **Encrypted Local Storage** | All data stored securely on device |
+| **Local-Only Storage** | The search index stays in the app's private storage on your device |
 | **No Tracking** | Zero telemetry, analytics, or user profiling |
 | **Verifiable Privacy** | 100% on-device architecture with zero data exposure |
 
@@ -111,8 +119,10 @@ Lightning-fast, fully offline search engine:
 ## 🚀 Key Features
 
 ✅ **Instant Full-Text Search** across images, screenshots, and PDFs  
-✅ **Multilingual OCR** (English + Hindi + Regional Languages)  
-✅ **Voice Search & Voice Results** — hands-free interaction  
+✅ **Multilingual OCR** (English + Hindi and other Devanagari text)  
+✅ **Search by Meaning** — find photos by what they show, not only their text  
+✅ **Indian-Language Search** — type in Hindi or 9 other Indian scripts  
+✅ **Voice Search** — hands-free interaction  
 ✅ **Automatic Document Classification** — "Invoice", "ID Proof", "Receipt"  
 ✅ **Smart Phonetic Matching** — typo-tolerant search  
 ✅ **Battery-Optimized** — sequential early-exit ML pipeline  
@@ -125,67 +135,81 @@ Lightning-fast, fully offline search engine:
 
 | Layer | Technology |
 |-------|-----------|
-| **Frontend** | React Native, TypeScript, JavaScript |
+| **Frontend** | React Native 0.83, TypeScript |
 | **Backend** | Native Android Modules (Kotlin, Java) |
-| **Database** | SQLite + FTS5 |
-| **ML/AI** | Google ML Kit, ONNX Models (RunAnywhere SDK) |
+| **Database** | SQLite (op-sqlite) + FTS5 + sqlite-vec |
+| **ML/AI** | Google ML Kit, MobileCLIP2-S0 (int8) on ONNX Runtime |
 | **OCR** | ML Kit Latin + Devanagari |
-| **Search** | Full-Text Search (FTS5) + Soundex Phonetics |
-| **Speech** | On-device STT/TTS via RunAnywhere |
+| **Search** | FTS5 + vector search, Soundex and Indian-language sound keys |
+| **Speech** | On-device speech-to-text with sherpa-onnx (Whisper base.en) |
 
 ---
 
 ## 📦 Installation
 
 ### Prerequisites
-- Node.js 16+ installed
-- React Native CLI installed globally
-- Android SDK configured
-- Java 11+ installed
+- Node.js 18+
+- Android SDK and NDK, with a device or emulator (arm64)
+- JDK 17+
+- Python 3, only if you want to export the CLIP models
+
+Android is the only supported platform.
 
 ### Steps
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/ScRocXx/react-native-starter-app.git
-   cd react-native-starter-app
+   git clone https://github.com/ScRocXx/PINPOINTER-AI.git
+   cd PINPOINTER-AI
+   ```
 
-2. **Install dependencies:**
-    ```bash
-    npm install
-    
-3. **Run the app:**
-    ```bash
-    npx react-native run-android
+2. **Install dependencies** (this also downloads the speech model):
+   ```bash
+   npm install
+   ```
 
-4. **Run on iOS:**
-    ```bash
-    npx react-native run-ios
+3. **Optional: export the CLIP models** for search by meaning:
+   ```bash
+   pip install mobileclip torch onnx onnxruntime
+   python scripts/export_mobileclip.py
+   ```
+   Copy `vision_encoder_int8.onnx`, `text_encoder_int8.onnx` and the vocab file into `android/app/src/main/assets/models/clip/`. Without them the app still works, using text search only.
 
---- 
+4. **Run the app:**
+   ```bash
+   npm start            # Metro bundler
+   npm run android      # in another terminal
+   ```
+
+---
 
 ## 🛠️ Development
 
 ### Project Structure
 
-src/<br>
-├── components/        # React components<br>
-├── screens/          # Screen components<br>
-├── services/<br>
-│   ├── VisionPipeline.ts      # ML vision processing<br>
-│   ├── DocumentPipeline.ts    # PDF processing<br>
-│   ├── Database.ts            # SQLite search engine <br>
-│   └── DataMasking.ts         # PII protection<br>
-├── native/           # Native Android modules<br>
-│   ├── NativePdfModule.kt     # PDF rasterization<br>
-│   └── VisionModule.kt        # Vision API wrapper<br>
-└── utils/            # Helper utilities<br>
+```
+src/
+├── App.tsx            # Entry point
+├── screens/           # Home, search, gallery, document vault, clipboard
+├── components/        # Shared UI pieces
+├── hooks/             # usePinpointer, useSearch, sync and voice hooks
+├── services/          # IndexingService (the one indexing queue), embeddings, background task
+├── database/          # SQLite setup, migrations, search, vectors, per-file state
+└── utils/             # Vision/Document pipelines, Indian-language text, PII masking, sync
+android/app/src/main/java/com/pinpointer/app/
+                       # Native modules: MobileCLIP, PDF, speech, storage, document access, background job
+```
 
----
-## Running in Development 
+### Checks
 
-npm start                    # Start Metro bundler<br>
-react-native run-android    # In another terminal
+```bash
+npx tsc --noEmit                       # type check
+npm run lint                           # eslint
+npx jest                               # tests
+cd android && ./gradlew assembleDebug  # native build
+```
+
+See [`CLAUDE.md`](CLAUDE.md) for the full architecture notes and project rules.
 
 ## 📊 Performance Metrics
 | Operation | Time |

@@ -1,4 +1,4 @@
-package ai.runanywhere.starter
+package com.pinpointer.app
 
 import com.facebook.react.ReactPackage
 import com.facebook.react.bridge.NativeModule

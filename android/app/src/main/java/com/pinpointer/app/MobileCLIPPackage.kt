@@ -1,13 +1,13 @@
-package ai.runanywhere.starter
+package com.pinpointer.app
 
 import com.facebook.react.ReactPackage
 import com.facebook.react.bridge.NativeModule
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.uimanager.ViewManager
 
-class IndexingSchedulerPackage : ReactPackage {
+class MobileCLIPPackage : ReactPackage {
     override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> {
-        return listOf(IndexingSchedulerModule(reactContext))
+        return listOf(MobileCLIPModule(reactContext))
     }
 
     override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> {

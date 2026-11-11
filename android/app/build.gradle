@@ -26,7 +26,7 @@ android {
     buildToolsVersion rootProject.ext.buildToolsVersion
     compileSdk rootProject.ext.compileSdkVersion
 
-    namespace "ai.runanywhere.starter"
+    namespace "com.pinpointer.app"
 
     // Don't compress model files — allows memory-mapping from APK
     // NOTE: aaptOptions is deprecated in AGP 8+; androidResources is the replacement
@@ -38,7 +38,7 @@ android {
     }
 
     defaultConfig {
-        applicationId "ai.runanywhere.starter"
+        applicationId "com.pinpointer.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
