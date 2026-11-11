@@ -338,8 +338,9 @@ export const backfillEmbeddings = async (
     let added = 0;
     let beforeId = Number.MAX_SAFE_INTEGER;
     let failuresBeforeFirstSuccess = 0;
+    let encoderUnavailable = false;
     try {
-        outer: while (!cancelRef?.current) {
+        while (!cancelRef?.current) {
             const batch = getImagesMissingEmbeddings(BACKFILL_BATCH_SIZE, beforeId);
             if (batch.length === 0) break;
             for (const row of batch) {
@@ -350,9 +351,11 @@ export const backfillEmbeddings = async (
                     added++;
                 } else if (added === 0 && ++failuresBeforeFirstSuccess >= BACKFILL_GIVE_UP_AFTER) {
                     AppLogger.warn('Backfill', 'Image encoder unavailable, skipping backfill for now.');
-                    break outer;
+                    encoderUnavailable = true;
+                    break;
                 }
             }
+            if (encoderUnavailable) break;
             await sleep(BACKFILL_SLEEP_MS);
         }
         if (added > 0) AppLogger.info('Backfill', `Added embeddings to ${added} photos.`);
