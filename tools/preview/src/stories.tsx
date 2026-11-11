@@ -38,6 +38,12 @@ import { PhotoAccessBannerView } from '../../../src/components/PhotoAccessBanner
 import { ModelSheetView } from '../../../src/components/ModelSheetView';
 import type { DocumentAccessApi, PhotoAccessApi } from '../../../src/hooks/useStorageAccess';
 import type { PhotoAccess } from '../../../src/utils/StoragePermissions';
+import { GalleryScreen } from '../../../src/screens/gallery';
+import { DocumentVaultScreen } from '../../../src/screens/DocumentVaultScreen';
+import { PdfFoldersScreen } from '../../../src/screens/PdfFoldersScreen';
+import { SmartClipboardScreen } from '../../../src/screens/SmartClipboardScreen';
+import { setPreviewRouteParams } from './shims/Navigation';
+import { fakePhoto } from './shims/sample';
 
 const TABS = (t: ReturnType<typeof useStrings>['t']) => [
   { key: 'home', label: t('tab.home'), icon: 'home' as const },
@@ -329,6 +335,12 @@ const tabBanner = () => (
   </WithTabs>
 );
 
+/** The Scan screen, opened on a photo so it shows what it read. */
+const Scan: React.FC<{ photo?: string }> = ({ photo }) => {
+  setPreviewRouteParams(photo ? { scanUri: photo } : undefined);
+  return <SmartClipboardScreen />;
+};
+
 export const STORIES: Record<string, { title: string; lang: 'en' | 'hi'; render: () => React.ReactElement }> = {
   kit: { title: 'UI kit (English)', lang: 'en', render: () => <WithTabs active="home"><Kit /></WithTabs> },
   'kit-hi': { title: 'UI kit (Hindi)', lang: 'hi', render: () => <WithTabs active="home"><Kit /></WithTabs> },
@@ -350,6 +362,16 @@ export const STORIES: Record<string, { title: string; lang: 'en' | 'hi'; render:
   'ready-done': { title: 'First run: every photo ready', lang: 'en', render: readyDone },
   'ready-off': { title: 'First run: nothing allowed yet', lang: 'en', render: readyOff },
   'tab-banner': { title: 'Only some photos: banner above the tabs', lang: 'en', render: tabBanner },
+  gallery: { title: 'Photos', lang: 'en', render: () => <WithTabs active="photos"><GalleryScreen /></WithTabs> },
+  'gallery-hi': { title: 'Photos (Hindi)', lang: 'hi', render: () => <WithTabs active="photos"><GalleryScreen /></WithTabs> },
+  papers: { title: 'Papers', lang: 'en', render: () => <WithTabs active="papers"><DocumentVaultScreen /></WithTabs> },
+  'papers-hi': { title: 'Papers (Hindi)', lang: 'hi', render: () => <WithTabs active="papers"><DocumentVaultScreen /></WithTabs> },
+  folders: { title: 'Where Pinpointer looks', lang: 'en', render: () => <PdfFoldersScreen /> },
+  'folders-hi': { title: 'Where Pinpointer looks (Hindi)', lang: 'hi', render: () => <PdfFoldersScreen /> },
+  scan: { title: 'Scan', lang: 'en', render: () => <Scan /> },
+  'scan-text': { title: 'Scan: text found', lang: 'en', render: () => <Scan photo={fakePhoto(0)} /> },
+  'scan-text-hi': { title: 'Scan: text found (Hindi)', lang: 'hi', render: () => <Scan photo={fakePhoto(0)} /> },
+  'scan-empty': { title: 'Scan: no words found', lang: 'en', render: () => <Scan photo={`${fakePhoto(3)}#empty`} /> },
 };
 
 const styles = StyleSheet.create({
