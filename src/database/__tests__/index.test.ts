@@ -20,18 +20,20 @@ import { __resetAll } from '@op-engineering/op-sqlite';
 // getImagesMissingEmbeddings (embedding backfill), removeDocument /
 // listIndexedFiles (dropping deleted files) and the per-file indexing state
 // functions (fileState.ts, including getReadyCounts for first-run progress),
-// alphabetically sorted.
+// plus Home's read-only collection queries (collections.ts), alphabetically sorted.
 // (DocumentRecord is a type-only export and does not appear at runtime.)
 const EXPECTED_EXPORTS = [
   'beginTransaction',
   'clearIndex',
   'closeDatabase',
   'commitTransaction',
+  'countCheckedFiles',
   'extractSnippet',
   'getAllDocuments',
   'getDocumentByPath',
   'getDocumentId',
   'getEmbeddingCount',
+  'getCollectionPreview',
   'getFileState',
   'getImagesMissingEmbeddings',
   'getIndexedCount',
@@ -51,6 +53,7 @@ const EXPECTED_EXPORTS = [
   'rollbackTransaction',
   'searchDocuments',
   'setupDatabase',
+  'getSimilarPhotos',
 ].sort();
 
 // Internal helpers that must NOT leak through the public barrel.

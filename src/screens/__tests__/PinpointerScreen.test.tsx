@@ -4,8 +4,8 @@
  * Strategy: the screen's only real collaborator is the shared pinpointer
  * context, which is replaced by a STATEFUL mock (a plain `state` object +
  * jest.fn setters that mutate it, re-read on every render). Navigation,
- * HomeScreen (drawer content), RecentPhotos, database, and
- * DocumentClassifier are mocked; the real SearchFilterChips and
+ * the Home overview (tiles, photo totals), Important stars, RecentPhotos,
+ * database, and DocumentClassifier are mocked; the real SearchFilterChips and
  * SearchHistoryPanel components render so filter/history flows are
  * exercised for real.
  *
@@ -21,18 +21,15 @@ jest.mock('@react-navigation/native', () => ({
   useRoute: jest.fn(),
 }));
 
-// The drawer renders HomeScreen; keep it light and capture its props so the
-// openDrawer/closeDrawer wiring can be asserted.
-jest.mock('../HomeScreen', () => {
-  const React = require('react');
-  const { View } = require('react-native');
-  return {
-    HomeScreen: (props: { onCloseDrawer?: () => void }) => {
-      (globalThis as Record<string, unknown>).__capturedHomeProps = props;
-      return <View />;
-    },
-  };
-});
+// Home's own data (tiles from the database, photo totals from MediaStore)
+// is tested in useHomeOverview's tests; here it is a fixed value per test.
+jest.mock('../../hooks/useHomeOverview', () => ({
+  useHomeOverview: jest.fn(),
+}));
+
+jest.mock('../../hooks/usePinnedItems', () => ({
+  usePinnedItems: jest.fn(),
+}));
 
 jest.mock('../../utils/RecentPhotos', () => ({
   addRecentPhoto: jest.fn(),
@@ -75,6 +72,10 @@ import { usePinpointerShared } from '../../hooks/PinpointerContext';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { addRecentPhoto } from '../../utils/RecentPhotos';
 import { forgetIfGone } from '../../utils/MissingFiles';
+import { useHomeOverview } from '../../hooks/useHomeOverview';
+import type { HomeOverview } from '../../hooks/useHomeOverview';
+import { usePinnedItems } from '../../hooks/usePinnedItems';
+import type { PinnedItem } from '../../utils/PinnedItems';
 import { extractSnippet } from '../../database';
 import { classifyDocument } from '../../utils/DocumentClassifier';
 import type { DocumentRecord } from '../../database';
@@ -128,6 +129,24 @@ const baseState = (): ScreenState => ({
 
 let state: ScreenState;
 let actions: Record<string, jest.Mock>;
+let overview: HomeOverview;
+let pinned: PinnedItem[];
+let toggleStar: jest.Mock;
+
+const tile = (count: number | null = null, photos: string[] = []) => ({ count, capped: false, photos });
+const baseOverview = (): HomeOverview => ({
+  collections: {
+    id: tile(),
+    bill: tile(),
+    medicine: tile(),
+    bank: tile(),
+    screenshot: tile(),
+    family: tile(),
+  },
+  photoTotal: null,
+  photosChecked: null,
+  recent: [],
+});
 let mockNav: { navigate: jest.Mock; setParams: jest.Mock };
 
 const makeActions = (): Record<string, jest.Mock> => ({
@@ -262,6 +281,11 @@ beforeEach(() => {
   mockNav = { navigate: jest.fn(), setParams: jest.fn() };
 
   (usePinpointerShared as jest.Mock).mockImplementation(() => makeCtx());
+  overview = baseOverview();
+  pinned = [];
+  toggleStar = jest.fn(async () => false);
+  (useHomeOverview as jest.Mock).mockImplementation(() => overview);
+  (usePinnedItems as jest.Mock).mockImplementation(() => ({ items: pinned, isPinned: () => false, toggle: toggleStar }));
   (useNavigation as jest.Mock).mockReturnValue(mockNav);
   (useRoute as jest.Mock).mockReturnValue({ params: {} });
   (RNFS.exists as jest.Mock).mockResolvedValue(true);
@@ -271,48 +295,61 @@ beforeEach(() => {
 
 afterEach(() => {
   jest.restoreAllMocks();
-  delete (globalThis as Record<string, unknown>).__capturedHomeProps;
 });
 
-describe('PinpointerScreen — dashboard', () => {
-  test('renders the dashboard header, search input, and sync buttons', async () => {
+/** The top search bar's input (the one you type in). */
+const searchInput = () => {
+  const inputs = screen.getAllByLabelText('Search documents');
+  return inputs[inputs.length - 1];
+};
+
+describe('PinpointerScreen — Home', () => {
+  test('renders Home: the question, the search bar, Find quickly and Important', async () => {
     await renderScreen();
-    expect(screen.getAllByText('Pinpointer').length).toBeGreaterThan(0);
-    expect(screen.getAllByLabelText('Search documents').length).toBeGreaterThan(0);
-    expect(screen.getAllByPlaceholderText('Search on Pinpointer...').length).toBe(2);
-    expect(screen.getByText('Scan Images')).toBeTruthy();
-    expect(screen.getByText('Scan docs')).toBeTruthy();
-    expect(screen.getByText('Ready to search your offline vault.')).toBeTruthy();
+    expect(within(screen.getByTestId('home')).getByText('Pinpointer')).toBeTruthy();
+    expect(screen.getByText('What are you looking for?')).toBeTruthy();
+    expect(screen.getByLabelText('Try “Aadhaar” or “bijli bill”')).toBeTruthy();
+    expect(screen.getByText('Find quickly')).toBeTruthy();
+    expect(screen.getByText('ID cards')).toBeTruthy();
+    expect(screen.getByText('Screenshots')).toBeTruthy();
+    expect(screen.getByText('Tap the star on any photo to keep it here.')).toBeTruthy();
   });
 
-  test('suggestion pill sets search text and enters searching mode', async () => {
+  test('none of the old menu words are left', async () => {
     await renderScreen();
-    await press(screen.getByText('Find Aadhaar'));
-    expect(actions.setSearchText).toHaveBeenCalledWith('Aadhaar');
+    for (const word of ['Scan Images', 'Scan docs', 'Universal Sync', 'Doc Vault', 'Ready to search your offline vault.']) {
+      expect(screen.queryByText(word)).toBeNull();
+    }
+    expect(screen.queryByLabelText('Open menu')).toBeNull();
+  });
+
+  test('tapping the Home search bar opens search', async () => {
+    await renderScreen();
+    await press(screen.getByTestId('home-search-open'));
     expect(actions.setIsSearching).toHaveBeenCalledWith(true);
+    expect(actions.setSearchText).not.toHaveBeenCalled();
   });
 
-  test('cat suggestion pill sets the cat query', async () => {
+  test('a Find quickly tile searches for its whole collection', async () => {
+    overview.collections.id = tile(12, ['content://media/1']);
     await renderScreen();
-    await press(screen.getByText('Image of my cat'));
-    expect(actions.setSearchText).toHaveBeenCalledWith('cat');
+    await press(screen.getByLabelText('ID cards, 12 found, Aadhaar, PAN, voter ID'));
+    expect(actions.setSearchText).toHaveBeenCalledWith('ID cards');
     expect(actions.setIsSearching).toHaveBeenCalledWith(true);
   });
 
   test('typing in the search box updates the search text', async () => {
     await renderScreen();
-    const input = screen.getAllByLabelText('Search documents')[1];
     await act(async () => {
-      await fireEvent.changeText(input, 'passport');
+      await fireEvent.changeText(searchInput(), 'passport');
     });
     expect(actions.setSearchText).toHaveBeenCalledWith('passport');
   });
 
   test('focusing the search input enters searching mode', async () => {
     await renderScreen();
-    const input = screen.getAllByLabelText('Search documents')[1];
     await act(async () => {
-      await fireEvent(input, 'focus');
+      await fireEvent(searchInput(), 'focus');
     });
     expect(actions.setIsSearching).toHaveBeenCalledWith(true);
   });
@@ -566,7 +603,7 @@ describe('PinpointerScreen — empty results', () => {
     state.isSearchPending = true;
     const r = await renderScreen();
     await act(async () => {
-      await fireEvent(screen.getAllByLabelText('Search documents')[1], 'focus');
+      await fireEvent(searchInput(), 'focus');
     });
     expect(screen.queryByText('No matches found.')).toBeNull();
     // RN's jest preset mocks ActivityIndicator as a host element of the same name
@@ -574,89 +611,131 @@ describe('PinpointerScreen — empty results', () => {
   });
 });
 
-describe('PinpointerScreen — sync dashboard', () => {
-  test('syncing state shows the analyzing UI and a disabled Scanning button', async () => {
+describe('PinpointerScreen — getting ready (indexing)', () => {
+  test('a running check shows the progress card in plain words, with Pause', async () => {
     state.isSyncing = true;
+    state.isDeepSync = true;
     state.syncCount = 10;
+    overview.photoTotal = 2400;
+    overview.photosChecked = 1240;
     await renderScreen();
-    expect(screen.getByText('Analyzing images on-device...')).toBeTruthy();
-    expect(screen.getByText('100% private. No data leaves this device.')).toBeTruthy();
-    expect(screen.queryByText('Scan Images')).toBeNull();
+    expect(screen.getByText('Getting your photos ready')).toBeTruthy();
+    expect(screen.getByText('1,240 of 2,400 · you can search now')).toBeTruthy();
+    await press(screen.getByText('Pause'));
+    expect(actions.handlePauseSync).toHaveBeenCalled();
   });
 
-  test('Scan Images triggers a quick sync when idle', async () => {
+  test('a paused check offers Resume', async () => {
+    state.isPaused = true;
     await renderScreen();
-    await press(screen.getByText('Scan Images'));
-    expect(actions.handleQuickSync).toHaveBeenCalled();
+    await press(screen.getByText('Resume'));
+    expect(actions.handleResumeSync).toHaveBeenCalled();
   });
 
-  test('Scan docs triggers a document sync with batch size 50', async () => {
-    await renderScreen();
-    await press(screen.getByText('Scan docs'));
-    expect(actions.handleDocumentSync).toHaveBeenCalledWith(50);
-  });
-
-  test('document syncing state shows the docs analyzing UI', async () => {
+  test('papers getting ready shows their own card', async () => {
     state.isSyncingDocs = true;
     state.docSyncCount = 5;
     state.totalDocs = 20;
     await renderScreen();
-    expect(screen.getByText('Analyzing docs on-device...')).toBeTruthy();
+    expect(screen.getByText('Getting your papers ready')).toBeTruthy();
+    expect(screen.getByText('5 of 20')).toBeTruthy();
   });
 
-  test('shows the last sync relative time on the sync buttons', async () => {
+  test('at rest it is one plain "checked" line, and Check again looks for new photos and papers', async () => {
     state.lastSyncTime = Date.now() - 5 * 60 * 1000;
     state.lastDocSyncTime = Date.now() - 2 * 3600 * 1000;
     await renderScreen();
-    expect(screen.getByText('last synced 5m ago')).toBeTruthy();
-    expect(screen.getByText('last synced 2h ago')).toBeTruthy();
+    expect(screen.getByText('Photos checked 5 min ago')).toBeTruthy();
+    expect(screen.getByText('Papers checked 2 hours ago')).toBeTruthy();
+    expect(screen.queryByTestId('home-progress')).toBeNull();
+    await press(screen.getByText('Check again'));
+    expect(actions.handleQuickSync).toHaveBeenCalled();
+    expect(actions.handleDocumentSync).toHaveBeenCalledWith(50);
+    expect(actions.handleDeepSync).not.toHaveBeenCalled();
   });
 
-  test('never-synced state shows the Never synced subtitle', async () => {
-    state.lastSyncTime = null;
-    state.lastDocSyncTime = null;
+  test('never checked: says so and offers Check now', async () => {
     await renderScreen();
-    expect(screen.getAllByText('last synced Never synced').length).toBe(2);
+    expect(screen.getByText('Not checked for new photos yet')).toBeTruthy();
+    await press(screen.getByText('Check now'));
+    expect(actions.handleQuickSync).toHaveBeenCalled();
+  });
+
+  test('photos still to check: Check now looks through all of them', async () => {
+    state.lastSyncTime = Date.now() - 60 * 1000;
+    overview.photoTotal = 2400;
+    overview.photosChecked = 1240;
+    await renderScreen();
+    expect(screen.getByText('1,160 photos still to check')).toBeTruthy();
+    await press(screen.getByText('Check now'));
+    expect(actions.handleDeepSync).toHaveBeenCalled();
+    expect(actions.handleDocumentSync).toHaveBeenCalledWith(50);
   });
 });
 
-describe('PinpointerScreen — voice search', () => {
-  test('mic button starts listening', async () => {
+describe('PinpointerScreen — Important and recent photos', () => {
+  test('a starred photo opens in the viewer and counts as recent', async () => {
+    pinned = [{ uri: 'file:///photos/pan.jpg', kind: 'IMAGE', title: 'PAN card', pinnedAt: 1 }];
     await renderScreen();
-    await press(screen.getAllByLabelText('Start voice search')[0]);
+    await press(screen.getByLabelText('PAN card, Starred'));
+    await waitFor(() => expect(actions.setSelectedImage).toHaveBeenCalledWith('file:///photos/pan.jpg'));
+    expect(addRecentPhoto).toHaveBeenCalledWith('file:///photos/pan.jpg');
+  });
+
+  test('a starred paper opens in the PDF app', async () => {
+    const openPDF = jest.fn();
+    NativeModules.StorageModule = { ...(NativeModules.StorageModule ?? {}), openPDF };
+    pinned = [{ uri: 'file:///docs/bill.pdf', kind: 'DOCUMENT', title: 'Gas bill', pinnedAt: 1 }];
+    await renderScreen();
+    await press(screen.getByLabelText('Gas bill, Starred'));
+    await waitFor(() => expect(openPDF).toHaveBeenCalledWith('/docs/bill.pdf'));
+  });
+
+  test('a starred file that was deleted leaves the shelf instead of opening', async () => {
+    (forgetIfGone as jest.Mock).mockResolvedValueOnce(true);
+    pinned = [{ uri: 'file:///photos/old.jpg', kind: 'IMAGE', pinnedAt: 1 }];
+    await renderScreen();
+    await press(screen.getByLabelText('Photo, Starred'));
+    await waitFor(() => expect(toggleStar).toHaveBeenCalledWith(pinned[0]));
+    expect(actions.setSelectedImage).not.toHaveBeenCalled();
+  });
+
+  test('recently opened photos open again in one tap', async () => {
+    overview.recent = ['file:///photos/a.jpg', 'file:///photos/b.jpg'];
+    await renderScreen();
+    expect(screen.getByText('Recently opened')).toBeTruthy();
+    await press(screen.getByLabelText('Photo, 2 of 2'));
+    await waitFor(() => expect(actions.setSelectedImage).toHaveBeenCalledWith('file:///photos/b.jpg'));
+  });
+});
+
+describe('PinpointerScreen — voice search from Home', () => {
+  test('the Home mic starts listening', async () => {
+    await renderScreen();
+    await press(screen.getByTestId('home-search-voice'));
     expect(actions.startListening).toHaveBeenCalled();
   });
 
-  test('recording state shows the stop button which stops listening', async () => {
+  test('while listening, the Home mic stops listening', async () => {
     state.isRecording = true;
     await renderScreen();
-    await press(screen.getAllByLabelText('Stop recording')[0]);
+    expect(screen.getByLabelText('Listening… tap to stop')).toBeTruthy();
+    await press(screen.getByTestId('home-search-voice'));
     expect(actions.stopListening).toHaveBeenCalled();
+    expect(actions.startListening).not.toHaveBeenCalled();
   });
 
-  test('transcribing state shows the hourglass on the mic button', async () => {
+  test('while turning speech into words, the mic waits', async () => {
     state.isTranscribing = true;
     await renderScreen();
-    expect(screen.getAllByText('⏳').length).toBeGreaterThan(0);
-    const micButtons = screen.getAllByLabelText('Start voice search');
-    expect(micButtons.length).toBeGreaterThan(0);
-    micButtons.forEach((b) => expect(b).toBeDisabled());
+    expect(screen.getByLabelText('Understanding…')).toBeTruthy();
+    await press(screen.getByTestId('home-search-voice'));
+    expect(actions.startListening).not.toHaveBeenCalled();
+    expect(actions.stopListening).not.toHaveBeenCalled();
   });
 });
 
-describe('PinpointerScreen — drawer and navigation', () => {
-  test('menu button opens the drawer and its close callback is wired', async () => {
-    await renderScreen();
-    await press(screen.getByLabelText('Open menu'));
-    const captured = (globalThis as Record<string, unknown>).__capturedHomeProps as {
-      onCloseDrawer?: () => void;
-    };
-    expect(typeof captured.onCloseDrawer).toBe('function');
-    await act(async () => {
-      captured.onCloseDrawer?.();
-    });
-  });
-
+describe('PinpointerScreen — navigation', () => {
   test('startUniversalSync route param triggers a deep sync once', async () => {
     (useRoute as jest.Mock).mockReturnValue({ params: { startUniversalSync: true } });
     await renderScreen();
@@ -669,13 +748,11 @@ describe('PinpointerScreen — drawer and navigation', () => {
     expect(actions.handleDeepSync).not.toHaveBeenCalled();
   });
 
-  test('hides the tab bar while searching or while the menu is open', async () => {
+  test('keeps the tab bar on Home', async () => {
     const setOptions = jest.fn();
     (useNavigation as jest.Mock).mockReturnValue({ ...mockNav, setOptions });
     await renderScreen();
     expect(setOptions).toHaveBeenLastCalledWith({ tabBarHidden: false });
-    await press(screen.getByLabelText('Open menu'));
-    expect(setOptions).toHaveBeenLastCalledWith({ tabBarHidden: true });
   });
 
   test('hides the tab bar when it opens in search mode', async () => {
@@ -688,7 +765,7 @@ describe('PinpointerScreen — drawer and navigation', () => {
 
   test('works outside the tabs, where navigation has no setOptions', async () => {
     await renderScreen();
-    expect(screen.getAllByText('Pinpointer').length).toBeGreaterThan(0);
+    expect(screen.getByText('What are you looking for?')).toBeTruthy();
   });
 });
 

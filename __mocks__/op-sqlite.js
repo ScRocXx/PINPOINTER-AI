@@ -6,7 +6,7 @@
  *   - document_index table (INSERT/DELETE/SELECT, UNIQUE-ish filePath handling
  *     is done by the app's DELETE-before-INSERT pattern)
  *   - vec_index table (embedding storage)
- *   - files table (per-file indexing state) and PRAGMA user_version
+ *   - files table (per-file indexing state, checked-file counts) and PRAGMA user_version
  *   - FTS5 MATCH queries → case-insensitive substring matching over
  *     content + title (AND/OR term logic honored)
  *   - LIKE fallback queries → evaluates the generated WHERE clause
@@ -217,6 +217,11 @@ class MockDB {
         groups.set(key, g);
       }
       return { rows: [...groups.values()] };
+    }
+    if (/^SELECT COUNT\(\*\) AS cnt FROM files WHERE kind = \? AND ocr_status != 'pending'/i.test(q)) {
+      let cnt = 0;
+      for (const f of this.files.values()) if (f.kind === params[0] && f.ocr_status !== 'pending') cnt++;
+      return { rows: [{ cnt }] };
     }
     if (/^DELETE FROM files\s*;?\s*$/i.test(q)) {
       this.files = new Map();

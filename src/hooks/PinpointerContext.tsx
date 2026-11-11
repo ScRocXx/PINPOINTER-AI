@@ -7,8 +7,8 @@ const PinpointerCtx = createContext<PinpointerContextType | null>(null);
 
 /**
  * H7 fix: Single shared provider for usePinpointer state.
- * Prevents duplicate sync engines and native listeners when
- * both HomeScreen and PinpointerScreen are in the nav stack.
+ * Prevents duplicate sync engines and native listeners when several
+ * screens (the tabs stay mounted) read it at once.
  */
 export const PinpointerProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const value = usePinpointer();

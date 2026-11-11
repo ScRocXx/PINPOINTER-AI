@@ -259,6 +259,24 @@ export const getReadyCounts = (): ReadyCounts => {
 };
 
 /**
+ * How many photos (or papers) indexing has looked at: done, skipped, or
+ * given up on after MAX_ATTEMPTS. With the phone's photo total this gives
+ * Home's "1,240 of 2,400" without counting a failure as still to do.
+ */
+export const countCheckedFiles = (kind: FileKind): number => {
+  try {
+    const row = getDb().executeSync(
+      "SELECT COUNT(*) AS cnt FROM files WHERE kind = ? AND ocr_status != 'pending'",
+      [kind],
+    )?.rows?.[0] as { cnt?: number } | undefined;
+    return typeof row?.cnt === 'number' ? row.cnt : 0;
+  } catch (e) {
+    AppLogger.warn('DB', 'countCheckedFiles failed:', e);
+    return 0;
+  }
+};
+
+/**
  * Migration helper: gives every already-indexed file a state row, so an
  * upgrade doesn't re-OCR the whole gallery. Photos with a vector count as
  * embedded with the current model; photos without one get it backfilled.
