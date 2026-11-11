@@ -1,4 +1,5 @@
 import { StringKey, StringParams } from './strings';
+import { startOfDay } from '../utils/PhotoDates';
 
 type T = (key: StringKey, params?: StringParams) => string;
 
@@ -26,13 +27,28 @@ export const formatMonth = (t: T, ts: number): string => {
   return t('gallery.monthYear', { month: monthName(t, d), year: String(d.getFullYear()) });
 };
 
+/** Whole calendar days from the day of `ts` to the day of `now` (phone's time zone). */
+const daysAgo = (ts: number, now: number): number =>
+  Math.round((startOfDay(now) - startOfDay(ts)) / 86_400_000);
+
 /**
- * When something happened, in the words people use: "just now",
- * "2 days ago" for the last week, then the date.
+ * When something happened, in the words people use: "just now" or
+ * "3 hours ago" for today, "yesterday", "2 days ago" for the rest of the
+ * week, then the date.
+ *
+ * Days are calendar days, the same ones the Photos headings use. Counting
+ * 24-hour blocks instead called a photo from yesterday noon "22 hours ago"
+ * all morning, under a heading that said Yesterday.
  */
 export const formatWhen = (
   t: T,
   ago: (ts: number) => string,
   ts: number,
   now: number = Date.now(),
-): string => (now - ts < 7 * 86_400_000 ? ago(ts) : formatDay(t, ts, now));
+): string => {
+  const days = daysAgo(ts, now);
+  if (days <= 0) return ago(ts);
+  if (days === 1) return t('time.yesterday');
+  if (days < 7) return t('time.daysAgo', { n: days });
+  return formatDay(t, ts, now);
+};
