@@ -4,7 +4,7 @@
 
   # PinPointer
   
-  **A Privacy-First, Offline Search Engine & Intelligent Media Organizer**<br>
+  **A Privacy-First, Fully Offline Search Engine & Intelligent Media Organizer**<br>
   <sub>Maintained by <strong>Northern Blades</strong></sub>
   
   
