@@ -35,6 +35,38 @@ def releaseSigning = { String name ->
 def releaseStoreFile = releaseSigning('PINPOINTER_RELEASE_STORE_FILE')
 
 /**
+ * sherpa-onnx (voice search) comes as an AAR in libs/, fetched by `npm install`
+ * (download-models.js). It carries its own libonnxruntime.so, but the app
+ * already gets ONNX Runtime from onnxruntime-android (see dependencies), and
+ * an APK can hold only one. The app therefore links a copy of the AAR without
+ * that file, so the one in the APK is always onnxruntime-android's (the one
+ * with XNNPACK, which MobileCLIPModule asks for).
+ *
+ * The two must be built for the SAME ONNX Runtime version: each library asks
+ * for libonnxruntime.so by exact version tag, and a mismatch builds fine but
+ * leaves voice search or photo search unable to load on the phone. The pair
+ * is checked by __tests__/nativeLibraries.test.js.
+ */
+def sherpaAars = fileTree(dir: 'libs', include: ['sherpa-onnx-*.aar'])
+def slimSherpaAar = tasks.register('slimSherpaAar', Zip) {
+    description = 'Copies the sherpa-onnx AAR without its bundled libonnxruntime.so.'
+    doFirst {
+        if (sherpaAars.files.size() != 1) {
+            throw new GradleException(
+                "Expected exactly one sherpa-onnx AAR in android/app/libs, found ${sherpaAars.files.size()}. " +
+                "Run `npm install` (it runs download-models.js).")
+        }
+    }
+    from({ sherpaAars.files.collect { zipTree(it) } }) {
+        exclude 'jni/*/libonnxruntime.so'
+    }
+    archiveFileName = 'sherpa-onnx-slim.aar'
+    destinationDirectory = layout.buildDirectory.dir('sherpa-onnx')
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+}
+
+/**
  * The preferred build flavor of JavaScriptCore (JSC)
  */
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
@@ -94,15 +126,17 @@ android {
         }
     }
 
-    // Handle duplicate native libraries from different sources
+    // Handle duplicate native libraries from different sources.
+    // libonnxruntime.so is deliberately NOT here: there must be exactly one
+    // (see slimSherpaAar above), and a second copy should fail the build
+    // instead of being picked at random.
     packagingOptions {
         pickFirsts = [
             "**/libc++_shared.so",
             "**/libjsi.so",
             "**/libfbjni.so",
             "**/libfolly_runtime.so",
-            "**/libreactnative.so",
-            "**/libonnxruntime.so"
+            "**/libreactnative.so"
         ]
     }
 }
@@ -125,13 +159,13 @@ dependencies {
     // 2. The "Devanagari" model (for Hindi)
     implementation 'com.google.mlkit:text-recognition-devanagari:16.0.0'
 
-    // 4. ONNX Runtime Android - Java/Kotlin API for MobileCLIP inference
-    // Must come BEFORE fileTree so pickFirst grabs the full libonnxruntime.so from this package
-    // and NOT the stripped one from sherpa-onnx.aar
-    implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.20.0'
+    // 3. ONNX Runtime Android - Java/Kotlin API for MobileCLIP inference, and
+    // the one libonnxruntime.so in the APK. The version must be the ONNX
+    // Runtime that the sherpa-onnx AAR is built against (download-models.js).
+    implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.27.0'
 
-    // 3. sherpa-onnx for on-device STT + TTS
-    implementation fileTree(dir: 'libs', include: ['*.aar'])
+    // 4. sherpa-onnx for on-device speech-to-text, without its own libonnxruntime.so
+    implementation files(slimSherpaAar)
 
 
     // The version of react-native is set by the React Native Gradle Plugin

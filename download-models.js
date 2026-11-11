@@ -23,7 +23,13 @@ const { execSync } = require('child_process');
 
 // ─── Configuration ──────────────────────────────────────────────────
 
-const SHERPA_ONNX_VERSION = '1.13.6';
+// sherpa-onnx and the app's own ONNX Runtime (onnxruntime-android, used for
+// CLIP) must be built for the SAME ONNX Runtime version: an APK holds one
+// libonnxruntime.so, and each library asks for it by exact version tag.
+// sherpa-onnx 1.13.4 is built against ONNX Runtime 1.27.0, which is the
+// onnxruntime-android version in android/app/build.gradle. Change both
+// together (see CLAUDE.md), never one alone.
+const SHERPA_ONNX_VERSION = '1.13.4';
 
 const MODELS = [
     {
@@ -154,6 +160,19 @@ function extractArchive(archivePath, extractTo) {
     }
 }
 
+/**
+ * Deletes sherpa-onnx AARs of any other version from `libsDir`. Gradle links
+ * every sherpa AAR it finds there, and two versions mean duplicate classes.
+ * Returns the names it removed.
+ */
+function removeOtherSherpaAars(libsDir, keepName) {
+    if (!fs.existsSync(libsDir)) return [];
+    const stale = fs.readdirSync(libsDir)
+        .filter((f) => /^sherpa-onnx-.*\.aar$/.test(f) && f !== keepName);
+    stale.forEach((f) => fs.unlinkSync(path.join(libsDir, f)));
+    return stale;
+}
+
 // ─── Main ───────────────────────────────────────────────────────────
 
 async function main() {
@@ -166,6 +185,10 @@ async function main() {
         if (model.type === 'file') {
             // Direct file download (e.g., AAR)
             ensureDir(path.dirname(model.dest));
+            if (/^sherpa-onnx-.*\.aar$/.test(path.basename(model.dest))) {
+                removeOtherSherpaAars(path.dirname(model.dest), path.basename(model.dest))
+                    .forEach((f) => console.log(`  🧹 Removed other version: ${f}`));
+            }
 
             if (fs.existsSync(model.dest)) {
                 console.log(`  ✅ Already exists: ${path.basename(model.dest)}\n`);
@@ -210,8 +233,12 @@ async function main() {
     console.log('✅ All models ready!\n');
 }
 
-main().catch((err) => {
-    console.error(`\n❌ Model download failed: ${err.message}`);
-    console.error('You can retry by running: node download-models.js\n');
-    process.exit(1);
-});
+if (require.main === module) {
+    main().catch((err) => {
+        console.error(`\n❌ Model download failed: ${err.message}`);
+        console.error('You can retry by running: node download-models.js\n');
+        process.exit(1);
+    });
+}
+
+module.exports = { SHERPA_ONNX_VERSION, removeOtherSherpaAars };
