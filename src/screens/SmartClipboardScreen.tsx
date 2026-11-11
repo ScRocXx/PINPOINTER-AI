@@ -1,943 +1,445 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import {
-    View,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    ScrollView,
-    StyleSheet,
-    Image,
-    Animated,
-    ActivityIndicator,
-    Share,
-    Alert,
-    Vibration,
-    Modal,
-} from 'react-native';
-import LinearGradient from 'react-native-linear-gradient';
-
-import { launchCamera, launchImageLibrary } from 'react-native-image-picker';
-import Svg, { Path, Rect } from 'react-native-svg';
-import { AppColors } from '../theme';
-import { analyzeImage } from '../utils/VisionPipeline';
-import Clipboard from '@react-native-clipboard/clipboard';
-import { RouteProp, useRoute, useNavigation } from '@react-navigation/native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Image, Modal, ScrollView, Share, StyleSheet, TextInput, Vibration, View } from 'react-native';
+import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
+import { launchCamera, launchImageLibrary } from 'react-native-image-picker';
+import Clipboard from '@react-native-clipboard/clipboard';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import {
+  AppText,
+  Button,
+  Card,
+  Icon,
+  IconButton,
+  ListRow,
+  LockOnCorners,
+  PressableScale,
+  Reveal,
+  Screen,
+  SectionHeader,
+  Tag,
+  useToast,
+} from '../components/ui';
+import { Colors, Elevation, GUTTER, MAX_FONT_SCALE, Radius, Space, Touch, Type } from '../theme';
+import { useStrings } from '../i18n';
 import { RootStackParamList } from '../navigation/types';
+import { analyzeImage } from '../utils/VisionPipeline';
 import { AppLogger } from '../utils/AppLogger';
 
-// ─── Clipboard Icon Component ────────────────────────────────────────────────
-const ClipboardIcon: React.FC<{ size?: number; color?: string }> = ({
-    size = 56,
-    color = '#00D9FF',
-}) => (
-    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-        <Rect x="5" y="4" width="14" height="17" rx="2" stroke={color} strokeWidth="2" fill="none" />
-        <Path d="M9 2h6a1 1 0 0 1 1 1v2H8V3a1 1 0 0 1 1-1z" fill={color} />
-        <Path d="M8 10h8M8 14h8M8 18h5" stroke={color} strokeWidth="2" strokeLinecap="round" />
-    </Svg>
-);
+/** What the screen shows: the start, reading, the words, none, or a failure. */
+type Phase = 'start' | 'reading' | 'text' | 'noText' | 'error';
 
-
-// ─── Clipboard History Item ──────────────────────────────────────────────────
-interface ClipboardItem {
-    id: number;
-    text: string;
-    source: string; // 'camera' | 'gallery'
-    timestamp: Date;
-    imageUri?: string;
+interface Clip {
+  id: number;
+  text: string;
 }
 
-// ─── Screen ──────────────────────────────────────────────────────────────────
+/** Copies kept while the app is open, never saved (they may hold private numbers). */
+const MAX_CLIPS = 5;
+let sessionClips: Clip[] = [];
 
-/**
- * Smart clipboard: scan images into editable text, copy to the clipboard,
- * share, and keep a history of recent clips. Accepts an optional
- * `scanUri` route param to auto-scan an image (e.g. from the gallery).
- */
-export const SmartClipboardScreen: React.FC = () => {
-    const route = useRoute<RouteProp<RootStackParamList, 'SmartClipboard'>>();
-    const navigation = useNavigation<StackNavigationProp<RootStackParamList>>();
-
-    // --- State ---
-    const [imageUri, setImageUri] = useState<string | null>(route.params?.scanUri || null);
-    const [extractedText, setExtractedText] = useState('');
-    const [editedText, setEditedText] = useState('');
-    const [isProcessing, setIsProcessing] = useState<boolean>(!!route.params?.scanUri);
-    const [detectionType, setDetectionType] = useState<string>('');
-    const [clipHistory, setClipHistory] = useState<ClipboardItem[]>([]);
-    const [showCopied, setShowCopied] = useState(false);
-
-    const [isImageModalVisible, setImageModalVisible] = useState(false);
-
-
-
-    // Animations
-    const fadeAnim = useRef(new Animated.Value(0)).current;
-    const slideAnim = useRef(new Animated.Value(30)).current;
-    const pulseAnim = useRef(new Animated.Value(1)).current;
-    const toastAnim = useRef(new Animated.Value(0)).current;
-    // Tracks the in-flight toast animation so a new toast cancels the
-    // previous one instead of letting its completion callback dismiss it.
-    const toastSequence = useRef<Animated.CompositeAnimation | null>(null);
-
-    // Animate result in
-    const animateResultIn = useCallback(() => {
-        fadeAnim.setValue(0);
-        slideAnim.setValue(30);
-        Animated.parallel([
-            Animated.timing(fadeAnim, {
-                toValue: 1,
-                duration: 400,
-                useNativeDriver: true,
-            }),
-            Animated.spring(slideAnim, {
-                toValue: 0,
-                tension: 80,
-                friction: 12,
-                useNativeDriver: true,
-            }),
-        ]).start();
-    }, [fadeAnim, slideAnim]);
-
-    // Toast animation
-
-    const showToast = (type: 'copy') => {
-        if (type === 'copy') setShowCopied(true);
-
-        // Stop any previous toast: its completion callback would otherwise
-        // hide this new toast early. The stale callback is ignored via the
-        // finished/result guard below.
-        toastSequence.current?.stop();
-
-        toastAnim.setValue(0);
-        const sequence = Animated.sequence([
-            Animated.spring(toastAnim, {
-                toValue: 1,
-                tension: 100,
-                friction: 8,
-                useNativeDriver: true,
-            }),
-            Animated.delay(1200),
-            Animated.timing(toastAnim, {
-                toValue: 0,
-                duration: 300,
-                useNativeDriver: true,
-            }),
-        ]);
-        toastSequence.current = sequence;
-        sequence.start((result) => {
-            // Only a naturally-finished, still-current toast dismisses itself.
-            if (result?.finished && toastSequence.current === sequence) {
-                setShowCopied(false);
-            }
-        });
-    };
-
-    // Pulse animation for processing
-    useEffect(() => {
-        if (isProcessing) {
-            const pulse = Animated.loop(
-                Animated.sequence([
-                    Animated.timing(pulseAnim, {
-                        toValue: 1.05,
-                        duration: 800,
-                        useNativeDriver: true,
-                    }),
-                    Animated.timing(pulseAnim, {
-                        toValue: 1,
-                        duration: 800,
-                        useNativeDriver: true,
-                    }),
-                ])
-            );
-            pulse.start();
-            return () => pulse.stop();
-        }
-    }, [isProcessing, pulseAnim]);
-
-    // ─── Actions ─────────────────────────────────────────────────────────────
-
-    const processImage = useCallback(async (uri: string) => {
-        setImageUri(uri);
-        setIsProcessing(true);
-        setExtractedText('');
-        setEditedText('');
-        setDetectionType('');
-
-        try {
-            const result = await analyzeImage(uri);
-
-            if (result.detection_type === 'EMPTY') {
-                setExtractedText('');
-                setEditedText('');
-                setDetectionType('EMPTY');
-                Alert.alert(
-                    'No Text Found',
-                    'Could not detect any text or objects in this image. Try a clearer photo.'
-                );
-            } else {
-                setExtractedText(result.raw_text);
-                setEditedText(result.raw_text);
-                setDetectionType(result.detection_type);
-                Vibration.vibrate(50); // success haptic
-                animateResultIn();
-            }
-        } catch (error) {
-            AppLogger.error('SmartClipboard', 'OCR error:', error);
-            Alert.alert('Scan Error', 'Failed to process the image. Please try again.');
-        } finally {
-            setIsProcessing(false);
-        }
-    }, [animateResultIn]);
-
-    // Auto-scan from route parameters (Deep Link from Pinpointer)
-    useEffect(() => {
-        if (route.params?.scanUri) {
-            const uriToScan = route.params.scanUri;
-            // Clear the param immediately so it doesn't re-trigger on back/forward
-            navigation.setParams({ scanUri: undefined });
-
-            // Small delay to let the screen transition finish before heavy OCR blocking
-            setTimeout(() => {
-                processImage(uriToScan);
-            }, 400);
-        }
-    }, [route.params?.scanUri, navigation, processImage]);
-
-    const handleCamera = async () => {
-        try {
-            const result = await launchCamera({
-                mediaType: 'photo',
-                quality: 0.5,
-                maxWidth: 1024,
-                maxHeight: 1024,
-                saveToPhotos: false,
-            });
-            if (result.assets?.[0]?.uri) {
-                processImage(result.assets[0].uri);
-            }
-        } catch (err) {
-            AppLogger.error('SmartClipboard', 'Camera error:', err);
-        }
-    };
-
-    const handleGallery = async () => {
-        try {
-            const result = await launchImageLibrary({
-                mediaType: 'photo',
-                quality: 0.5,
-                maxWidth: 1024,
-                maxHeight: 1024,
-            });
-            if (result.assets?.[0]?.uri) {
-                processImage(result.assets[0].uri);
-            }
-        } catch (err) {
-            AppLogger.error('SmartClipboard', 'Gallery error:', err);
-        }
-    };
-
-    const handleCopy = () => {
-        if (!editedText.trim()) return;
-        Clipboard.setString(editedText.trim());
-        Vibration.vibrate(30);
-        showToast('copy');
-
-        // Add to history
-        const item: ClipboardItem = {
-            id: Date.now(),
-            text: editedText.trim(),
-            source: 'scan',
-            timestamp: new Date(),
-            imageUri: imageUri || undefined,
-        };
-        setClipHistory((prev) => [item, ...prev].slice(0, 20)); // keep last 20
-    };
-
-    const handleShare = async () => {
-        if (!editedText.trim()) return;
-        try {
-            await Share.share({ message: editedText.trim() });
-        } catch (e) {
-            AppLogger.error('SmartClipboard', 'Share error:', e);
-        }
-    };
-
-    const handleReset = () => {
-        setImageUri(null);
-        setExtractedText('');
-        setEditedText('');
-        setDetectionType('');
-    };
-
-    const copyHistoryItem = (text: string) => {
-        Clipboard.setString(text);
-        Vibration.vibrate(30);
-        showToast('copy');
-    };
-
-    // ─── Render: Landing State ────────────────────────────────────────────────
-
-    const renderLanding = () => (
-        <View style={styles.landingContainer}>
-            {/* Hero Icon */}
-            <View style={styles.heroSection}>
-                <LinearGradient
-                    colors={[AppColors.accentCyan + '20', AppColors.accentCyan + '05']}
-                    style={styles.heroGlow}
-                >
-                    <ClipboardIcon size={60} color={AppColors.accentCyan} />
-                </LinearGradient>
-                <Text style={styles.heroTitle}>Smart Clipboard</Text>
-                <Text style={styles.heroSubtitle}>
-                    Copy text from the real world — signs, books, labels, whiteboards
-                </Text>
-            </View>
-
-            {/* Action Buttons */}
-            <View style={styles.actionButtons}>
-                <TouchableOpacity onPress={handleCamera} activeOpacity={0.85}>
-                    <LinearGradient
-                        colors={[AppColors.accentCyan, '#0891B2']}
-                        start={{ x: 0, y: 0 }}
-                        end={{ x: 1, y: 0 }}
-                        style={styles.primaryButton}
-                    >
-                        <Text style={styles.primaryButtonText}>Take Photo</Text>
-                    </LinearGradient>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                    onPress={handleGallery}
-                    activeOpacity={0.85}
-                    style={styles.secondaryButton}
-                >
-                    <Text style={styles.secondaryButtonText}>Pick from Gallery</Text>
-                </TouchableOpacity>
-            </View>
-
-            {/* Clipboard History */}
-            {clipHistory.length > 0 && (
-                <View style={styles.historySection}>
-                    <View style={styles.historyHeader}>
-                        <Text style={styles.historyTitle}>📌 Recent Clips</Text>
-                        <TouchableOpacity onPress={() => setClipHistory([])}>
-                            <Text style={styles.historyClear}>Clear</Text>
-                        </TouchableOpacity>
-                    </View>
-                    {clipHistory.slice(0, 5).map((item) => (
-                        <TouchableOpacity
-                            key={item.id}
-                            style={styles.historyItem}
-                            onPress={() => copyHistoryItem(item.text)}
-                            activeOpacity={0.7}
-                        >
-                            <Text style={styles.historyText} numberOfLines={2}>
-                                {item.text}
-                            </Text>
-                            <Text style={styles.historyMeta}>
-                                {item.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                            </Text>
-                        </TouchableOpacity>
-                    ))}
-                </View>
-            )}
-        </View>
-    );
-
-    // ─── Render: Result State ─────────────────────────────────────────────────
-
-    const renderResult = () => (
-        <Animated.View
-            style={[
-                styles.resultContainer,
-                { opacity: fadeAnim, transform: [{ translateY: slideAnim }] },
-            ]}
-        >
-            {/* Image Preview */}
-            {imageUri && (
-                <View style={styles.imagePreviewCard}>
-                    <TouchableOpacity activeOpacity={0.8} onPress={() => setImageModalVisible(true)}>
-                        <Image source={{ uri: imageUri }} style={styles.imagePreview} resizeMode="cover" />
-                        <View style={styles.imageOverlay}>
-                            <View style={styles.detectionBadge}>
-                                <Text style={styles.detectionBadgeText}>
-                                    {detectionType === 'TEXT' ? '✅ Text Detected' : '🏷️ Objects Detected'}
-                                </Text>
-                            </View>
-                        </View>
-                    </TouchableOpacity>
-                </View>
-            )}
-
-            {/* Extracted Text Card */}
-            <View style={styles.textCard}>
-                <View style={styles.textCardHeader}>
-                    <Text style={styles.textCardTitle}>Extracted Text</Text>
-                </View>
-
-                <View style={styles.textEditorContainer}>
-                    <ScrollView style={styles.textEditorScroll} nestedScrollEnabled={true}>
-                        <TextInput
-                            style={styles.textEditor}
-                            value={editedText}
-                            onChangeText={setEditedText}
-                            multiline
-                            scrollEnabled={false}
-                            placeholder="No text extracted..."
-                            placeholderTextColor={AppColors.textMuted}
-                            selectionColor={AppColors.accentCyan}
-                        />
-                    </ScrollView>
-                </View>
-
-                {/* Character Count */}
-                <View style={styles.charCountContainer}>
-                    <Text style={styles.charCount}>{editedText.length} chars</Text>
-                </View>
-
-                {/* Action Bar */}
-                <View style={styles.actionBar}>
-                    <View style={styles.actionRow}>
-                        <TouchableOpacity onPress={handleCopy} style={styles.actionButton} activeOpacity={0.7}>
-                            <LinearGradient
-                                colors={[AppColors.accentCyan, '#0891B2']}
-                                style={styles.actionButtonGradient}
-                            >
-                                <Text style={styles.actionLabel}>Copy</Text>
-                            </LinearGradient>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity onPress={handleShare} style={styles.actionButton} activeOpacity={0.7}>
-                            <View style={styles.actionButtonOutline}>
-                                <Text style={styles.actionLabelOutline}>Share</Text>
-                            </View>
-                        </TouchableOpacity>
-                    </View>
-
-                    <TouchableOpacity
-                        onPress={handleReset}
-                        style={styles.scanAnotherButton}
-                        activeOpacity={0.7}
-                    >
-                        <Text style={styles.actionLabelOutline}>Scan Another</Text>
-                    </TouchableOpacity>
-                </View>
-            </View>
-        </Animated.View>
-    );
-
-    // ─── Render: Processing State ─────────────────────────────────────────────
-
-    const renderProcessing = () => (
-        <View style={styles.processingContainer}>
-            {imageUri && (
-                <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
-                    <Image source={{ uri: imageUri }} style={styles.processingImage} resizeMode="cover" />
-                    <View style={styles.processingOverlay}>
-                        <ActivityIndicator size="large" color={AppColors.accentCyan} />
-                    </View>
-                </Animated.View>
-            )}
-            <Text style={styles.processingText}>Extracting text...</Text>
-            <Text style={styles.processingSubtext}>Running OCR (Hindi + English) on your image</Text>
-        </View>
-    );
-
-    // ─── Toast ────────────────────────────────────────────────────────────────
-
-    const renderToast = () => {
-        if (!showCopied) return null;
-        return (
-            <Animated.View
-                style={[
-                    styles.toast,
-                    {
-                        transform: [
-                            {
-                                translateY: toastAnim.interpolate({
-                                    inputRange: [0, 1],
-                                    outputRange: [-60, 0],
-                                }),
-                            },
-                        ],
-                        opacity: toastAnim,
-                    },
-                ]}
-            >
-                <LinearGradient
-                    colors={[AppColors.accentGreen, '#059669']}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 0 }}
-                    style={styles.toastGradient}
-                >
-                    <Text style={styles.toastText}>{showCopied ? '✅ Copied to clipboard!' : ''}</Text>
-                </LinearGradient>
-            </Animated.View>
-        );
-    };
-
-    // ─── Main Render ──────────────────────────────────────────────────────────
-
-    return (
-        <View style={styles.container}>
-            <ScrollView
-                style={styles.scrollView}
-                contentContainerStyle={styles.scrollContent}
-                showsVerticalScrollIndicator={false}
-            >
-                {isProcessing
-                    ? renderProcessing()
-                    : extractedText || detectionType === 'EMPTY'
-                        ? renderResult()
-                        : renderLanding()}
-            </ScrollView>
-
-            {renderToast()}
-
-            {/* Full Screen Image Modal */}
-            <Modal
-                visible={isImageModalVisible}
-                transparent={true}
-                animationType="fade"
-                onRequestClose={() => setImageModalVisible(false)}
-            >
-                <View style={styles.modalBackground}>
-                    <TouchableOpacity
-                        style={styles.modalCloseArea}
-                        activeOpacity={1}
-                        onPress={() => setImageModalVisible(false)}
-                    >
-                        <Image
-                            source={{ uri: imageUri || undefined }}
-                            style={styles.modalImage}
-                            resizeMode="contain"
-                        />
-                        <TouchableOpacity
-                            style={styles.modalCloseButton}
-                            onPress={() => setImageModalVisible(false)}
-                        >
-                            <Text style={styles.modalCloseText}>✕</Text>
-                        </TouchableOpacity>
-                    </TouchableOpacity>
-                </View>
-            </Modal>
-        </View>
-    );
+/** Tests only: forget the copies made so far. */
+export const resetScanClipsForTests = () => {
+  sessionClips = [];
 };
 
-// ─── Styles ──────────────────────────────────────────────────────────────────
+/** Waits for the screen to slide in before heavy text reading starts. */
+export const AUTO_SCAN_DELAY_MS = 400;
+
+const PICKER = { mediaType: 'photo', quality: 0.5, maxWidth: 1024, maxHeight: 1024 } as const;
+
+export const countWords = (text: string): number => text.trim().split(/\s+/).filter(Boolean).length;
+
+/**
+ * Read text from a photo: take one or pick one, and Pinpointer reads the
+ * words (Hindi and English) on the phone. The text can be fixed, copied or
+ * shared. A photo with no words says so plainly (never "Success"), with a
+ * way to try again. Opened with `scanUri` (from a photo), it starts reading
+ * that photo at once.
+ */
+export const SmartClipboardScreen: React.FC = () => {
+  const route = useRoute<RouteProp<RootStackParamList, 'SmartClipboard'>>();
+  const navigation = useNavigation<StackNavigationProp<RootStackParamList>>();
+  const { t } = useStrings();
+  const toast = useToast();
+
+  const [phase, setPhase] = useState<Phase>(route.params?.scanUri ? 'reading' : 'start');
+  const [imageUri, setImageUri] = useState<string | null>(route.params?.scanUri ?? null);
+  const [text, setText] = useState('');
+  const [clips, setClips] = useState<Clip[]>(sessionClips);
+  const [photoOpen, setPhotoOpen] = useState(false);
+
+  // Only the latest reading may change the screen, and none after leaving it.
+  const request = useRef(0);
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+
+  const read = useCallback(async (uri: string) => {
+    const id = ++request.current;
+    setImageUri(uri);
+    setText('');
+    setPhase('reading');
+    try {
+      const result = await analyzeImage(uri);
+      if (!alive.current || id !== request.current) {
+        return;
+      }
+      // Labels ("dog, grass") are not words to copy: only real text counts.
+      if (result.detection_type === 'TEXT' && result.raw_text.trim()) {
+        setText(result.raw_text.trim());
+        setPhase('text');
+        Vibration.vibrate(30);
+      } else {
+        setPhase('noText');
+      }
+    } catch (e) {
+      AppLogger.error('Scan', 'Could not read the photo', e);
+      if (alive.current && id === request.current) {
+        setPhase('error');
+      }
+    }
+  }, []);
+
+  // Opened from a photo: read it once the screen has slid in.
+  const scanUri = route.params?.scanUri;
+  useEffect(() => {
+    if (!scanUri) {
+      return;
+    }
+    navigation.setParams({ scanUri: undefined });
+    const timer = setTimeout(() => read(scanUri), AUTO_SCAN_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [navigation, read, scanUri]);
+
+  const takePhoto = async () => {
+    try {
+      const result = await launchCamera({ ...PICKER, saveToPhotos: false });
+      const uri = result.assets?.[0]?.uri;
+      if (uri) {
+        read(uri);
+      }
+    } catch (e) {
+      AppLogger.error('Scan', 'Camera failed', e);
+      toast.show(t('scan.errorTitle'), { icon: 'alert' });
+    }
+  };
+
+  const pickPhoto = async () => {
+    try {
+      const result = await launchImageLibrary(PICKER);
+      const uri = result.assets?.[0]?.uri;
+      if (uri) {
+        read(uri);
+      }
+    } catch (e) {
+      AppLogger.error('Scan', 'Gallery picker failed', e);
+      toast.show(t('scan.errorTitle'), { icon: 'alert' });
+    }
+  };
+
+  const copy = (value: string) => {
+    const clean = value.trim();
+    if (!clean) {
+      return;
+    }
+    Clipboard.setString(clean);
+    Vibration.vibrate(30);
+    toast.show(t('common.copied'), { icon: 'copy' });
+    sessionClips = [{ id: Date.now(), text: clean }, ...sessionClips.filter(c => c.text !== clean)].slice(0, MAX_CLIPS);
+    setClips(sessionClips);
+  };
+
+  const share = async () => {
+    const clean = text.trim();
+    if (!clean) {
+      return;
+    }
+    try {
+      await Share.share({ message: clean });
+    } catch (e) {
+      AppLogger.warn('Scan', 'Share failed', e);
+    }
+  };
+
+  const startOver = () => {
+    request.current += 1;
+    setPhase('start');
+    setImageUri(null);
+    setText('');
+  };
+
+  const close = () => {
+    if (navigation.canGoBack?.()) {
+      navigation.goBack();
+    } else {
+      navigation.navigate('Main');
+    }
+  };
+
+  const words = countWords(text);
+
+  return (
+    <Screen padBottom testID="scan-screen">
+      <View style={styles.header}>
+        <IconButton icon="close" label={t('common.close')} onPress={close} style={styles.close} testID="scan-close" />
+        <AppText variant="heading" accessibilityRole="header" align="center" numberOfLines={2} style={styles.flex}>
+          {t('scan.title')}
+        </AppText>
+        <View style={styles.headerSpacer} />
+      </View>
+
+      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" testID="scan-scroll">
+        {phase === 'start' ? (
+          <>
+            <Reveal>
+              <View style={[styles.stage, styles.stageStart]} testID="scan-start">
+                <View style={styles.startFrame}>
+                  <LockOnCorners size={30} thickness={4} radius={12} inset={0} delay={160} />
+                  <Icon name="readText" size={56} color={Colors.primary} strokeWidth={1.6} />
+                </View>
+              </View>
+            </Reveal>
+            <AppText variant="body" color="textSecondary" style={styles.intro}>
+              {t('scan.intro')}
+            </AppText>
+            <View style={styles.tags}>
+              <Tag label={t('scan.languages')} tone="bank" icon="language" />
+            </View>
+            <View style={styles.actions}>
+              <Button label={t('scan.takePhoto')} icon="camera" variant="beam" block onPress={takePhoto} testID="scan-camera" />
+              <Button label={t('scan.pickPhoto')} icon="photos" variant="secondary" block onPress={pickPhoto} testID="scan-gallery" />
+            </View>
+
+            {clips.length > 0 ? (
+              <>
+                <SectionHeader title={t('scan.copiedBefore')} style={styles.clipsHeader} />
+                <Card flush testID="scan-clips">
+                  {clips.map((clip, i) => (
+                    <ListRow
+                      key={clip.id}
+                      icon="copy"
+                      title={clip.text}
+                      accessibilityLabel={t('scan.copyAgain', { text: clip.text })}
+                      onPress={() => copy(clip.text)}
+                      chevron={false}
+                      last={i === clips.length - 1}
+                      testID={`scan-clip-${i}`}
+                    />
+                  ))}
+                </Card>
+              </>
+            ) : null}
+          </>
+        ) : null}
+
+        {phase !== 'start' && imageUri ? (
+          <PressableScale
+            onPress={() => setPhotoOpen(true)}
+            pressedScale={0.985}
+            disabled={phase === 'reading'}
+            accessibilityRole="imagebutton"
+            accessibilityLabel={t('scan.viewPhoto')}
+            style={styles.stage}
+            testID="scan-photo"
+          >
+            <Image source={{ uri: imageUri }} style={StyleSheet.absoluteFill} resizeMode="cover" testID="scan-photo-image" />
+            {phase === 'noText' || phase === 'error' ? <View style={styles.dim} /> : null}
+            {phase === 'reading' || phase === 'text' ? (
+              <View style={styles.lockArea} pointerEvents="none">
+                <LockOnCorners
+                  key={phase}
+                  searching={phase === 'reading'}
+                  size={30}
+                  thickness={4}
+                  radius={12}
+                  inset={0}
+                  testID="scan-lock"
+                />
+              </View>
+            ) : null}
+          </PressableScale>
+        ) : null}
+
+        {phase === 'reading' ? (
+          <View style={styles.reading} accessibilityLiveRegion="polite" testID="scan-reading">
+            <AppText variant="bodyStrong" align="center">
+              {t('scan.reading')}
+            </AppText>
+            <Tag label={t('scan.languages')} tone="bank" icon="language" />
+          </View>
+        ) : null}
+
+        {phase === 'text' ? (
+          <>
+            <Reveal index={0}>
+              <View style={styles.tags}>
+                <Tag label={t('scan.languages')} tone="bank" icon="language" />
+                <Tag
+                  label={words === 1 ? t('scan.oneWord') : t('scan.words', { n: words })}
+                  tone="found"
+                  icon="check"
+                  testID="scan-words"
+                />
+              </View>
+            </Reveal>
+            <Reveal index={1}>
+              <Card style={styles.textCard} testID="scan-text-card">
+                <AppText variant="heading" accessibilityRole="header">
+                  {t('scan.textFound')}
+                </AppText>
+                <TextInput
+                  value={text}
+                  onChangeText={setText}
+                  multiline
+                  scrollEnabled={false}
+                  textAlignVertical="top"
+                  accessibilityLabel={t('scan.textLabel')}
+                  maxFontSizeMultiplier={MAX_FONT_SCALE}
+                  selectionColor={Colors.primary}
+                  style={styles.textInput}
+                  testID="scan-text"
+                />
+                <AppText variant="small" color="textMuted">
+                  {t('scan.editHint')}
+                </AppText>
+              </Card>
+            </Reveal>
+            <Reveal index={2}>
+              <View style={styles.actions}>
+                <Button
+                  label={t('common.copyText')}
+                  icon="copy"
+                  block
+                  onPress={() => copy(text)}
+                  disabled={!text.trim()}
+                  testID="scan-copy"
+                />
+                <View style={styles.row}>
+                  <Button label={t('common.share')} icon="share" variant="secondary" onPress={share} disabled={!text.trim()} style={styles.flex} testID="scan-share" />
+                  <Button label={t('scan.another')} icon="camera" variant="secondary" onPress={startOver} style={styles.flex} testID="scan-another" />
+                </View>
+              </View>
+            </Reveal>
+          </>
+        ) : null}
+
+        {phase === 'noText' || phase === 'error' ? (
+          <Reveal>
+            <View style={styles.outcome} accessibilityLiveRegion="polite" testID={phase === 'noText' ? 'scan-no-text' : 'scan-error'}>
+              <View style={styles.outcomeIcon}>
+                <Icon name={phase === 'noText' ? 'readText' : 'alert'} size={30} color={Colors.textSecondary} strokeWidth={1.8} />
+              </View>
+              <AppText variant="heading" align="center" accessibilityRole="header">
+                {t(phase === 'noText' ? 'scan.noTextTitle' : 'scan.errorTitle')}
+              </AppText>
+              <AppText variant="body" color="textSecondary" align="center">
+                {t(phase === 'noText' ? 'scan.noTextBody' : 'scan.errorBody')}
+              </AppText>
+              <View style={[styles.actions, styles.outcomeActions]}>
+                <Button
+                  label={t('common.tryAgain')}
+                  icon={phase === 'noText' ? 'camera' : 'refresh'}
+                  block
+                  onPress={phase === 'noText' || !imageUri ? takePhoto : () => read(imageUri)}
+                  testID="scan-retry"
+                />
+                <Button label={t('scan.pickAnother')} icon="photos" variant="secondary" block onPress={pickPhoto} testID="scan-pick-another" />
+              </View>
+            </View>
+          </Reveal>
+        ) : null}
+      </ScrollView>
+
+      <PhotoModal uri={photoOpen ? imageUri : null} onClose={() => setPhotoOpen(false)} />
+    </Screen>
+  );
+};
+
+/** The whole photo on the night stage, to check what was read. */
+const PhotoModal: React.FC<{ uri: string | null; onClose: () => void }> = ({ uri, onClose }) => {
+  const { t } = useStrings();
+  const insets = useSafeAreaInsets();
+  if (!uri) {
+    return null;
+  }
+  return (
+    <Modal visible transparent statusBarTranslucent animationType="fade" onRequestClose={onClose} testID="scan-photo-modal">
+      <View style={styles.night}>
+        <Image source={{ uri }} style={styles.nightImage} resizeMode="contain" accessibilityIgnoresInvertColors />
+        <IconButton
+          icon="close"
+          label={t('common.close')}
+          variant="onNight"
+          onPress={onClose}
+          style={[styles.nightClose, { top: insets.top + Space.sm }]}
+          testID="scan-photo-close"
+        />
+      </View>
+    </Modal>
+  );
+};
+
+const STAGE_HEIGHT = 236;
 
 const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: AppColors.primaryDark,
-    },
-    scrollView: {
-        flex: 1,
-    },
-    scrollContent: {
-        padding: 24,
-        paddingBottom: 40,
-    },
-
-    // ─── Landing ────────────────────────────────────────────
-    landingContainer: {
-        flex: 1,
-    },
-    heroSection: {
-        alignItems: 'center',
-        paddingTop: 80,
-        marginBottom: 40,
-    },
-    heroGlow: {
-        width: 120,
-        height: 120,
-        borderRadius: 60,
-        justifyContent: 'center',
-        alignItems: 'center',
-        marginBottom: 24,
-    },
-    heroIcon: {
-        fontSize: 56,
-    },
-    heroTitle: {
-        fontSize: 28,
-        fontWeight: '800',
-        color: AppColors.textPrimary,
-        letterSpacing: -0.5,
-        marginBottom: 8,
-    },
-    heroSubtitle: {
-        fontSize: 15,
-        color: AppColors.textSecondary,
-        textAlign: 'center',
-        lineHeight: 22,
-        paddingHorizontal: 20,
-    },
-
-    // ─── Buttons ────────────────────────────────────────────
-    actionButtons: {
-        gap: 14,
-        marginBottom: 28,
-    },
-    primaryButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        paddingVertical: 18,
-        borderRadius: 16,
-        elevation: 6,
-        shadowColor: AppColors.accentCyan,
-        shadowOffset: { width: 0, height: 6 },
-        shadowOpacity: 0.35,
-        shadowRadius: 16,
-    },
-    primaryButtonIcon: {
-        fontSize: 24,
-        marginRight: 12,
-    },
-    primaryButtonText: {
-        fontSize: 18,
-        fontWeight: '700',
-        color: '#FFFFFF',
-    },
-    secondaryButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        paddingVertical: 16,
-        borderRadius: 16,
-        borderWidth: 1.5,
-        borderColor: AppColors.accentCyan + '50',
-        backgroundColor: AppColors.accentCyan + '10',
-    },
-    secondaryButtonIcon: {
-        fontSize: 22,
-        marginRight: 10,
-    },
-    secondaryButtonText: {
-        fontSize: 18,
-        fontWeight: '600',
-        color: AppColors.accentCyan,
-    },
-
-    // ─── Feature Pills ─────────────────────────────────────
-    featurePills: {
-        flexDirection: 'row',
-        justifyContent: 'center',
-        gap: 10,
-        marginBottom: 32,
-    },
-    pill: {
-        paddingHorizontal: 14,
-        paddingVertical: 6,
-        borderRadius: 20,
-        backgroundColor: AppColors.surfaceCard,
-        borderWidth: 1,
-        borderColor: AppColors.textMuted + '30',
-    },
-    pillText: {
-        fontSize: 12,
-        color: AppColors.textSecondary,
-        fontWeight: '500',
-    },
-
-    // ─── History ────────────────────────────────────────────
-    historySection: {
-        marginTop: 8,
-    },
-    historyHeader: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: 12,
-    },
-    historyTitle: {
-        fontSize: 16,
-        fontWeight: '600',
-        color: AppColors.textPrimary,
-    },
-    historyClear: {
-        fontSize: 14,
-        color: AppColors.accentCyan,
-        fontWeight: '600',
-    },
-    historyItem: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        padding: 14,
-        backgroundColor: AppColors.surfaceCard,
-        borderRadius: 12,
-        borderWidth: 1,
-        borderColor: AppColors.textMuted + '1A',
-        marginBottom: 8,
-    },
-    historyText: {
-        flex: 1,
-        fontSize: 13,
-        color: AppColors.textSecondary,
-        lineHeight: 18,
-    },
-    historyMeta: {
-        fontSize: 11,
-        color: AppColors.textMuted,
-        marginLeft: 10,
-    },
-
-    // ─── Processing ─────────────────────────────────────────
-    processingContainer: {
-        alignItems: 'center',
-        paddingTop: 40,
-    },
-    processingImage: {
-        width: 260,
-        height: 260,
-        borderRadius: 20,
-        borderWidth: 2,
-        borderColor: AppColors.accentCyan + '60',
-    },
-    processingOverlay: {
-        ...StyleSheet.absoluteFillObject,
-        borderRadius: 20,
-        backgroundColor: AppColors.primaryDark + 'AA',
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    processingText: {
-        fontSize: 18,
-        fontWeight: '600',
-        color: AppColors.textPrimary,
-        marginTop: 24,
-    },
-    processingSubtext: {
-        fontSize: 13,
-        color: AppColors.textMuted,
-        marginTop: 6,
-    },
-
-    // ─── Result ─────────────────────────────────────────────
-    resultContainer: {
-        flex: 1,
-    },
-    imagePreviewCard: {
-        borderRadius: 16,
-        overflow: 'hidden',
-        marginBottom: 20,
-        borderWidth: 1,
-        borderColor: AppColors.accentCyan + '30',
-    },
-    imagePreview: {
-        width: '100%',
-        height: 200,
-    },
-    imageOverlay: {
-        position: 'absolute',
-        bottom: 0,
-        left: 0,
-        right: 0,
-        padding: 12,
-        backgroundColor: AppColors.primaryDark + 'CC',
-    },
-    detectionBadge: {
-        alignSelf: 'flex-start',
-        paddingHorizontal: 12,
-        paddingVertical: 5,
-        borderRadius: 20,
-        backgroundColor: AppColors.accentCyan + '25',
-    },
-    detectionBadgeText: {
-        fontSize: 12,
-        fontWeight: '600',
-        color: AppColors.accentCyan,
-    },
-
-    // ─── Text Card ──────────────────────────────────────────
-    textCard: {
-        backgroundColor: AppColors.surfaceCard,
-        borderRadius: 20,
-        borderWidth: 1,
-        borderColor: AppColors.accentCyan + '30',
-        overflow: 'hidden',
-        marginBottom: 20,
-    },
-    textCardHeader: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        padding: 16,
-        paddingBottom: 0,
-    },
-    textCardTitle: {
-        fontSize: 16,
-        fontWeight: '700',
-        color: AppColors.textPrimary,
-    },
-    charCountContainer: {
-        paddingHorizontal: 16,
-        paddingBottom: 12,
-        alignItems: 'flex-end',
-    },
-    charCount: {
-        fontSize: 12,
-        color: AppColors.textMuted,
-    },
-    textEditorContainer: {
-        height: 200, // Fixed height for the editor container
-        margin: 16,
-        backgroundColor: AppColors.primaryDark + '30',
-        borderRadius: 12,
-        borderWidth: 1,
-        borderColor: AppColors.textMuted + '20',
-    },
-    textEditorScroll: {
-        flex: 1,
-    },
-    textEditor: {
-        padding: 12,
-        fontSize: 15,
-        color: AppColors.textPrimary,
-        lineHeight: 22,
-        textAlignVertical: 'top',
-    },
-
-    // ─── Action Bar ─────────────────────────────────────────
-    actionBar: {
-        flexDirection: 'column',
-        padding: 16,
-        gap: 12,
-        backgroundColor: AppColors.primaryMid,
-        borderBottomLeftRadius: 20,
-        borderBottomRightRadius: 20,
-    },
-    actionRow: {
-        flexDirection: 'row',
-        gap: 12,
-    },
-    actionButton: {
-        flex: 1,
-    },
-    actionButtonGradient: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        paddingVertical: 14,
-        borderRadius: 14,
-        elevation: 4,
-        shadowColor: AppColors.accentCyan,
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.3,
-        shadowRadius: 8,
-    },
-    actionButtonOutline: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        paddingVertical: 14,
-        borderRadius: 14,
-        borderWidth: 2,
-        borderColor: AppColors.accentCyan + '40',
-        backgroundColor: AppColors.accentCyan + '08',
-    },
-    scanAnotherButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        paddingVertical: 14,
-        borderRadius: 14,
-        borderWidth: 2,
-        borderColor: AppColors.accentCyan + '40',
-        backgroundColor: AppColors.accentCyan + '08',
-    },
-    actionLabel: {
-        fontSize: 15,
-        fontWeight: '700',
-        color: '#FFFFFF',
-        letterSpacing: 0.5,
-    },
-    actionLabelOutline: {
-        fontSize: 15,
-        fontWeight: '600',
-        color: AppColors.accentCyan,
-        letterSpacing: 0.3,
-    },
-
-    // ─── New Scan ───────────────────────────────────────────
-    newScanButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        paddingVertical: 14,
-        borderRadius: 14,
-        backgroundColor: AppColors.surfaceCard,
-        borderWidth: 1,
-        borderColor: AppColors.textMuted + '30',
-        gap: 8,
-    },
-    newScanIcon: {
-        fontSize: 18,
-    },
-    newScanText: {
-        fontSize: 15,
-        fontWeight: '600',
-        color: AppColors.textSecondary,
-    },
-
-    // ─── Toast ──────────────────────────────────────────────
-    toast: {
-        position: 'absolute',
-        top: 12,
-        left: 24,
-        right: 24,
-        zIndex: 100,
-    },
-    toastGradient: {
-        paddingVertical: 14,
-        borderRadius: 14,
-        alignItems: 'center',
-        elevation: 8,
-        shadowColor: AppColors.accentGreen,
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.3,
-        shadowRadius: 12,
-    },
-    toastText: {
-        fontSize: 15,
-        fontWeight: '600',
-        color: '#FFFFFF',
-    },
-    // ─── Image Modal ────────────────────────────────────────
-    modalBackground: {
-        flex: 1,
-        backgroundColor: 'rgba(0, 0, 0, 0.9)',
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    modalCloseArea: {
-        width: '100%',
-        height: '100%',
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    modalImage: {
-        width: '100%',
-        height: '80%',
-    },
-    modalCloseButton: {
-        position: 'absolute',
-        top: 50,
-        right: 20,
-        width: 44,
-        height: 44,
-        borderRadius: 22,
-        backgroundColor: 'rgba(255, 255, 255, 0.2)',
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    modalCloseText: {
-        color: '#FFF',
-        fontSize: 20,
-        fontWeight: 'bold',
-    },
+  flex: { flex: 1 },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Space.sm,
+    paddingHorizontal: GUTTER - Space.xs,
+    paddingTop: Space.sm,
+    paddingBottom: Space.md,
+  },
+  close: { backgroundColor: Colors.surface, ...Elevation.rest },
+  headerSpacer: { width: Touch.min },
+  content: { paddingHorizontal: GUTTER, paddingBottom: Space.huge, gap: Space.lg },
+  stage: {
+    height: STAGE_HEIGHT,
+    borderRadius: Radius.md,
+    overflow: 'hidden',
+    backgroundColor: Colors.sunken,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stageStart: { backgroundColor: Colors.primarySoft },
+  startFrame: { width: 196, height: 150, alignItems: 'center', justifyContent: 'center' },
+  lockArea: { ...StyleSheet.absoluteFillObject, margin: Space.lg },
+  dim: { ...StyleSheet.absoluteFillObject, backgroundColor: Colors.canvas, opacity: 0.45 },
+  intro: { marginTop: -Space.xs },
+  tags: { flexDirection: 'row', flexWrap: 'wrap', gap: Space.sm },
+  actions: { gap: Space.md },
+  row: { flexDirection: 'row', gap: Space.md },
+  clipsHeader: { marginHorizontal: -GUTTER, marginTop: Space.sm, marginBottom: -Space.sm },
+  reading: { alignItems: 'center', gap: Space.md, paddingTop: Space.sm },
+  textCard: { gap: Space.sm },
+  textInput: {
+    ...Type.body,
+    color: Colors.text,
+    minHeight: 120,
+    padding: Space.md,
+    borderRadius: Radius.sm,
+    borderWidth: 1.5,
+    borderColor: Colors.line,
+    backgroundColor: Colors.canvas,
+  },
+  outcome: { alignItems: 'center', gap: Space.sm, paddingTop: Space.sm },
+  outcomeIcon: {
+    width: 64,
+    height: 64,
+    borderRadius: Radius.pill,
+    backgroundColor: Colors.sunken,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: Space.xs,
+  },
+  outcomeActions: { alignSelf: 'stretch', marginTop: Space.lg },
+  night: { flex: 1, backgroundColor: Colors.night, justifyContent: 'center' },
+  nightImage: { width: '100%', height: '80%' },
+  nightClose: { position: 'absolute', right: GUTTER },
 });
