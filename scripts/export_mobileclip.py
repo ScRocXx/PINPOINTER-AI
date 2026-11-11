@@ -3,8 +3,12 @@
 export_mobileclip.py — Export MobileCLIP2-S0 to the INT8 ONNX models the app loads.
 
 Run on a dev machine (not on Android), Python 3.10+:
-  pip install torch --index-url https://download.pytorch.org/whl/cpu
-  pip install open_clip_torch timm onnx onnxruntime pillow
+  pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+  pip install open_clip_torch timm onnx onnxruntime onnxscript pillow
+
+torch and torchvision must come from the same index: with only torch from the
+CPU index, pip pulls a torchvision built for a different torch and the script
+stops with "operator torchvision::nms does not exist".
 
 Usage:
   python scripts/export_mobileclip.py
