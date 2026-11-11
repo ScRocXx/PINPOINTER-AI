@@ -1,6 +1,8 @@
 {
   "name": "pinpointer",
   "version": "1.0.0",
+  "private": true,
+  "license": "UNLICENSED",
   "description": "PinPointer — Privacy-first, offline search engine & intelligent media organizer",
   "main": "index.js",
   "scripts": {

@@ -104,7 +104,7 @@ Lightning-fast, fully offline search engine:
 | **PII Masking** | Sensitive info masked in the index itself (`XXXX-XXXX-1234`) |
 | **Encrypted Local Storage** | All data stored securely on device |
 | **No Tracking** | Zero telemetry, analytics, or user profiling |
-| **Open Source Ready** | Full transparency into how your data is processed |
+| **Verifiable Privacy** | 100% on-device architecture with zero data exposure |
 
 ---
 
@@ -206,13 +206,15 @@ This project was ideated, architected, and engineered from the ground up by the 
 
 ---
 
-## ⚖️ Copyright & Licensing
+## ⚖️ Copyright & Proprietary Notice
 
-**© 2026 Northern Blades. All Rights Reserved.**
+**© 2026 Northern Blades / ScRocXx. All Rights Reserved.**
 
-This project is open-source under the MIT License. 
+**PROPRIETARY & CONFIDENTIAL — NOT OPEN SOURCE**
 
-While the code is available for public viewing and educational purposes, any replication, distribution, or adaptation of this codebase **must** include this original copyright notice and explicitly attribute the original core contributors listed above. Unauthorized use, misrepresentation of authorship, or failure to provide proper attribution is a direct violation of this license.
+This repository and its entire codebase are strictly proprietary and confidential. No license (open-source or otherwise) is granted to any individual or entity.
+
+Unauthorized copying, reproduction, distribution, modification, reverse engineering, creating derivative works, or commercial exploitation of any part of this software, via any medium, is strictly prohibited without prior explicit written permission from the copyright owners.
 
 ---
 <div align="center"> <p> <strong>Built with ❤️ for Privacy-First, Offline-First Android Development</strong> </p> <p> ⭐ If you find this helpful, please star the repository! </p> </div> 
