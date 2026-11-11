@@ -166,7 +166,10 @@ class DocumentAccessModule(private val ctx: ReactApplicationContext) :
     }
 
     private fun startPicker(intent: Intent, requestCode: Int, promise: Promise) {
-        val activity = currentActivity
+        // React Native 0.80+ only offers the activity through the context
+        // (the module's own getCurrentActivity() is deprecated, and as a Kotlin
+        // function it no longer reads as a `currentActivity` property).
+        val activity = ctx.currentActivity
         if (activity == null) {
             promise.reject("NO_ACTIVITY", "Pinpointer is not in the foreground")
             return
