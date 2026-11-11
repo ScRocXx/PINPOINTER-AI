@@ -110,7 +110,7 @@ export const StepFrame: React.FC<StepFrameProps> = ({ top, children, dots, actio
         {children}
       </ScrollView>
       <View style={styles.footer}>
-        <StepDots {...dots} />
+        <StepDots key={dots.count} {...dots} />
         <View style={styles.actions}>{actions}</View>
       </View>
     </Animated.View>

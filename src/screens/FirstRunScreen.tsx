@@ -38,6 +38,7 @@ export const FirstRunScreen: React.FC<FirstRunScreenProps> = ({ onFinish }) => {
   const [index, setIndex] = useState(0);
   const from = useRef(0);
   const finishing = useRef(false);
+  const [pickedPdfs, setPickedPdfs] = useState(false);
 
   // Drop steps for permissions already given, but only while still on the
   // welcome, so the dots never change under someone's finger.
@@ -102,9 +103,25 @@ export const FirstRunScreen: React.FC<FirstRunScreenProps> = ({ onFinish }) => {
       ) : step === 'photos' ? (
         <PhotosStep key="photos" dots={dots} direction={direction} photos={photos} onNext={next} onBack={back} />
       ) : step === 'files' ? (
-        <FilesStep key="files" dots={dots} direction={direction} docs={docs} onNext={next} onBack={back} />
+        <FilesStep
+          key="files"
+          dots={dots}
+          direction={direction}
+          docs={docs}
+          onPickedFiles={() => setPickedPdfs(true)}
+          onNext={next}
+          onBack={back}
+        />
       ) : (
-        <ReadyStep key="ready" dots={dots} direction={direction} photos={photos} docs={docs} onFinish={finish} />
+        <ReadyStep
+          key="ready"
+          dots={dots}
+          direction={direction}
+          photos={photos}
+          docs={docs}
+          pickedPdfs={pickedPdfs}
+          onFinish={finish}
+        />
       )}
     </Screen>
   );

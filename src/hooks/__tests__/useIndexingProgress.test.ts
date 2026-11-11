@@ -105,6 +105,52 @@ describe('useIndexingProgress', () => {
     expect(photoTotal).toHaveBeenCalledTimes(3);
   });
 
+  it('keeps the new count when more photos are allowed and a job starts at once', async () => {
+    photoTotal.mockResolvedValueOnce(5);
+    const { result, rerender } = await renderHook(({ key }: { key: string }) => useIndexingProgress(key), {
+      initialProps: { key: 'limited' },
+    });
+    await act(async () => {});
+    expect(result.current.photos.total).toBe(5);
+
+    let resolveCount: (n: number) => void = () => {};
+    photoTotal.mockImplementationOnce(() => new Promise<number>(r => (resolveCount = r)));
+    await act(async () => {
+      await rerender({ key: 'full' });
+      mockListener?.(snap({ running: 'gallery-deep' }));
+    });
+    await act(async () => resolveCount(2400));
+    expect(result.current.photos.total).toBe(2400);
+    expect(result.current.photos.running).toBe(true);
+  });
+
+  it('tries the count again when it failed', async () => {
+    photoTotal.mockResolvedValueOnce(-1);
+    const { result } = await renderHook(() => useIndexingProgress('full'));
+    await act(async () => {});
+    expect(result.current.photos.total).toBeNull();
+    await act(async () => mockListener?.(snap({ running: 'gallery-deep' })));
+    await act(async () => {});
+    expect(result.current.photos.total).toBe(2400);
+  });
+
+  it('does not re-render for every photo, only for what it shows', async () => {
+    let renders = 0;
+    await renderHook(() => {
+      renders++;
+      return useIndexingProgress();
+    });
+    await act(async () => {});
+    await act(async () => mockListener?.(snap({ running: 'gallery-deep', galleryProcessed: 1 })));
+    await act(async () => {});
+    const afterStart = renders;
+    await act(async () => {
+      for (let i = 2; i < 30; i++) mockListener?.(snap({ running: 'gallery-deep', galleryProcessed: i }));
+    });
+    // At most the one throttled re-read of the counts, not one per photo.
+    expect(renders - afterStart).toBeLessThanOrEqual(1);
+  });
+
   it('counts once at the start when photos are already being read', async () => {
     mockSnapshot = snap({ running: 'gallery-deep' });
     const { result } = await renderHook(() => useIndexingProgress());
