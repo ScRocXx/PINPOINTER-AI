@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react';
+import React, { useRef, useEffect, useState } from 'react';
 import { ModelDownloadSheet, FilterCategory } from '../components';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -8,17 +8,12 @@ import { addRecentPhoto } from '../utils/RecentPhotos';
 import {
     View,
     TextInput,
-    TouchableWithoutFeedback,
-    StatusBar,
-    Animated,
     Keyboard,
-    useWindowDimensions,
     Vibration,
     BackHandler,
 } from 'react-native';
 import { usePinpointerShared } from '../hooks/PinpointerContext';
-import { HomeScreen } from '../screens/HomeScreen';
-import { HomeView } from './pinpointer/HomeView';
+import { Home } from './pinpointer/Home';
 import { PhotoPreviewModal } from './pinpointer/PhotoPreviewModal';
 import { SearchBar } from './pinpointer/SearchBar';
 import { SearchOverlay } from './pinpointer/SearchOverlay';
@@ -28,12 +23,12 @@ import { styles } from './pinpointer/styles';
  * Main Pinpointer screen: universal search over indexed photos and documents.
  *
  * Owns the screen's state and wiring; the parts live in `./pinpointer/`:
- * `HomeView` (at rest: indexing card, suggestions), `SearchOverlay` (recent
- * searches, filters, results), `ResultItem`, `SearchBar` (with voice) and
- * `PhotoPreviewModal`. The slide-in drawer embeds {@link HomeScreen}.
+ * `Home` (at rest: search and mic, Find quickly, Important, indexing),
+ * `SearchOverlay` (recent searches, filters, results), `ResultItem`,
+ * `SearchBar` (with voice) and `PhotoPreviewModal`. The bottom tabs replaced
+ * the old side menu.
  */
 export const PinpointerScreen: React.FC = () => {
-    const { width } = useWindowDimensions();
     const navigation = useNavigation<StackNavigationProp<RootStackParamList>>();
 
     const {
@@ -44,9 +39,7 @@ export const PinpointerScreen: React.FC = () => {
         isRecording, isTranscribing, isModelLoading,
         startListening, stopListening,
         handleShare, handleEdit,
-        handleQuickSync, handleDeepSync,
-        isSyncing, isDeepSync, syncCount, lastSyncTime,
-        isSyncingDocs, docSyncCount, totalDocs, lastDocSyncTime, handleDocumentSync,
+        handleDeepSync, handleDocumentSync,
         searchHistory, handleSelectHistory, handleDeleteHistory, handleClearHistory,
     } = usePinpointerShared();
 
@@ -54,43 +47,18 @@ export const PinpointerScreen: React.FC = () => {
 
     const [showModelSheet, setShowModelSheet] = useState(false);
     const [selectedFilter, setSelectedFilter] = useState<FilterCategory>('ALL');
-    const [isDrawerOpen, setIsDrawerOpen] = useState(false);
 
     const searchInputRef = useRef<TextInput>(null);
-    const drawerAnim = useRef(new Animated.Value(-width)).current;
 
-    // Search and the side menu use the whole screen: hide the tab bar.
+    // Search uses the whole screen: hide the tab bar.
     // (This screen is a tab; the stack-typed navigation doesn't know the option.)
     useEffect(() => {
         const tabs = navigation as unknown as { setOptions?: (options: MainTabNavigationOptions) => void };
-        tabs.setOptions?.({ tabBarHidden: isSearching || isDrawerOpen });
-    }, [isSearching, isDrawerOpen, navigation]);
-
-    const openDrawer = () => {
-        setIsDrawerOpen(true);
-        Animated.timing(drawerAnim, {
-            toValue: 0,
-            duration: 300,
-            useNativeDriver: true,
-        }).start();
-    };
-
-    const closeDrawer = useCallback(() => {
-        Animated.timing(drawerAnim, {
-            toValue: -width,
-            duration: 300,
-            useNativeDriver: true,
-        }).start(() => {
-            setIsDrawerOpen(false);
-        });
-    }, [drawerAnim, width]);
+        tabs.setOptions?.({ tabBarHidden: isSearching });
+    }, [isSearching, navigation]);
 
     useEffect(() => {
         const backAction = () => {
-            if (isDrawerOpen) {
-                closeDrawer();
-                return true;
-            }
             // First behavior: cancel search if search is active
             if (isSearching) {
                 Keyboard.dismiss();
@@ -112,9 +80,9 @@ export const PinpointerScreen: React.FC = () => {
         );
 
         return () => backHandler.remove();
-    }, [isSearching, isDrawerOpen, closeDrawer, setIsSearching, setSearchText]);
+    }, [isSearching, setIsSearching, setSearchText]);
 
-    // Handle Deep Sync trigger from HomeScreen Navigation
+    // Another screen can ask for a look through all photos (startUniversalSync)
     useEffect(() => {
         if (route.params?.startUniversalSync) {
             // Automatically launch the heavy gallery sync
@@ -155,10 +123,7 @@ export const PinpointerScreen: React.FC = () => {
             setSearchText('');
         }, 300);
 
-        // 2. Open the Home Screen Drawer
-        openDrawer();
-
-        // 3. Trigger Universal Sync
+        // 2. Look through all photos and papers; Home shows the progress
         handleDeepSync();
         handleDocumentSync();
     };
@@ -181,34 +146,9 @@ export const PinpointerScreen: React.FC = () => {
 
     return (
         <View style={styles.container}>
-            <StatusBar barStyle="light-content" backgroundColor="#05050A" />
-            <View style={styles.glassBackground}>
-                {/* Aurora Background */}
-                <View style={styles.aurora1} />
-                <View style={styles.aurora2} />
-                <View style={styles.aurora3} />
-            </View>
-
             <View style={styles.flex1}>
-                {/* ────── NORMAL MODE (Glassmorphism Dashboard) ────── */}
-                <HomeView
-                    onOpenMenu={openDrawer}
-                    isSyncing={isSyncing}
-                    isSyncingDocs={isSyncingDocs}
-                    isDeepSync={isDeepSync}
-                    syncCount={syncCount}
-                    docSyncCount={docSyncCount}
-                    totalDocs={totalDocs}
-                    lastSyncTime={lastSyncTime}
-                    lastDocSyncTime={lastDocSyncTime}
-                    onQuickSync={handleQuickSync}
-                    onDocumentSync={() => handleDocumentSync(50)}
-                    onSuggestion={text => {
-                        setSearchText(text);
-                        setIsSearching(true);
-                    }}
-                    searchBar={renderSearchBar(false)}
-                />
+                {/* ────── HOME (at rest) ────── */}
+                <Home onOpenImage={openImage} />
 
                 {/* ────── SEARCHING MODE OVERLAY ────── */}
                 <SearchOverlay
@@ -246,21 +186,6 @@ export const PinpointerScreen: React.FC = () => {
                 visible={showModelSheet}
                 onClose={() => setShowModelSheet(false)}
             />
-
-            {/* SLIDING DRAWER & OVERLAY */}
-            {isDrawerOpen && (
-                <TouchableWithoutFeedback onPress={closeDrawer}>
-                    <Animated.View style={styles.drawerOverlay} />
-                </TouchableWithoutFeedback>
-            )}
-            <Animated.View
-                style={[
-                    styles.drawerContainer,
-                    { transform: [{ translateX: drawerAnim }] }
-                ]}
-            >
-                <HomeScreen navigation={navigation} onCloseDrawer={closeDrawer} />
-            </Animated.View>
         </View>
     );
 };

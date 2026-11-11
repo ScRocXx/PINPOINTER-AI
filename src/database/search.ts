@@ -5,9 +5,11 @@
  */
 import { soundex } from '../utils/Soundex';
 import { queryWords, termsForQueryWord } from '../utils/SearchKeys';
+import { collectionForQuery } from '../utils/Collections';
 import { AppLogger } from '../utils/AppLogger';
 import { getDb, isFtsAvailable, isVecAvailable } from './connection';
 import { processResults } from './documents';
+import { collectionTerms } from './collectionTerms';
 import type { DocumentRecord } from './types';
 
 // ─── Synonym Map for Indian Documents ───────────────────────────────────────
@@ -72,6 +74,8 @@ const ftsGroup = (word: string): string => {
  *  1. Searches BOTH title and content columns
  *  2. Multi-word queries are split and AND-matched
  *  3. Synonym expansion for common Indian document terms
+ *  4. A query that names a Home collection ("ID cards", "पहचान पत्र") finds
+ *     every concept in it (Aadhaar, PAN, voter ID...) instead of the words
  */
 export const searchDocuments = (query: string, queryVector?: Float32Array): DocumentRecord[] => {
   const t0 = Date.now();
@@ -84,11 +88,15 @@ export const searchDocuments = (query: string, queryVector?: Float32Array): Docu
     // Split query into individual words for multi-word AND matching
     const words = queryWords(trimmed);
     const safeQuery = words.join(' ');
+    // "ID cards" means any ID card: match the collection's concept tokens
+    // and phrases (any of them) instead of the words "id" AND "cards".
+    const collection = collectionTerms(collectionForQuery(trimmed));
+    const collectionFts = collection?.fts ?? '';
 
     // ── Hybrid Search: FTS5 + Vector via Reciprocal Rank Fusion ──────────
     if (isFtsAvailable() && isVecAvailable() && queryVector && safeQuery) {
       try {
-        const ftsTerms = words.map(ftsGroup).join(' OR ');
+        const ftsTerms = collectionFts || words.map(ftsGroup).join(' OR ');
         const vectorBlob = new Uint8Array(queryVector.buffer);
 
         const hybridResults = db.executeSync(`
@@ -144,7 +152,7 @@ export const searchDocuments = (query: string, queryVector?: Float32Array): Docu
     if (isFtsAvailable() && safeQuery) {
       try {
         // Build FTS5 query: each word with wildcard, AND-joined
-        const ftsTerms = words.map(ftsGroup).join(' AND ');
+        const ftsTerms = collectionFts || words.map(ftsGroup).join(' AND ');
         const ftsResults = db.executeSync(
           `SELECT d.id, d.title, d.content, d.filePath, d.type, d.detection_type, d.timestamp
            FROM fts_index f
@@ -169,7 +177,12 @@ export const searchDocuments = (query: string, queryVector?: Float32Array): Docu
     const whereClauses: string[] = [];
     const params: string[] = [];
 
-    for (const word of words.length > 0 ? words : [trimmed]) {
+    if (collection) {
+      // One OR group over the collection's terms.
+      whereClauses.push(`(${collection.like.map(() => 'content LIKE ? COLLATE NOCASE').join(' OR ')})`);
+      params.push(...collection.like);
+    }
+    for (const word of collection ? [] : words.length > 0 ? words : [trimmed]) {
       const expanded = expandWithSynonyms(word);
       const orParts: string[] = [];
       for (const syn of expanded) {

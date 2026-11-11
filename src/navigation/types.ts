@@ -16,8 +16,6 @@ export type StackParamList = {
   /** Welcome and permissions, shown once on a new install (see FirstRun.ts). */
   FirstRun: undefined;
   Main: NavigatorScreenParams<MainTabParamList> | undefined;
-  /** The old feature-card home. Still shown as the side menu. */
-  Home: undefined;
   /** Read text from a photo (the Scan button). */
   SmartClipboard: { scanUri?: string } | undefined;
   /** Where Pinpointer looks for PDFs: add and remove folders (from Papers). */
