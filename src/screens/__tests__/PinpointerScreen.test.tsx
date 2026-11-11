@@ -493,7 +493,7 @@ describe('PinpointerScreen — search results', () => {
     });
   });
 
-  test('tapping a paper whose file is missing says so and does not open it', async () => {
+  test('tapping a paper that cannot be opened says so and does not open it', async () => {
     (RNFS.exists as jest.Mock).mockResolvedValue(false);
     const announce = jest.spyOn(AccessibilityInfo, 'announceForAccessibility');
     state.isSearching = true;
@@ -501,8 +501,10 @@ describe('PinpointerScreen — search results', () => {
     state.searchResults = [docResult()];
     await renderScreen();
     await press(screen.getByTestId('result-item'));
-    await waitFor(() => expect(announce).toHaveBeenCalledWith('This file is no longer on your phone.'));
+    await waitFor(() => expect(announce).toHaveBeenCalledWith('This paper could not be opened.'));
     expect(NativeModules.StorageModule.openPDF).not.toHaveBeenCalled();
+    // Only forgetIfGone may decide a file was deleted: the row stays.
+    expect(screen.getByTestId('result-item')).toBeTruthy();
   });
 });
 
@@ -700,6 +702,25 @@ describe('PinpointerScreen — voice search in search', () => {
     expect(actions.stopListening).toHaveBeenCalledTimes(1);
     await press(screen.getByTestId('listening-panel-stop'));
     expect(actions.stopListening).toHaveBeenCalledTimes(2);
+  });
+
+  test('closing search while listening stops the mic, so search cannot reopen by itself', async () => {
+    state.isSearching = true;
+    state.isRecording = true;
+    await renderScreen();
+    await press(screen.getByRole('button', { name: 'Close search' }));
+    expect(actions.cancelListening).toHaveBeenCalledTimes(1);
+    expect(actions.setIsSearching).toHaveBeenCalledWith(false);
+    await waitFor(() => expect(actions.setSearchText).toHaveBeenCalledWith(''), { timeout: 2000 });
+  });
+
+  test('closing search while the words are read drops them too', async () => {
+    state.isSearching = true;
+    state.isTranscribing = true;
+    await renderScreen();
+    await press(screen.getByRole('button', { name: 'Close search' }));
+    expect(actions.cancelListening).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(actions.setSearchText).toHaveBeenCalledWith(''), { timeout: 2000 });
   });
 
   test('while the words are being read, it says "Understanding…" and the mic waits', async () => {

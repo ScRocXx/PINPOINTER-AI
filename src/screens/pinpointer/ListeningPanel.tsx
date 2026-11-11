@@ -30,15 +30,12 @@ const RINGS = [
 const useMicLevel = (active: boolean, reduceMotion: boolean): Animated.Value => {
   const level = useRef(new Animated.Value(0)).current;
   useEffect(() => {
-    if (!active) {
+    // Reduce Motion: the rings stay still.
+    if (!active || reduceMotion) {
       level.setValue(0);
       return;
     }
     const stop = subscribeMicLevel(v => {
-      if (reduceMotion) {
-        level.setValue(v);
-        return;
-      }
       Animated.timing(level, { toValue: v, duration: 90, easing: Easing.out(Easing.quad), useNativeDriver: true }).start();
     });
     return () => {

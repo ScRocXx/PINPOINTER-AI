@@ -174,6 +174,11 @@ const SearchContent: React.FC<SearchOverlayProps> = ({
 
   const also = useMemo(() => (query ? alsoSearchedAs(query) : []), [query]);
 
+  // Read through a ref so `open` (and every row) keeps one identity while
+  // results re-rank or a filter changes.
+  const shownRef = useRef(shown);
+  shownRef.current = shown;
+
   const open = useCallback(
     async (item: DocumentRecord) => {
       if (opening.current) return;
@@ -191,7 +196,7 @@ const SearchContent: React.FC<SearchOverlayProps> = ({
         }
         if (item.type === 'IMAGE') {
           // A failed check still shows the photo: the viewer copes if it can't load.
-          const photos = shown.filter(r => r.type === 'IMAGE');
+          const photos = shownRef.current.filter(r => r.type === 'IMAGE');
           onOpenPhoto(photos, Math.max(0, photos.indexOf(item)));
         } else if (outcome === 'failed') {
           toast.show(t('papers.openFailed'), { icon: 'alert' });
@@ -200,14 +205,14 @@ const SearchContent: React.FC<SearchOverlayProps> = ({
         opening.current = false;
       }
     },
-    [searchText, shown, onOpenPhoto, toast, t],
+    [searchText, onOpenPhoto, toast, t],
   );
 
   const renderItem = useCallback(
     ({ item, index }: ListRenderItemInfo<DocumentRecord>) => (
-      <ResultItem item={item} query={searchText} index={index} pinned={isPinned(item.filePath)} onPress={open} />
+      <ResultItem item={item} query={query} index={index} pinned={isPinned(item.filePath)} onPress={open} />
     ),
-    [searchText, isPinned, open],
+    [query, isPinned, open],
   );
 
   let body: React.ReactNode;

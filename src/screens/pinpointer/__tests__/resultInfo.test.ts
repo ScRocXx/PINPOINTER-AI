@@ -35,6 +35,10 @@ describe('fileNameOf', () => {
   it('reads a clean name from a path', () => {
     expect(fileNameOf('file:///storage/Download/Light_Bill%20March.PDF')).toBe('Light Bill March');
   });
+
+  it('keeps a name with a stray % instead of crashing', () => {
+    expect(fileNameOf('file:///storage/Download/50% off_offer.pdf')).toBe('50% off offer');
+  });
 });
 
 describe('describeResult', () => {
@@ -92,6 +96,15 @@ describe('describeResult', () => {
     );
     expect(info.title).toBe('Rent Agreement');
   });
+
+  it('masks an ID number in a file name used as the title', () => {
+    const info = describeResult(
+      record({ type: 'DOCUMENT', title: '', content: 'x', filePath: 'file:///docs/Aadhaar 1234 5678 9012.pdf' }),
+      'aadhaar',
+    );
+    expect(info.title).not.toMatch(/1234 5678/);
+    expect(info.title).toMatch(/9012$/);
+  });
 });
 
 describe('openResult', () => {
@@ -117,9 +130,10 @@ describe('openResult', () => {
     expect(NativeModules.StorageModule.openPDF).toHaveBeenCalledWith('/docs/a.pdf');
   });
 
-  it('reports a paper that is not on disk as gone', async () => {
+  it('reports a paper it cannot see as failed, not gone, so it stays in search', async () => {
     (RNFS.exists as jest.Mock).mockResolvedValue(false);
-    await expect(openResult(record({ type: 'DOCUMENT', filePath: 'file:///docs/a.pdf' }))).resolves.toBe('gone');
+    await expect(openResult(record({ type: 'DOCUMENT', filePath: 'file:///docs/a.pdf' }))).resolves.toBe('failed');
+    expect(NativeModules.StorageModule.openPDF).not.toHaveBeenCalled();
   });
 
   it('falls back to the system when the native opener is missing, and reports failures', async () => {

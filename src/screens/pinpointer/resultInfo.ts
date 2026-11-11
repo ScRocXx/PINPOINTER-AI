@@ -3,6 +3,7 @@ import { StringKey } from '../../i18n';
 import { IconName } from '../../components/ui';
 import { TintName } from '../../theme';
 import { DocumentCategory, classifyDocument } from '../../utils/DocumentClassifier';
+import { maskSensitiveData } from '../../utils/DataMasking';
 import { matchTermsIn, snippetFrom } from '../../utils/MatchTerms';
 
 /** The kind of paper, for the row's tile and its word ("Bill", "ID"). */
@@ -28,8 +29,14 @@ export const paperKind = (category: DocumentCategory): PaperKind => {
   return { icon: 'papers', tint: 'other', label: null };
 };
 
+/** A readable name from a path. A stray "%" ("50% off.pdf") is kept as it is. */
 export const fileNameOf = (path: string): string => {
-  const name = decodeURIComponent(path.split('/').pop() || '');
+  let name = path.split('/').pop() || '';
+  try {
+    name = decodeURIComponent(name);
+  } catch {
+    // Not URI-encoded: use the name as it is.
+  }
   return name.replace(/\.pdf$/i, '').replace(/[_]+/g, ' ').trim();
 };
 
@@ -58,7 +65,8 @@ export const describeResult = (item: DocumentRecord, query: string): ResultInfo 
     const snippet = isLabels ? content.replace(/\s+/g, ' ').trim() : snippetFrom(content, terms);
     return { isPhoto, title: null, snippet, terms, wordsMatch: terms.length > 0, isLabels, kind: null };
   }
-  const title = (item.title ?? '').trim() || fileNameOf(item.filePath);
+  // Stored titles are masked at index time; a file name never went through that.
+  const title = (item.title ?? '').trim() || maskSensitiveData(fileNameOf(item.filePath));
   const terms = matchTermsIn(`${title} ${content}`, query);
   const snippet = snippetFrom(content, terms);
   const kind = paperKind(classifyDocument(content, item.filePath.split('/').pop() || '').category);

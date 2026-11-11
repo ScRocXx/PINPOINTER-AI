@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import {
   AppText,
@@ -59,11 +59,14 @@ export const ResultItem: React.FC<ResultItemProps> = React.memo(
       .join('. ')
       .slice(0, 220);
 
+    // Rise in by the place the row first appeared at: a re-rank or a filter
+    // that moves it later doesn't replay the entrance.
+    const [enteredAt] = useState(index);
     // The corners lock on just after the row has risen into place.
-    const lockDelay = index < Stagger.max ? staggerDelay(index) + Duration.base - 40 : 0;
+    const lockDelay = enteredAt < Stagger.max ? staggerDelay(enteredAt) + Duration.base - 40 : 0;
 
     return (
-      <Reveal index={index}>
+      <Reveal index={enteredAt}>
         <PressableScale
           onPress={() => onPress(item)}
           pressedScale={0.985}

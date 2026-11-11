@@ -66,6 +66,8 @@ export const PinpointerScreen: React.FC = () => {
         const backAction = () => {
             // First behavior: cancel search if search is active
             if (isSearching) {
+                // Closing search also stops the mic, so it can't reopen search later.
+                if (isRecording || isTranscribing) cancelListening();
                 Keyboard.dismiss();
                 setIsSearching(false);
                 // Delay state clearing so the Animated.timing isn't dropped by
@@ -85,7 +87,7 @@ export const PinpointerScreen: React.FC = () => {
         );
 
         return () => backHandler.remove();
-    }, [isSearching, setIsSearching, setSearchText]);
+    }, [isSearching, isRecording, isTranscribing, cancelListening, setIsSearching, setSearchText]);
 
     // Another screen can ask for a look through all photos (startUniversalSync)
     useEffect(() => {
@@ -98,6 +100,7 @@ export const PinpointerScreen: React.FC = () => {
     }, [route.params?.startUniversalSync, handleDeepSync, navigation]);
 
     const handleBackPress = () => {
+        if (isRecording || isTranscribing) cancelListening();
         Keyboard.dismiss();
         setIsSearching(false);
         // Delay state clearing so the Animated.timing isn't dropped by

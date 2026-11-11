@@ -19,8 +19,10 @@ export const openResult = async (item: DocumentRecord): Promise<OpenOutcome> => 
     if (item.type !== 'DOCUMENT') return 'open';
 
     const cleanPath = item.filePath.replace('file://', '');
+    // Not being able to see it isn't the same as it being deleted (forgetIfGone
+    // decides that), so don't take it out of search here.
     const exists = await RNFS.exists(cleanPath).catch(() => false);
-    if (!exists) return 'gone';
+    if (!exists) return 'failed';
     if (StorageModule?.openPDF) {
       StorageModule.openPDF(cleanPath);
     } else {
