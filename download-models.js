@@ -1,12 +1,13 @@
 /**
- * download-models.js — Build-time script to download sherpa-onnx models, AAR, and MobileCLIP2-S0 ONNX models.
+ * download-models.js — Build-time script to download the sherpa-onnx AAR and speech model.
  * 
  * Downloads:
- *   1. Whisper Base (English, INT8 quantized) for STT (~165 MB)
- *   2. MobileCLIP2-S0 Vision Encoder (INT8) for semantic search (~11 MB)
- *   3. MobileCLIP2-S0 Text Encoder (INT8) for semantic search (~32 MB)
- *   4. OpenCLIP BPE Vocabulary for text tokenization (~1.3 MB)
- *   5. sherpa-onnx Android AAR
+ *   1. sherpa-onnx Android AAR
+ *   2. Whisper Base (English, INT8 quantized) for STT. Only the three files
+ *      the app loads are kept (161 MB); the rest of the archive is removed.
+ *
+ * The MobileCLIP2-S0 models are not downloaded: scripts/export_mobileclip.py
+ * makes them.
  * 
  * Models are placed into android/app/src/main/assets/models/
  * AAR is placed into android/app/libs/
@@ -31,6 +32,9 @@ const { execSync } = require('child_process');
 // together (see CLAUDE.md), never one alone.
 const SHERPA_ONNX_VERSION = '1.13.4';
 
+/** The speech model files SherpaOnnxModule.kt loads. Keep the two lists in step. */
+const WHISPER_FILES = ['base.en-encoder.int8.onnx', 'base.en-decoder.int8.onnx', 'base.en-tokens.txt'];
+
 const MODELS = [
     {
         name: 'sherpa-onnx AAR',
@@ -43,6 +47,10 @@ const MODELS = [
         url: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-base.en.tar.bz2',
         extractTo: path.join(__dirname, 'android', 'app', 'src', 'main', 'assets', 'models', 'whisper'),
         type: 'archive',
+        // Everything in this folder goes into the APK. The archive also holds
+        // the float32 models (292 MB) and sample recordings, which the app
+        // never opens: SherpaOnnxModule.kt loads exactly these three files.
+        keep: WHISPER_FILES,
     },
     // MobileCLIP2-S0 models are exported via scripts/export_mobileclip.py
     // and placed manually into android/app/src/main/assets/models/clip/
@@ -173,7 +181,50 @@ function removeOtherSherpaAars(libsDir, keepName) {
     return stale;
 }
 
+/** True when every file in `keep` is in `dir` and not empty. */
+function hasAllFiles(dir, keep) {
+    return keep.every((name) => {
+        try {
+            return fs.statSync(path.join(dir, name)).size > 0;
+        } catch {
+            return false;
+        }
+    });
+}
+
+/**
+ * Deletes everything in `dir` that is not in `keep` (files and folders).
+ * Returns the names it removed and the bytes that freed.
+ */
+function pruneToKeepList(dir, keep) {
+    if (!fs.existsSync(dir)) return { removed: [], bytes: 0 };
+    const sizeOf = (target) => {
+        const stat = fs.statSync(target);
+        if (!stat.isDirectory()) return stat.size;
+        return fs.readdirSync(target).reduce((sum, name) => sum + sizeOf(path.join(target, name)), 0);
+    };
+    const removed = [];
+    let bytes = 0;
+    for (const name of fs.readdirSync(dir)) {
+        if (keep.includes(name)) continue;
+        const target = path.join(dir, name);
+        bytes += sizeOf(target);
+        fs.rmSync(target, { recursive: true, force: true });
+        removed.push(name);
+    }
+    return { removed, bytes };
+}
+
 // ─── Main ───────────────────────────────────────────────────────────
+
+/** Removes what the app does not load from an extracted model folder. */
+function reportPruned(model) {
+    if (!model.keep) return;
+    const { removed, bytes } = pruneToKeepList(model.extractTo, model.keep);
+    if (removed.length > 0) {
+        console.log(`  🧹 Removed ${removed.length} unused item(s), ${(bytes / 1024 / 1024).toFixed(0)} MB that would have gone into the APK`);
+    }
+}
 
 async function main() {
     console.log('\n🧠 Pinpointer Model Downloader');
@@ -203,14 +254,19 @@ async function main() {
             // Download archive, extract, then delete archive
             ensureDir(model.extractTo);
 
-            // Check if already extracted (look for any .onnx file)
+            // Already extracted? With a keep list, every listed file must be
+            // there (a download that was cut short leaves only some of them).
             const existingFiles = fs.existsSync(model.extractTo)
                 ? fs.readdirSync(model.extractTo)
                 : [];
-            const hasModel = existingFiles.some(f => f.endsWith('.onnx'));
+            const hasModel = model.keep
+                ? hasAllFiles(model.extractTo, model.keep)
+                : existingFiles.some(f => f.endsWith('.onnx'));
 
             if (hasModel) {
-                console.log(`  ✅ Already extracted to: ${path.basename(model.extractTo)}\n`);
+                console.log(`  ✅ Already extracted to: ${path.basename(model.extractTo)}`);
+                reportPruned(model);
+                console.log('');
                 continue;
             }
 
@@ -225,6 +281,10 @@ async function main() {
 
             // Cleanup archive
             fs.unlinkSync(archivePath);
+            if (model.keep && !hasAllFiles(model.extractTo, model.keep)) {
+                throw new Error(`${archiveName} did not contain ${model.keep.join(', ')}`);
+            }
+            reportPruned(model);
             console.log(`  ✅ Done\n`);
         }
     }
@@ -241,4 +301,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { SHERPA_ONNX_VERSION, removeOtherSherpaAars };
+module.exports = { SHERPA_ONNX_VERSION, WHISPER_FILES, removeOtherSherpaAars, hasAllFiles, pruneToKeepList };
