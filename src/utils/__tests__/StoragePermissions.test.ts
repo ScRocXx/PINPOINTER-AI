@@ -18,6 +18,7 @@ import {
     hasPhotoAccess,
     isLimitedAccessKept,
     keepLimitedAccess,
+    openAllFilesAccessAndWait,
     requestPhotoAccess,
 } from '../StoragePermissions';
 
@@ -258,6 +259,30 @@ describe('document access', () => {
         await flush();
         expect(StorageModule.openAllFilesAccessSettings).toHaveBeenCalledTimes(1);
 
+        (StorageModule.hasAllFilesAccess as jest.Mock).mockResolvedValue(true);
+        returnToApp();
+        expect(await result).toBe(true);
+    });
+
+    it('does not wait, or crash, on a phone that has no All Files Access screen', async () => {
+        // The native side resolves false when neither Settings screen exists.
+        (StorageModule.openAllFilesAccessSettings as jest.Mock).mockResolvedValueOnce(false);
+        // Resolves without any return to the app.
+        expect(await openAllFilesAccessAndWait()).toBe(false);
+        expect(StorageModule.openAllFilesAccessSettings).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not wait when opening the All Files Access screen fails', async () => {
+        (StorageModule.openAllFilesAccessSettings as jest.Mock).mockRejectedValueOnce(new Error('no activity'));
+        expect(await openAllFilesAccessAndWait()).toBe(false);
+    });
+
+    it('still waits for the return when the screen did open', async () => {
+        (StorageModule.openAllFilesAccessSettings as jest.Mock).mockResolvedValueOnce(true);
+        let done = false;
+        const result = openAllFilesAccessAndWait().then((v) => { done = true; return v; });
+        await flush();
+        expect(done).toBe(false);
         (StorageModule.hasAllFilesAccess as jest.Mock).mockResolvedValue(true);
         returnToApp();
         expect(await result).toBe(true);

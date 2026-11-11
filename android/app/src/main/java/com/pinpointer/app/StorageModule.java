@@ -123,21 +123,35 @@ public class StorageModule extends ReactContextBaseJavaModule {
         }
     }
 
+    /**
+     * Opens the "All files access" switch for this app, or the list of apps
+     * when the phone has no page for a single app. Resolves true when a
+     * screen opened and false when this phone has neither (some Android
+     * builds leave them out), so JS can offer "Choose one folder" instead.
+     * Never throws: an unhandled ActivityNotFoundException here used to
+     * close the whole app.
+     */
     @ReactMethod
-    public void openAllFilesAccessSettings() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+    public void openAllFilesAccessSettings(Promise promise) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            promise.resolve(false);
+            return;
+        }
+        Intent appPage = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);
+        appPage.addCategory(Intent.CATEGORY_DEFAULT);
+        appPage.setData(Uri.parse("package:" + getReactApplicationContext().getPackageName()));
+        Intent appList = new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION);
+        for (Intent intent : new Intent[] { appPage, appList }) {
             try {
-                Intent intent = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);
-                intent.addCategory(Intent.CATEGORY_DEFAULT);
-                intent.setData(Uri.parse("package:" + getReactApplicationContext().getPackageName()));
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 getReactApplicationContext().startActivity(intent);
+                promise.resolve(true);
+                return;
             } catch (Exception e) {
-                Intent backupIntent = new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION);
-                backupIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                getReactApplicationContext().startActivity(backupIntent);
+                Log.w(TAG, "No screen for " + intent.getAction() + ": " + e.getMessage());
             }
         }
+        promise.resolve(false);
     }
 
     @ReactMethod

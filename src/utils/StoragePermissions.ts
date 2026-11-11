@@ -101,11 +101,18 @@ const waitForReturn = (): Promise<void> => new Promise((resolve) => {
     });
 });
 
-/** Runs `open` (which leaves the app) and resolves once the user is back. */
+/**
+ * Runs `open` (which leaves the app) and resolves once the user is back.
+ * `open` may throw, or resolve `false`, to say that no screen opened (the
+ * phone doesn't have it): then there is no return to wait for.
+ */
 const openThenWait = async (open: () => unknown): Promise<void> => {
     const back = waitForReturn();
     try {
-        await open();
+        if ((await open()) === false) {
+            AppLogger.warn('StoragePermissions', 'This phone has no such Settings screen');
+            return;
+        }
     } catch (e) {
         AppLogger.warn('StoragePermissions', 'Could not open Settings', e);
         return; // nothing was opened, so don't wait for a return that won't come
