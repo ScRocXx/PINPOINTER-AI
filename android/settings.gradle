@@ -1,5 +1,20 @@
 pluginManagement { includeBuild("../node_modules/@react-native/gradle-plugin") }
 plugins { id("com.facebook.react.settings") }
+
+// Fix AGP conflict when both ANDROID_PREFS_ROOT and ANDROID_USER_HOME environment variables exist
+try {
+    def pe = Class.forName("java.lang.ProcessEnvironment")
+    def f1 = pe.getDeclaredField("theEnvironment")
+    f1.setAccessible(true)
+    f1.get(null).remove("ANDROID_PREFS_ROOT")
+    try {
+        def f2 = pe.getDeclaredField("theCaseInsensitiveEnvironment")
+        f2.setAccessible(true)
+        f2.get(null).remove("ANDROID_PREFS_ROOT")
+    } catch (e) {}
+} catch (e) {
+}
+
 extensions.configure(com.facebook.react.ReactSettingsExtension){ ex -> ex.autolinkLibrariesFromCommand() }
 rootProject.name = 'Pinpointer'
 include ':app'
