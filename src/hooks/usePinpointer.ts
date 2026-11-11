@@ -70,8 +70,7 @@ export const usePinpointer = () => {
 
     const {
         isRecording, isTranscribing, isModelLoading,
-        audioLevel, recordingDuration,
-        startListening, stopListening,
+        startListening, stopListening, cancelListening,
         cleanupRecording,
     } = useVoiceRecording(onTranscription);
 
@@ -135,8 +134,8 @@ export const usePinpointer = () => {
         selectedImage, setSelectedImage,
 
         // Voice
-        isRecording, isTranscribing, isModelLoading, audioLevel, recordingDuration,
-        startListening, stopListening,
+        isRecording, isTranscribing, isModelLoading,
+        startListening, stopListening, cancelListening,
 
         // Sync
         isSyncing, isPaused, isDeepSync, syncCount, totalImages, lastSyncTime,

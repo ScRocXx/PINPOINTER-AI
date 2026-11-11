@@ -24,6 +24,33 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) : ReactContextBase
         const val CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO
         const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
 
+        /** How often the live mic level is sent to JS ("onSpeechVolume"). */
+        const val LEVEL_INTERVAL_MS = 60L
+        /** Room noise sits below MIN_DB, close speech reaches MAX_DB (dBFS). */
+        private const val MIN_DB = -55.0
+        private const val MAX_DB = -15.0
+
+        /**
+         * Loudness of 16-bit little-endian PCM as 0..1, for the listening
+         * meter and silence detection. RMS in dBFS, mapped from MIN_DB..MAX_DB.
+         */
+        @JvmStatic
+        fun micLevel(pcm: ByteArray, length: Int): Double {
+            val n = minOf(length, pcm.size) / 2
+            if (n <= 0) return 0.0
+            var sum = 0.0
+            for (s in 0 until n) {
+                val lo = pcm[2 * s].toInt() and 0xFF
+                val hi = pcm[2 * s + 1].toInt()
+                val sample = ((hi shl 8) or lo).toShort().toDouble()
+                sum += sample * sample
+            }
+            val rms = Math.sqrt(sum / n) / 32768.0
+            if (rms <= 0.0) return 0.0
+            val db = 20.0 * Math.log10(rms)
+            return ((db - MIN_DB) / (MAX_DB - MIN_DB)).coerceIn(0.0, 1.0)
+        }
+
         private var nativeLibLoaded = false
 
         init {
@@ -163,12 +190,20 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) : ReactContextBase
 
             recordingThread = thread {
                 val buffer = ByteArray(bufferSize)
+                var lastLevelAt = 0L
                 while (isRecording) {
                     val bytesRead = audioRecord?.read(buffer, 0, buffer.size) ?: 0
                     if (bytesRead > 0) {
                         val data = recordedData ?: return@thread
                         synchronized(data) {
                             data.write(buffer, 0, bytesRead)
+                        }
+                        // The real mic level for the "Listening…" meter, a few times a second.
+                        val now = android.os.SystemClock.elapsedRealtime()
+                        if (now - lastLevelAt >= LEVEL_INTERVAL_MS) {
+                            lastLevelAt = now
+                            val level = micLevel(buffer, bytesRead)
+                            emitEvent("onSpeechVolume", Arguments.createMap().apply { putDouble("level", level) })
                         }
                     }
                 }
@@ -275,6 +310,13 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) : ReactContextBase
     fun isSTTReady(promise: Promise) {
         promise.resolve(isSTTReady)
     }
+
+    // Required by NativeEventEmitter on Android; events are sent regardless.
+    @ReactMethod
+    fun addListener(eventName: String) {}
+
+    @ReactMethod
+    fun removeListeners(count: Int) {}
 
     override fun onCatalystInstanceDestroy() {
         super.onCatalystInstanceDestroy()
