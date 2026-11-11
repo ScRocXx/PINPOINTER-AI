@@ -21,7 +21,7 @@ npm run lint                # eslint (must be clean)
 npx jest                    # 64 suites / ~1740 tests (must all pass). Slow on the D: drive; use --silent (--runInBand if workers run out of memory)
 cd android && ./gradlew assembleDebug    # native compile check
 adb shell cmd jobscheduler run -f com.pinpointer.app 4711   # force the charging-time indexing job
-cd tools/preview && npm install && npm run dev   # browser preview of the UI kit and screens (react-native-web), `npm run shots -- out` for phone screenshots (stories in `tools/preview/src/stories.tsx`)
+cd tools/preview && npm install && npm run dev   # browser preview of the UI kit and screens (react-native-web), `npm run shots -- out` for phone screenshots (stories in `tools/preview/src/stories.tsx`, including the `search-*` pages)
 ```
 
 - CLIP models (`android/app/src/main/assets/models/clip/vision_encoder_int8.onnx`, `text_encoder_int8.onnx`, vocab) are gitignored and made with `scripts/export_mobileclip.py`. Without them semantic search is off, and the app falls back to text search.
