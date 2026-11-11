@@ -5,9 +5,10 @@
  * context, which is replaced by a STATEFUL mock (a plain `state` object +
  * jest.fn setters that mutate it, re-read on every render). Navigation,
  * the Home overview (tiles, photo totals), Important stars, RecentPhotos,
- * database, and DocumentClassifier are mocked; the real SearchFilterChips and
- * SearchHistoryPanel components render so filter/history flows are
- * exercised for real.
+ * database, and DocumentClassifier are mocked; the real search parts
+ * (SearchOverlay, ResultItem, RecentSearches, NothingFound, ListeningPanel)
+ * and the shared PhotoViewer render, so the search flows are exercised for
+ * real. The parts have their own tests in `../pinpointer/__tests__`.
  *
  * RNTL v14: render/fireEvent/act/waitFor are async — everything awaited.
  */
@@ -36,7 +37,7 @@ jest.mock('../../utils/RecentPhotos', () => ({
 }));
 
 jest.mock('../../database', () => ({
-  extractSnippet: jest.fn((content: string) => content),
+  getDocumentByPath: jest.fn(() => null),
 }));
 
 jest.mock('../../utils/MissingFiles', () => ({
@@ -48,14 +49,13 @@ jest.mock('../../utils/DocumentClassifier', () => ({
 }));
 
 // ModelDownloadSheet calls useModelService() unconditionally, which throws
-// outside a ModelServiceProvider — replace just that component, keeping the
-// real SearchFilterChips / SearchHistoryPanel.
+// outside a ModelServiceProvider — replace just that component.
 jest.mock('../../components/ModelDownloadSheet', () => ({
   ModelDownloadSheet: () => null,
 }));
 
 import React from 'react';
-import { Alert, NativeModules } from 'react-native';
+import { AccessibilityInfo, Alert, NativeModules } from 'react-native';
 import {
   render,
   screen,
@@ -76,8 +76,6 @@ import { useHomeOverview } from '../../hooks/useHomeOverview';
 import type { HomeOverview } from '../../hooks/useHomeOverview';
 import { usePinnedItems } from '../../hooks/usePinnedItems';
 import type { PinnedItem } from '../../utils/PinnedItems';
-import { extractSnippet } from '../../database';
-import { classifyDocument } from '../../utils/DocumentClassifier';
 import type { DocumentRecord } from '../../database';
 import type { SearchHistoryItem } from '../../utils/SearchHistory';
 
@@ -89,7 +87,6 @@ interface ScreenState {
   isSearching: boolean;
   isSearchPending: boolean;
   searchHistory: SearchHistoryItem[];
-  selectedImage: string | null;
   isRecording: boolean;
   isTranscribing: boolean;
   isModelLoading: boolean;
@@ -111,7 +108,6 @@ const baseState = (): ScreenState => ({
   isSearching: false,
   isSearchPending: false,
   searchHistory: [],
-  selectedImage: null,
   isRecording: false,
   isTranscribing: false,
   isModelLoading: false,
@@ -152,12 +148,10 @@ let mockNav: { navigate: jest.Mock; setParams: jest.Mock };
 const makeActions = (): Record<string, jest.Mock> => ({
   setSearchText: jest.fn((v: string) => { state.searchText = v; }),
   setIsSearching: jest.fn((v: boolean) => { state.isSearching = v; }),
-  setSelectedImage: jest.fn((v: string | null) => { state.selectedImage = v; }),
   startListening: jest.fn(),
   stopListening: jest.fn(),
+  cancelListening: jest.fn(),
   handleScan: jest.fn(),
-  handleShare: jest.fn(),
-  handleEdit: jest.fn(),
   handleQuickSync: jest.fn(),
   handleDeepSync: jest.fn(),
   handlePauseSync: jest.fn(),
@@ -176,18 +170,13 @@ const makeCtx = () => ({
   isSearching: state.isSearching,
   setIsSearching: actions.setIsSearching,
   isSearchPending: state.isSearchPending,
-  selectedImage: state.selectedImage,
-  setSelectedImage: actions.setSelectedImage,
   isRecording: state.isRecording,
   isTranscribing: state.isTranscribing,
   isModelLoading: state.isModelLoading,
-  audioLevel: 0,
-  recordingDuration: 0,
   startListening: actions.startListening,
   stopListening: actions.stopListening,
+  cancelListening: actions.cancelListening,
   handleScan: actions.handleScan,
-  handleShare: actions.handleShare,
-  handleEdit: actions.handleEdit,
   handleQuickSync: actions.handleQuickSync,
   handleDeepSync: actions.handleDeepSync,
   handlePauseSync: actions.handlePauseSync,
@@ -240,30 +229,12 @@ const historyItem = (query: string, resultCount = 3): SearchHistoryItem => ({
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-/** Host node in RNTL v14's tree (host elements only: View/Text/TextInput/…). */
-interface HostNode {
-  type: string;
-  props: Record<string, unknown>;
-}
-/** RNTL v14 exposes queryAll(predicate) on the render result's container. */
-const queryAllHost = (
-  r: { container: unknown },
-  predicate: (n: HostNode) => boolean,
-): HostNode[] =>
-  (r.container as unknown as { queryAll: (p: (n: HostNode) => boolean) => HostNode[] }).queryAll(
-    predicate,
-  );
-
 const renderScreen = async (): Promise<RenderResult> => {
   let result!: RenderResult;
   await act(async () => {
     result = await render(<PinpointerScreen />);
   });
   return result;
-};
-
-const refresh = async (r: RenderResult): Promise<void> => {
-  await r.rerender(<PinpointerScreen />);
 };
 
 const press = async (element: Parameters<typeof fireEvent.press>[0]): Promise<void> => {
@@ -290,18 +261,14 @@ beforeEach(() => {
   (useRoute as jest.Mock).mockReturnValue({ params: {} });
   (RNFS.exists as jest.Mock).mockResolvedValue(true);
   (addRecentPhoto as jest.Mock).mockResolvedValue(undefined);
-  (extractSnippet as jest.Mock).mockImplementation((content: string) => content);
 });
 
 afterEach(() => {
   jest.restoreAllMocks();
 });
 
-/** The top search bar's input (the one you type in). */
-const searchInput = () => {
-  const inputs = screen.getAllByLabelText('Search documents');
-  return inputs[inputs.length - 1];
-};
+/** The search field you type in (only there while search is open). */
+const searchInput = () => screen.getByTestId('search-bar-input');
 
 describe('PinpointerScreen — Home', () => {
   test('renders Home: the question, the search bar, Find quickly and Important', async () => {
@@ -339,6 +306,7 @@ describe('PinpointerScreen — Home', () => {
   });
 
   test('typing in the search box updates the search text', async () => {
+    state.isSearching = true;
     await renderScreen();
     await act(async () => {
       await fireEvent.changeText(searchInput(), 'passport');
@@ -346,21 +314,15 @@ describe('PinpointerScreen — Home', () => {
     expect(actions.setSearchText).toHaveBeenCalledWith('passport');
   });
 
-  test('focusing the search input enters searching mode', async () => {
+  test('search is not in the tree until it is opened', async () => {
     await renderScreen();
-    await act(async () => {
-      await fireEvent(searchInput(), 'focus');
-    });
-    expect(actions.setIsSearching).toHaveBeenCalledWith(true);
+    expect(screen.queryByTestId('search-overlay')).toBeNull();
   });
 
   test('close search button exits searching mode', async () => {
     state.isSearching = true;
     await renderScreen();
-    const closeBtn = screen.getByLabelText('Close search');
-    await act(async () => {
-      await fireEvent(closeBtn, 'pressIn');
-    });
+    await press(screen.getByRole('button', { name: 'Close search' }));
     expect(actions.setIsSearching).toHaveBeenCalledWith(false);
     // The screen clears the query on a 300ms delay — drain it here so the
     // timer cannot leak into a later test and wipe its searchText.
@@ -379,9 +341,9 @@ describe('PinpointerScreen — search history', () => {
     return renderScreen();
   };
 
-  test('shows the history panel with recent queries when search text is empty', async () => {
+  test('shows recent searches when nothing is typed', async () => {
     await withHistory();
-    expect(screen.getByText('🕘 Recent Searches')).toBeTruthy();
+    expect(screen.getByText('Recent searches')).toBeTruthy();
     expect(screen.getByText('aadhaar')).toBeTruthy();
     expect(screen.getByText('passport')).toBeTruthy();
   });
@@ -391,7 +353,7 @@ describe('PinpointerScreen — search history', () => {
     state.searchText = '';
     state.searchHistory = [];
     await renderScreen();
-    expect(screen.getByText('No search history yet')).toBeTruthy();
+    expect(screen.getByText('Your searches will show here.')).toBeTruthy();
   });
 
   test('tapping a history query selects it', async () => {
@@ -400,27 +362,31 @@ describe('PinpointerScreen — search history', () => {
     expect(actions.handleSelectHistory).toHaveBeenCalledWith('aadhaar');
   });
 
-  test('tapping Clear all clears the history', async () => {
+  test('Clear all asks first, then clears the history', async () => {
+    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
     await withHistory();
     await press(screen.getByText('Clear all'));
+    expect(actions.handleClearHistory).not.toHaveBeenCalled();
+    const buttons = alertSpy.mock.calls[0][2] ?? [];
+    await act(async () => {
+      buttons.find(b => b.style === 'destructive')?.onPress?.();
+    });
     expect(actions.handleClearHistory).toHaveBeenCalled();
   });
 
-  test('tapping a row delete button deletes that query', async () => {
+  test('the remove button on a row deletes that query', async () => {
     await withHistory();
-    const deleteButtons = screen.getAllByText('✕');
-    expect(deleteButtons.length).toBeGreaterThan(0);
-    await press(deleteButtons[0]);
+    await press(screen.getByRole('button', { name: 'Remove aadhaar from recent searches' }));
     expect(actions.handleDeleteHistory).toHaveBeenCalledWith('aadhaar');
   });
 
-  test('history panel is hidden once text is typed', async () => {
+  test('recent searches are hidden once text is typed', async () => {
     state.isSearching = true;
     state.searchText = 'aadhaar';
     state.searchHistory = [historyItem('aadhaar')];
     state.searchResults = [];
     await renderScreen();
-    expect(screen.queryByText('🕘 Recent Searches')).toBeNull();
+    expect(screen.queryByTestId('recent-searches')).toBeNull();
   });
 });
 
@@ -434,158 +400,130 @@ describe('PinpointerScreen — search results', () => {
 
   test('renders a row per search result', async () => {
     await withResults();
-    expect(screen.getByLabelText('View file: my cat photo at home ')).toBeTruthy();
-    expect(screen.getByLabelText('View file: aadhaar card details 9999 ')).toBeTruthy();
+    expect(screen.getAllByTestId('result-item')).toHaveLength(2);
+    expect(screen.getByTestId('search-count')).toHaveTextContent('2 found');
   });
 
-  test('shows the Top Results header when the ALL filter is active', async () => {
-    await withResults();
-    expect(screen.getByText('Top Results')).toBeTruthy();
-  });
-
-  test('result subtitles reflect image text, image object, and document types', async () => {
+  test('rows say Photo or Paper in plain words', async () => {
     state.isSearching = true;
     state.searchText = 'x';
     state.searchResults = [
       imgResult({ id: 1, detection_type: 'TEXT' }),
-      imgResult({ id: 3, detection_type: 'OBJECT', content: 'object pic', filePath: 'file:///photos/obj.jpg' }),
+      imgResult({ id: 3, detection_type: 'OBJECT', content: 'Dog, Grass', filePath: 'file:///photos/obj.jpg' }),
       docResult(),
     ];
     await renderScreen();
-    expect(screen.getByText('📝 Text • Tap to view')).toBeTruthy();
-    expect(screen.getByText('🏷 Object • Tap to view')).toBeTruthy();
-    expect(screen.getByText('📄 Document • Tap to open')).toBeTruthy();
+    expect(screen.getAllByText('Photo')).toHaveLength(2);
+    expect(screen.getByText('Paper')).toBeTruthy();
+    expect(screen.getByText('Shows: Dog, Grass')).toBeTruthy();
+    expect(screen.queryByText(/Object|Tap to/)).toBeNull();
   });
 
-  test('document rows render the classifier emoji thumbnail', async () => {
+  test('filter chips narrow the results and All restores them', async () => {
     await withResults();
-    expect(classifyDocument).toHaveBeenCalledWith('aadhaar card details 9999', 'aadhaar.pdf');
-    const row = screen.getByLabelText('View file: aadhaar card details 9999 ');
-    expect(within(row).getByText('📄')).toBeTruthy();
+    await press(screen.getByTestId('search-filter-IMAGE'));
+    expect(screen.getAllByTestId('result-item')).toHaveLength(1);
+    await press(screen.getByTestId('search-filter-DOCUMENT'));
+    expect(screen.getAllByTestId('result-item')).toHaveLength(1);
+    expect(screen.getByText('Aadhaar Card')).toBeTruthy();
+    await press(screen.getByTestId('search-filter-ALL'));
+    expect(screen.getAllByTestId('result-item')).toHaveLength(2);
   });
 
-  test('filter chips narrow results to photos', async () => {
+  test('tapping a photo opens the viewer and logs a recent photo', async () => {
     await withResults();
-    await press(screen.getByText('Photos'));
-    expect(screen.getByText('Found in Photos')).toBeTruthy();
-    expect(screen.getByLabelText('View file: my cat photo at home ')).toBeTruthy();
-    expect(screen.queryByLabelText('View file: aadhaar card details 9999 ')).toBeNull();
-  });
-
-  test('filter chips narrow results to documents', async () => {
-    await withResults();
-    await press(screen.getByText('Documents'));
-    expect(screen.getByText('Found in Documents')).toBeTruthy();
-    expect(screen.queryByLabelText('View file: my cat photo at home ')).toBeNull();
-    expect(screen.getByLabelText('View file: aadhaar card details 9999 ')).toBeTruthy();
-  });
-
-  test('All chip restores the full result list', async () => {
-    await withResults();
-    await press(screen.getByText('Photos'));
-    expect(screen.queryByLabelText('View file: aadhaar card details 9999 ')).toBeNull();
-    await press(screen.getByText('All'));
-    expect(screen.getByLabelText('View file: aadhaar card details 9999 ')).toBeTruthy();
-    expect(screen.getByLabelText('View file: my cat photo at home ')).toBeTruthy();
-  });
-
-  test('tapping an image result opens the preview modal and logs a recent photo', async () => {
-    const r = await withResults();
-    await press(screen.getByLabelText('View file: my cat photo at home '));
-    await waitFor(() => {
-      expect(actions.setSelectedImage).toHaveBeenCalledWith('file:///photos/cat.jpg');
-    });
+    expect(screen.queryByTestId('search-photo-viewer')).toBeNull();
+    await press(screen.getAllByTestId('result-item')[0]);
+    await waitFor(() => expect(screen.getByTestId('search-photo-viewer')).toBeTruthy());
     expect(addRecentPhoto).toHaveBeenCalledWith('file:///photos/cat.jpg');
-    await refresh(r);
-    expect(screen.getByLabelText('Close image')).toBeTruthy();
+    // The words Pinpointer read in the photo, with what was searched marked.
+    expect(screen.getByText('Text in this photo')).toBeTruthy();
+
+    await press(screen.getByTestId('search-photo-viewer-close'));
+    await waitFor(() => expect(screen.queryByTestId('search-photo-viewer')).toBeNull());
+  });
+
+  test('a re-rank under the open viewer does not change the photo on show', async () => {
+    const r = await withResults();
+    await press(screen.getAllByTestId('result-item')[0]);
+    await waitFor(() => expect(screen.getByTestId('search-photo-viewer')).toBeTruthy());
+    state.searchResults = [
+      imgResult({ id: 9, filePath: 'file:///photos/other.jpg', content: 'another cat' }),
+      imgResult(),
+    ];
+    await r.rerender(<PinpointerScreen />);
+    const photos = screen.getAllByTestId('search-photo-viewer-photo');
+    expect(photos).toHaveLength(1);
+    expect(photos[0].props.source).toEqual({ uri: 'file:///photos/cat.jpg' });
+  });
+
+  test('"Read text" in the viewer opens Scan on that photo', async () => {
+    state.isSearching = true;
+    state.searchText = 'dog';
+    state.searchResults = [
+      imgResult({ detection_type: 'OBJECT', content: 'Dog, Grass', filePath: 'file:///photos/dog.jpg' }),
+    ];
+    await renderScreen();
+    await press(screen.getByTestId('result-item'));
+    await waitFor(() => expect(screen.getByTestId('search-photo-viewer')).toBeTruthy());
+    await press(screen.getByRole('button', { name: /Read text/ }));
+    expect(mockNav.navigate).toHaveBeenCalledWith('SmartClipboard', { scanUri: 'file:///photos/dog.jpg' });
   });
 
   test('tapping a photo deleted from the phone removes it from search instead of opening it', async () => {
     (forgetIfGone as jest.Mock).mockResolvedValueOnce(true);
-    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    const announce = jest.spyOn(AccessibilityInfo, 'announceForAccessibility');
     await withResults();
-    await press(screen.getByLabelText('View file: my cat photo at home '));
-    await waitFor(() => {
-      expect(alertSpy).toHaveBeenCalledWith('File Not Found', expect.stringContaining('removed from search'));
-    });
+    await press(screen.getAllByTestId('result-item')[0]);
+    await waitFor(() => expect(screen.getAllByTestId('result-item')).toHaveLength(1));
     expect(forgetIfGone).toHaveBeenCalledWith('file:///photos/cat.jpg', 'IMAGE');
-    expect(actions.setSelectedImage).not.toHaveBeenCalled();
+    expect(announce).toHaveBeenCalledWith('This file is no longer on your phone.');
+    expect(addRecentPhoto).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('search-photo-viewer')).toBeNull();
   });
 
-  test('closing the image modal clears the selected image', async () => {
-    state.selectedImage = 'file:///photos/cat.jpg';
-    await renderScreen();
-    expect(screen.getByLabelText('Close image')).toBeTruthy();
-    await press(screen.getByLabelText('Close image'));
-    expect(actions.setSelectedImage).toHaveBeenCalledWith(null);
-  });
-
-  test('modal Scan action navigates to SmartClipboard with the image uri', async () => {
-    state.selectedImage = 'file:///photos/cat.jpg';
-    await renderScreen();
-    await press(screen.getByLabelText('Scan image'));
-    expect(actions.setSelectedImage).toHaveBeenCalledWith(null);
-    expect(mockNav.navigate).toHaveBeenCalledWith('SmartClipboard', {
-      scanUri: 'file:///photos/cat.jpg',
-    });
-  });
-
-  test('modal Edit and Share actions call the context handlers', async () => {
-    state.selectedImage = 'file:///photos/cat.jpg';
-    await renderScreen();
-    await press(screen.getByLabelText('Edit image'));
-    expect(actions.handleEdit).toHaveBeenCalled();
-    await press(screen.getByLabelText('Share image'));
-    expect(actions.handleShare).toHaveBeenCalled();
-  });
-
-  test('tapping a document result opens the PDF via the native StorageModule', async () => {
-    (RNFS.exists as jest.Mock).mockResolvedValue(true);
+  test('tapping a paper opens the PDF via the native StorageModule', async () => {
     state.isSearching = true;
     state.searchText = 'aadhaar';
     state.searchResults = [docResult()];
     await renderScreen();
-    await press(screen.getByLabelText('View file: aadhaar card details 9999 '));
+    await press(screen.getByTestId('result-item'));
     await waitFor(() => {
       expect(NativeModules.StorageModule.openPDF).toHaveBeenCalledWith('/docs/aadhaar.pdf');
     });
   });
 
-  test('tapping a document whose file is missing shows a File Not Found alert', async () => {
+  test('tapping a paper whose file is missing says so and does not open it', async () => {
     (RNFS.exists as jest.Mock).mockResolvedValue(false);
-    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    const announce = jest.spyOn(AccessibilityInfo, 'announceForAccessibility');
     state.isSearching = true;
     state.searchText = 'aadhaar';
     state.searchResults = [docResult()];
     await renderScreen();
-    await press(screen.getByLabelText('View file: aadhaar card details 9999 '));
-    await waitFor(() => {
-      expect(alertSpy).toHaveBeenCalledWith(
-        'File Not Found',
-        'This file may have been deleted from your device.'
-      );
-    });
+    await press(screen.getByTestId('result-item'));
+    await waitFor(() => expect(announce).toHaveBeenCalledWith('This file is no longer on your phone.'));
     expect(NativeModules.StorageModule.openPDF).not.toHaveBeenCalled();
   });
 });
 
 describe('PinpointerScreen — empty results', () => {
-  test('shows the no-matches state when the search returns nothing', async () => {
+  test('shows the nothing-found page when the search returns nothing', async () => {
     state.isSearching = true;
     state.searchText = 'zzzz-no-such-thing';
     state.searchResults = [];
     state.isSearchPending = false;
     await renderScreen();
-    expect(screen.getByText('No matches found.')).toBeTruthy();
-    expect(screen.getByLabelText('Start Universal Sync')).toBeTruthy();
+    expect(screen.getByText('Nothing found for “zzzz-no-such-thing” yet')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Look through all photos' })).toBeTruthy();
+    expect(screen.queryByText(/Universal Sync/)).toBeNull();
   });
 
-  test('Start Universal Sync closes search and triggers both sync engines', async () => {
+  test('"Look through all photos" closes search and starts both sync engines', async () => {
     state.isSearching = true;
     state.searchText = 'zzzz-no-such-thing';
     state.searchResults = [];
     await renderScreen();
-    await press(screen.getByLabelText('Start Universal Sync'));
+    await press(screen.getByRole('button', { name: 'Look through all photos' }));
     expect(actions.setIsSearching).toHaveBeenCalledWith(false);
     expect(actions.handleDeepSync).toHaveBeenCalled();
     expect(actions.handleDocumentSync).toHaveBeenCalled();
@@ -596,18 +534,25 @@ describe('PinpointerScreen — empty results', () => {
     );
   });
 
-  test('pending search shows a loader instead of the empty state', async () => {
+  test('says so when photos are still being read, instead of offering to look again', async () => {
+    state.isSearching = true;
+    state.searchText = 'zzz';
+    state.isSyncing = true;
+    state.syncCount = 10;
+    state.totalImages = 300;
+    await renderScreen();
+    expect(screen.getByText(/still getting your photos ready \(10 of 300\)/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Look through all photos' })).toBeNull();
+  });
+
+  test('pending search shows "Looking…" instead of the empty state', async () => {
     state.isSearching = true;
     state.searchText = 'zzz';
     state.searchResults = [];
     state.isSearchPending = true;
-    const r = await renderScreen();
-    await act(async () => {
-      await fireEvent(searchInput(), 'focus');
-    });
-    expect(screen.queryByText('No matches found.')).toBeNull();
-    // RN's jest preset mocks ActivityIndicator as a host element of the same name
-    expect(queryAllHost(r, (n) => n.type === 'ActivityIndicator').length).toBeGreaterThan(0);
+    await renderScreen();
+    expect(screen.getByTestId('search-pending')).toBeTruthy();
+    expect(screen.queryByTestId('nothing-found')).toBeNull();
   });
 });
 
@@ -678,7 +623,8 @@ describe('PinpointerScreen — Important and recent photos', () => {
     pinned = [{ uri: 'file:///photos/pan.jpg', kind: 'IMAGE', title: 'PAN card', pinnedAt: 1 }];
     await renderScreen();
     await press(screen.getByLabelText('PAN card, Starred'));
-    await waitFor(() => expect(actions.setSelectedImage).toHaveBeenCalledWith('file:///photos/pan.jpg'));
+    await waitFor(() => expect(screen.getByTestId('search-photo-viewer')).toBeTruthy());
+    expect(screen.getByTestId('search-photo-viewer-photo').props.source).toEqual({ uri: 'file:///photos/pan.jpg' });
     expect(addRecentPhoto).toHaveBeenCalledWith('file:///photos/pan.jpg');
   });
 
@@ -697,7 +643,7 @@ describe('PinpointerScreen — Important and recent photos', () => {
     await renderScreen();
     await press(screen.getByLabelText('Photo, Starred'));
     await waitFor(() => expect(toggleStar).toHaveBeenCalledWith(pinned[0]));
-    expect(actions.setSelectedImage).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('search-photo-viewer')).toBeNull();
   });
 
   test('recently opened photos open again in one tap', async () => {
@@ -705,7 +651,8 @@ describe('PinpointerScreen — Important and recent photos', () => {
     await renderScreen();
     expect(screen.getByText('Recently opened')).toBeTruthy();
     await press(screen.getByLabelText('Photo, 2 of 2'));
-    await waitFor(() => expect(actions.setSelectedImage).toHaveBeenCalledWith('file:///photos/b.jpg'));
+    await waitFor(() => expect(screen.getByTestId('search-photo-viewer')).toBeTruthy());
+    expect(screen.getByTestId('search-photo-viewer-photo').props.source).toEqual({ uri: 'file:///photos/b.jpg' });
   });
 });
 
@@ -730,6 +677,37 @@ describe('PinpointerScreen — voice search from Home', () => {
     await renderScreen();
     expect(screen.getByLabelText('Understanding…')).toBeTruthy();
     await press(screen.getByTestId('home-search-voice'));
+    expect(actions.startListening).not.toHaveBeenCalled();
+    expect(actions.stopListening).not.toHaveBeenCalled();
+  });
+});
+
+describe('PinpointerScreen — voice search in search', () => {
+  test('the mic in search starts listening', async () => {
+    state.isSearching = true;
+    await renderScreen();
+    await press(screen.getByRole('button', { name: 'Search by voice' }));
+    expect(actions.startListening).toHaveBeenCalled();
+  });
+
+  test('while listening, the panel says so and both stop buttons stop', async () => {
+    state.isSearching = true;
+    state.isRecording = true;
+    await renderScreen();
+    expect(screen.getByText('Listening… tap to stop')).toBeTruthy();
+    expect(screen.queryByTestId('recent-searches')).toBeNull();
+    await press(screen.getByTestId('search-bar-voice'));
+    expect(actions.stopListening).toHaveBeenCalledTimes(1);
+    await press(screen.getByTestId('listening-panel-stop'));
+    expect(actions.stopListening).toHaveBeenCalledTimes(2);
+  });
+
+  test('while the words are being read, it says "Understanding…" and the mic waits', async () => {
+    state.isSearching = true;
+    state.isTranscribing = true;
+    await renderScreen();
+    expect(screen.getByText('Understanding…')).toBeTruthy();
+    await press(screen.getByTestId('search-bar-voice'));
     expect(actions.startListening).not.toHaveBeenCalled();
     expect(actions.stopListening).not.toHaveBeenCalled();
   });

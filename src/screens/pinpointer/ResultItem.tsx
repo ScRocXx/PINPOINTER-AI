@@ -1,114 +1,158 @@
-import React from 'react';
-import { Alert, Image, Linking, NativeModules, Text, TouchableOpacity, Vibration, View } from 'react-native';
-import RNFS from 'react-native-fs';
-import { DocumentRecord, extractSnippet } from '../../database';
-import { classifyDocument } from '../../utils/DocumentClassifier';
-import { forgetIfGone } from '../../utils/MissingFiles';
-import { AppLogger } from '../../utils/AppLogger';
-import { styles } from './styles';
+import React, { useMemo } from 'react';
+import { StyleSheet, View } from 'react-native';
+import {
+  AppText,
+  HighlightedText,
+  Icon,
+  PressableScale,
+  Reveal,
+  Tag,
+  Thumbnail,
+} from '../../components/ui';
+import { DocumentRecord } from '../../database';
+import { useStrings } from '../../i18n';
+import { Colors, Elevation, Radius, Space, Stagger, Tints, staggerDelay, Duration } from '../../theme';
+import { describeResult } from './resultInfo';
+import { MatchedSnippet } from './MatchedSnippet';
 
-const { StorageModule } = NativeModules;
-
-/** The title with the first searched word marked. */
-const HighlightedSnippet: React.FC<{ text: string; query: string }> = ({ text, query }) => {
-    if (!text || !query) return <Text style={styles.resultTitle} numberOfLines={2}>{text}</Text>;
-    const lower = text.toLowerCase();
-    const words = query.toLowerCase().split(/\s+/).filter(w => w.length > 0);
-
-    // Find the first matching word position
-    let bestPos = -1;
-    let bestWord = '';
-    for (const w of words) {
-        const pos = lower.indexOf(w);
-        if (pos !== -1 && (bestPos === -1 || pos < bestPos)) {
-            bestPos = pos;
-            bestWord = w;
-        }
-    }
-
-    if (bestPos === -1) return <Text style={styles.resultTitle} numberOfLines={2}>{text}</Text>;
-
-    const before = text.substring(0, bestPos);
-    const match = text.substring(bestPos, bestPos + bestWord.length);
-    const after = text.substring(bestPos + bestWord.length);
-
-    return (
-        <Text style={styles.resultTitle} numberOfLines={2}>
-            {before}
-            <Text style={styles.highlightText}>{match}</Text>
-            {after}
-        </Text>
-    );
-};
+/** Size of the photo or paper tile at the start of a row. */
+export const RESULT_TILE = 76;
 
 export interface ResultItemProps {
-    item: DocumentRecord;
-    searchText: string;
-    /** Open a photo in the preview. PDFs open in the phone's PDF app. */
-    onOpenImage: (uri: string) => void;
+  item: DocumentRecord;
+  /** What was searched. */
+  query: string;
+  /** Place in the list: rows rise in one after another. */
+  index: number;
+  /** Starred as Important. */
+  pinned?: boolean;
+  onPress: (item: DocumentRecord) => void;
+  testID?: string;
 }
 
-/** One search result: thumbnail or document icon, title, snippet, type. */
-export const ResultItem: React.FC<ResultItemProps> = ({ item, searchText, onOpenImage }) => {
-    const snippet = extractSnippet(item.content || '', searchText);
+/**
+ * One search result: a big row that says Photo or Paper, shows the words
+ * that matched (marked in cyan, the first one locked on with the corners),
+ * and opens the photo or the PDF.
+ */
+export const ResultItem: React.FC<ResultItemProps> = React.memo(
+  ({ item, query, index, pinned = false, onPress, testID = 'result-item' }) => {
+    const { t, ago } = useStrings();
+    const info = useMemo(() => describeResult(item, query), [item, query]);
+
+    const kindWord = t(info.isPhoto ? 'search.photo' : 'search.paper');
+    const paperWord = info.kind?.label ? t(info.kind.label) : null;
+    const tint = info.kind ? Tints[info.kind.tint] : null;
+
+    let mainText = info.snippet;
+    if (info.isPhoto && info.isLabels && info.snippet) mainText = t('search.shows', { what: info.snippet });
+    if (info.isPhoto && !info.wordsMatch && !info.isLabels) mainText = '';
+
+    const spoken = [
+      kindWord,
+      paperWord,
+      info.title,
+      mainText || (info.isPhoto ? t('search.looksLikeQuery', { q: query.trim() }) : ''),
+      pinned ? t('common.important') : null,
+    ]
+      .filter(Boolean)
+      .join('. ')
+      .slice(0, 220);
+
+    // The corners lock on just after the row has risen into place.
+    const lockDelay = index < Stagger.max ? staggerDelay(index) + Duration.base - 40 : 0;
 
     return (
-        <TouchableOpacity
-            style={styles.resultItem}
-            onPress={async () => {
-                Vibration.vibrate(10);
-                // A file deleted from the phone is taken out of search right away.
-                if (await forgetIfGone(item.filePath, item.type)) {
-                    Alert.alert('File Not Found', 'This file was deleted from your phone, so it was removed from search.');
-                    return;
-                }
-                if (item.type === 'DOCUMENT') {
-                    const cleanPath = item.filePath.replace('file://', '');
-                    const exists = await RNFS.exists(cleanPath).catch(() => false);
-                    if (!exists) {
-                        Alert.alert('File Not Found', 'This file may have been deleted from your device.');
-                        return;
-                    }
-                    if (StorageModule && StorageModule.openPDF) {
-                        StorageModule.openPDF(cleanPath);
-                    } else {
-                        Linking.openURL(item.filePath).catch(e => AppLogger.error('Pinpointer', 'Failed to open document URL', e));
-                    }
-                } else {
-                    onOpenImage(item.filePath);
-                }
-            }}
-            accessibilityLabel={`View file: ${item.content?.substring(0, 40)} `}
-            accessibilityRole="button"
+      <Reveal index={index}>
+        <PressableScale
+          onPress={() => onPress(item)}
+          pressedScale={0.985}
+          accessibilityRole="button"
+          accessibilityLabel={spoken}
+          accessibilityHint={t(info.isPhoto ? 'search.openPhoto' : 'search.openPaper')}
+          style={styles.row}
+          testID={testID}
         >
-            {/* Thumbnail */}
-            <View style={styles.resultIconContainer}>
-                {item.type === 'DOCUMENT' ? (
-                    <Text style={styles.documentEmoji}>{classifyDocument(item.content || '', item.filePath.split('/').pop() || '').emoji}</Text>
-                ) : (
-                    <Image
-                        source={{ uri: item.filePath }}
-                        style={styles.resultThumbnail}
-                        resizeMode="cover"
-                    />
-                )}
+          {info.isPhoto ? (
+            <Thumbnail uri={item.filePath} size={RESULT_TILE} radius={Radius.sm} testID={`${testID}-thumb`} />
+          ) : (
+            <View style={[styles.tile, { backgroundColor: tint?.bg ?? Colors.sunken }]} testID={`${testID}-tile`}>
+              <Icon name={info.kind?.icon ?? 'papers'} size={32} color={tint?.ink ?? Colors.text} strokeWidth={1.9} />
             </View>
-            <View style={styles.resultTextContainer}>
-                {item.type === 'DOCUMENT'
-                    ? <HighlightedSnippet text={item.title || item.filePath.split('/').pop() || ''} query={searchText} />
-                    : <HighlightedSnippet text={snippet} query={searchText} />
-                }
-                {snippet ? (
-                    <Text style={styles.resultSnippet} numberOfLines={1}>
-                        {snippet}
-                    </Text>
-                ) : null}
-                <Text style={styles.resultSubtitle}>
-                    {item.type === 'DOCUMENT'
-                        ? '📄 Document • Tap to open'
-                        : (item.detection_type === 'OBJECT' ? '🏷 Object' : '📝 Text') + ' • Tap to view'}
-                </Text>
+          )}
+
+          <View style={styles.body}>
+            <View style={styles.meta}>
+              <Tag label={kindWord} icon={info.isPhoto ? 'photos' : 'papers'} tone="neutral" />
+              {paperWord ? <Tag label={paperWord} tone={info.kind?.tint ?? 'neutral'} /> : null}
+              {info.isPhoto && !info.wordsMatch ? <Tag label={t('search.looksLike')} tone="bank" /> : null}
+              {pinned ? (
+                <View style={styles.star} testID={`${testID}-important`}>
+                  <Icon name="star" size={20} filled color={Colors.important} fillColor={Colors.importantStar} strokeWidth={1.6} />
+                </View>
+              ) : null}
             </View>
-        </TouchableOpacity>
+
+            {info.title ? (
+              <HighlightedText
+                text={info.title}
+                terms={info.terms}
+                variant="bodyStrong"
+                color={Colors.text}
+                numberOfLines={2}
+              />
+            ) : null}
+
+            {mainText ? (
+              <MatchedSnippet
+                text={mainText}
+                terms={info.terms}
+                variant={info.isPhoto ? 'body' : 'small'}
+                color={info.isPhoto ? Colors.text : Colors.textSecondary}
+                numberOfLines={info.isPhoto ? 3 : 2}
+                lockOn={!info.isLabels}
+                delay={lockDelay}
+                testID={`${testID}-snippet`}
+              />
+            ) : info.isPhoto ? (
+              <AppText variant="body" color="textSecondary" numberOfLines={2}>
+                {t('search.looksLikeQuery', { q: query.trim() })}
+              </AppText>
+            ) : null}
+
+            {!info.isPhoto && item.timestamp ? (
+              <AppText variant="small" color="textMuted" numberOfLines={1}>
+                {t('papers.added', { when: ago(item.timestamp) })}
+              </AppText>
+            ) : null}
+          </View>
+        </PressableScale>
+      </Reveal>
     );
-};
+  },
+);
+ResultItem.displayName = 'ResultItem';
+
+const styles = StyleSheet.create({
+  row: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: Space.md + 2,
+    padding: Space.md + 2,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.line,
+    ...Elevation.rest,
+  },
+  tile: {
+    width: RESULT_TILE,
+    height: RESULT_TILE,
+    borderRadius: Radius.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  body: { flex: 1, minWidth: 0, gap: Space.xs },
+  meta: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: Space.xs + 2 },
+  star: { marginLeft: 'auto' },
+});

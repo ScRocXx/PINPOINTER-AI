@@ -1,10 +1,14 @@
-import React, { useRef, useEffect, useState } from 'react';
-import { ModelDownloadSheet, FilterCategory } from '../components';
+import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
+import { ModelDownloadSheet } from '../components';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../navigation/types';
 import type { MainTabNavigationOptions } from '../navigation/MainTabs';
 import { addRecentPhoto } from '../utils/RecentPhotos';
+import { PhotoViewer, ViewerItem } from '../components/PhotoViewer';
+import { DocumentRecord } from '../database';
+import { matchTermsIn } from '../utils/MatchTerms';
+import { visibleContent } from '../utils/SearchKeys';
 import {
     View,
     TextInput,
@@ -14,7 +18,6 @@ import {
 } from 'react-native';
 import { usePinpointerShared } from '../hooks/PinpointerContext';
 import { Home } from './pinpointer/Home';
-import { PhotoPreviewModal } from './pinpointer/PhotoPreviewModal';
 import { SearchBar } from './pinpointer/SearchBar';
 import { SearchOverlay } from './pinpointer/SearchOverlay';
 import { styles } from './pinpointer/styles';
@@ -24,9 +27,9 @@ import { styles } from './pinpointer/styles';
  *
  * Owns the screen's state and wiring; the parts live in `./pinpointer/`:
  * `Home` (at rest: search and mic, Find quickly, Important, indexing),
- * `SearchOverlay` (recent searches, filters, results), `ResultItem`,
- * `SearchBar` (with voice) and `PhotoPreviewModal`. The bottom tabs replaced
- * the old side menu.
+ * `SearchOverlay` (recent searches, filters, results, listening, nothing
+ * found), `ResultItem` and `SearchBar` (with voice). Photos open in the shared
+ * `PhotoViewer`. The bottom tabs replaced the old side menu.
  */
 export const PinpointerScreen: React.FC = () => {
     const navigation = useNavigation<StackNavigationProp<RootStackParamList>>();
@@ -35,10 +38,9 @@ export const PinpointerScreen: React.FC = () => {
         searchText, setSearchText,
         searchResults,
         isSearching, setIsSearching, isSearchPending,
-        selectedImage, setSelectedImage,
         isRecording, isTranscribing, isModelLoading,
-        startListening, stopListening,
-        handleShare, handleEdit,
+        startListening, stopListening, cancelListening,
+        isSyncing, isPaused, syncCount, totalImages,
         handleDeepSync, handleDocumentSync,
         searchHistory, handleSelectHistory, handleDeleteHistory, handleClearHistory,
     } = usePinpointerShared();
@@ -46,7 +48,10 @@ export const PinpointerScreen: React.FC = () => {
     const route = useRoute<RouteProp<RootStackParamList, 'Pinpointer'>>();
 
     const [showModelSheet, setShowModelSheet] = useState(false);
-    const [selectedFilter, setSelectedFilter] = useState<FilterCategory>('ALL');
+    // The photos as they were when one was tapped, so a re-rank underneath
+    // doesn't move the viewer to another photo.
+    const [viewer, setViewer] = useState<{ items: ViewerItem[]; index: number; query: string } | null>(null);
+    const [viewerAt, setViewerAt] = useState(0);
 
     const searchInputRef = useRef<TextInput>(null);
 
@@ -106,11 +111,31 @@ export const PinpointerScreen: React.FC = () => {
         setIsSearching(true);
     };
 
-    const openImage = async (uri: string) => {
+    const showPhotos = useCallback((items: ViewerItem[], index: number, query: string) => {
+        if (!items[index]) return;
         Vibration.vibrate(10); // Light tick
-        setSelectedImage(uri);
-        await addRecentPhoto(uri);
-    };
+        setViewer({ items, index, query });
+        setViewerAt(index);
+        addRecentPhoto(items[index].uri);
+    }, []);
+
+    /** A photo from Home (Important, recent): the viewer reads its words from the index. */
+    const openImage = useCallback((uri: string) => showPhotos([{ uri }], 0, ''), [showPhotos]);
+
+    /** A photo result: swipe through the photo results, with the searched words marked. */
+    const openPhotoResult = useCallback((photos: ReadonlyArray<DocumentRecord>, index: number) => {
+        const items: ViewerItem[] = photos.map(p => ({
+            uri: p.filePath,
+            // Labels ("Dog, Grass") are what ML Kit saw, not words in the photo.
+            text: p.detection_type === 'OBJECT' ? '' : visibleContent(p.content),
+        }));
+        showPhotos(items, index, searchText);
+    }, [searchText, showPhotos]);
+
+    const viewerTerms = useMemo(() => {
+        const item = viewer?.items[viewerAt];
+        return item?.text && viewer?.query ? matchTermsIn(item.text, viewer.query) : [];
+    }, [viewer, viewerAt]);
 
     const handleLookEverywhere = () => {
         // 1. Close Search State
@@ -140,6 +165,7 @@ export const PinpointerScreen: React.FC = () => {
             isModelLoading={isModelLoading}
             onStartListening={startListening}
             onStopListening={stopListening}
+            active={isTop && isSearchPending}
             inputRef={searchInputRef}
         />
     );
@@ -148,7 +174,14 @@ export const PinpointerScreen: React.FC = () => {
         <View style={styles.container}>
             <View style={styles.flex1}>
                 {/* ────── HOME (at rest) ────── */}
-                <Home onOpenImage={openImage} />
+                {/* Search covers Home: keep TalkBack off what is underneath. */}
+                <View
+                    style={styles.flex1}
+                    importantForAccessibility={isSearching ? 'no-hide-descendants' : 'auto'}
+                    accessibilityElementsHidden={isSearching}
+                >
+                    <Home onOpenImage={openImage} />
+                </View>
 
                 {/* ────── SEARCHING MODE OVERLAY ────── */}
                 <SearchOverlay
@@ -156,29 +189,38 @@ export const PinpointerScreen: React.FC = () => {
                     searchText={searchText}
                     results={searchResults}
                     isSearchPending={isSearchPending}
-                    selectedFilter={selectedFilter}
-                    onSelectFilter={setSelectedFilter}
                     history={searchHistory}
                     onSelectHistory={handleSelectHistory}
                     onDeleteHistory={handleDeleteHistory}
                     onClearHistory={handleClearHistory}
                     onBack={handleBackPress}
                     onLookEverywhere={handleLookEverywhere}
-                    onOpenImage={openImage}
+                    onOpenPhoto={openPhotoResult}
+                    isRecording={isRecording}
+                    isTranscribing={isTranscribing}
+                    onStopListening={stopListening}
+                    onCancelListening={cancelListening}
+                    indexing={isSyncing && !isPaused ? { done: syncCount, total: totalImages || undefined } : null}
                     searchBar={renderSearchBar(true)}
                 />
             </View>
 
-            {/* GALLERY PREVIEW MODAL */}
-            <PhotoPreviewModal
-                uri={selectedImage}
-                onClose={() => setSelectedImage(null)}
-                onScan={uri => {
-                    setSelectedImage(null);
+            {/* PHOTO VIEWER */}
+            <PhotoViewer
+                items={viewer?.items ?? []}
+                index={viewer ? viewer.index : null}
+                onClose={() => setViewer(null)}
+                onIndexChange={i => {
+                    setViewerAt(i);
+                    const uri = viewer?.items[i]?.uri;
+                    if (uri) addRecentPhoto(uri);
+                }}
+                onReadText={uri => {
+                    setViewer(null);
                     navigation.navigate('SmartClipboard', { scanUri: uri });
                 }}
-                onEdit={handleEdit}
-                onShare={handleShare}
+                highlightTerms={viewerTerms}
+                testID="search-photo-viewer"
             />
 
             {/* MODEL DOWNLOAD SHEET */}

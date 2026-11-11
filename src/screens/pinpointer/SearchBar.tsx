@@ -1,116 +1,85 @@
-import React, { useEffect, useRef } from 'react';
-import { Animated, Pressable, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { styles } from './styles';
+import React from 'react';
+import { StyleProp, TextInput, ViewStyle } from 'react-native';
+import { SearchField } from '../../components/ui';
+import { useStrings } from '../../i18n';
 
 export interface SearchBarProps {
-    /** true: the editable bar at the top of search; false: the bar on Home that opens search. */
-    isTop: boolean;
-    searchText: string;
-    onChangeText: (text: string) => void;
-    /** Called when the bar is tapped or focused (opens search). */
-    onFocus: () => void;
-    autoFocus: boolean;
-    isRecording: boolean;
-    isTranscribing: boolean;
-    isModelLoading: boolean;
-    onStartListening: () => void;
-    onStopListening: () => void;
-    inputRef?: React.Ref<TextInput>;
+  /** true: the editable field at the top of search; false: a big button that opens search (Home). */
+  isTop: boolean;
+  searchText: string;
+  onChangeText: (text: string) => void;
+  /** Called when the field is focused, or tapped on Home (opens search). */
+  onFocus: () => void;
+  autoFocus: boolean;
+  isRecording: boolean;
+  isTranscribing: boolean;
+  isModelLoading: boolean;
+  onStartListening: () => void;
+  onStopListening: () => void;
+  /** Keep the beam ring on (search is looking). */
+  active?: boolean;
+  inputRef?: React.Ref<TextInput>;
+  style?: StyleProp<ViewStyle>;
 }
 
-/** The search pill with the mic, or the four bouncing voice dots while recording. */
+/**
+ * The search field with the beam mic, from the UI kit. While listening the
+ * ring stays on and the mic becomes a stop button; the search screen shows
+ * the big listening panel underneath.
+ */
 export const SearchBar: React.FC<SearchBarProps> = ({
-    isTop,
-    searchText,
-    onChangeText,
-    onFocus,
-    autoFocus,
-    isRecording,
-    isTranscribing,
-    isModelLoading,
-    onStartListening,
-    onStopListening,
-    inputRef,
+  isTop,
+  searchText,
+  onChangeText,
+  onFocus,
+  autoFocus,
+  isRecording,
+  isTranscribing,
+  isModelLoading,
+  onStartListening,
+  onStopListening,
+  active,
+  inputRef,
+  style,
 }) => {
-    const gVoiceAnim1 = useRef(new Animated.Value(1)).current;
-    const gVoiceAnim2 = useRef(new Animated.Value(1)).current;
-    const gVoiceAnim3 = useRef(new Animated.Value(1)).current;
-    const gVoiceAnim4 = useRef(new Animated.Value(1)).current;
+  const { t } = useStrings();
+  const busy = isTranscribing || isModelLoading;
+  const onVoice = isRecording ? onStopListening : busy ? undefined : onStartListening;
 
-    useEffect(() => {
-        if (isRecording) {
-            const startBounce = (anim: Animated.Value, delay: number) => {
-                Animated.loop(
-                    Animated.sequence([
-                        Animated.timing(anim, { toValue: 1.5, duration: 400, delay, useNativeDriver: true }),
-                        Animated.timing(anim, { toValue: 1, duration: 400, useNativeDriver: true })
-                    ])
-                ).start();
-            };
-            startBounce(gVoiceAnim1, 0);
-            startBounce(gVoiceAnim2, 150);
-            startBounce(gVoiceAnim3, 300);
-            startBounce(gVoiceAnim4, 450);
-        } else {
-            gVoiceAnim1.stopAnimation(); gVoiceAnim1.setValue(1);
-            gVoiceAnim2.stopAnimation(); gVoiceAnim2.setValue(1);
-            gVoiceAnim3.stopAnimation(); gVoiceAnim3.setValue(1);
-            gVoiceAnim4.stopAnimation(); gVoiceAnim4.setValue(1);
-        }
-    }, [isRecording, gVoiceAnim1, gVoiceAnim2, gVoiceAnim3, gVoiceAnim4]);
-
+  if (!isTop) {
+    // The mic on Home opens search too: the listening panel lives there.
+    const onHomeVoice = () => {
+      if (!isRecording) onFocus();
+      onVoice?.();
+    };
     return (
-        <View style={[styles.glassSearchBarContainer, isTop ? styles.searchBarTopSearch : styles.searchBarBottomNormal]}>
-            {isRecording ? (
-                <View style={styles.googleVoiceContainer}>
-                    <Animated.View style={[styles.voiceCircle, styles.voiceCircleBlue, { transform: [{ scale: gVoiceAnim1 }] }]} />
-                    <Animated.View style={[styles.voiceCircle, styles.voiceCircleRed, { transform: [{ scale: gVoiceAnim2 }] }]} />
-                    <Animated.View style={[styles.voiceCircle, styles.voiceCircleYellow, { transform: [{ scale: gVoiceAnim3 }] }]} />
-                    <Animated.View style={[styles.voiceCircle, styles.voiceCircleGreen, { transform: [{ scale: gVoiceAnim4 }] }]} />
-                    <TouchableOpacity
-                        style={styles.voiceStopButton}
-                        onPress={onStopListening}
-                        accessibilityLabel="Stop recording"
-                        accessibilityRole="button"
-                    >
-                        <View style={styles.voiceStopSquare} />
-                    </TouchableOpacity>
-                </View>
-            ) : (
-                <Pressable onPressIn={!isTop ? onFocus : undefined} style={styles.glassSearchPill}>
-                    <TextInput
-                        ref={inputRef}
-                        style={styles.glassSearchInput}
-                        placeholder="Search on Pinpointer..."
-                        placeholderTextColor="#6B7280"
-                        value={searchText}
-                        onChangeText={onChangeText}
-                        onFocus={onFocus}
-                        autoFocus={autoFocus}
-                        pointerEvents={isTop ? 'auto' : 'none'}
-                        editable={isTop}
-                        accessibilityLabel="Search documents"
-                    />
-                    <TouchableOpacity
-                        style={styles.glassMicButton}
-                        onPress={onStartListening}
-                        disabled={isTranscribing || isModelLoading}
-                        accessibilityLabel="Start voice search"
-                        accessibilityRole="button"
-                    >
-                        {isTranscribing || isModelLoading ? (
-                            <Text style={styles.glassMicIcon}>⏳</Text>
-                        ) : (
-                            <View style={styles.micIconWrap}>
-                                <View style={styles.micCapsule} />
-                                <View style={styles.micArc} />
-                                <View style={styles.micStem} />
-                                <View style={styles.micBase} />
-                            </View>
-                        )}
-                    </TouchableOpacity>
-                </Pressable>
-            )}
-        </View>
+      <SearchField
+        placeholder={t('search.placeholder')}
+        onPressFake={onFocus}
+        onVoicePress={onHomeVoice}
+        listening={isRecording}
+        containerStyle={style}
+        testID="search-bar-home"
+      />
     );
+  }
+
+  return (
+    <SearchField
+      ref={inputRef}
+      value={searchText}
+      onChangeText={onChangeText}
+      onFocus={onFocus}
+      autoFocus={autoFocus}
+      placeholder={t('search.placeholder')}
+      onVoicePress={onVoice ?? (() => {})}
+      listening={isRecording}
+      active={active || isRecording || busy ? true : undefined}
+      editable={!isRecording}
+      autoCorrect={false}
+      autoCapitalize="none"
+      containerStyle={style}
+      testID="search-bar"
+    />
+  );
 };
