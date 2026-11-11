@@ -285,9 +285,9 @@ describe('usePinpointer — handleScan', () => {
         return result;
     };
 
-    test('happy path: picks image, analyzes, indexes, alerts success', async () => {
+    test('happy path: picks image, reads text, indexes it, says it is ready to find', async () => {
         mockLaunchImageLibrary.mockResolvedValue({ assets: [{ uri: 'file:///photo.jpg' }] });
-        mockAnalyzeImage.mockResolvedValue({ content: 'Hello World' });
+        mockAnalyzeImage.mockResolvedValue({ detection_type: 'TEXT', content: 'Hello World' });
 
         await renderAndScan();
 
@@ -303,25 +303,30 @@ describe('usePinpointer — handleScan', () => {
             'TEXT',
         );
         expect(mockAlert).toHaveBeenCalledWith(
-            'Scan Success',
-            'Detected: "Hello World..."',
+            'Ready to find',
+            'You can now search for the words in this photo.',
         );
     });
 
-    test('empty OCR text falls back to placeholder before indexing', async () => {
+    test('no readable text: nothing is indexed and it says no words were found', async () => {
         mockLaunchImageLibrary.mockResolvedValue({ assets: [{ uri: 'file:///blank.jpg' }] });
-        mockAnalyzeImage.mockResolvedValue({ content: '' });
+        mockAnalyzeImage.mockResolvedValue({ detection_type: 'EMPTY', content: '' });
 
         await renderAndScan();
 
-        expect(mockIndexDocument).toHaveBeenCalledWith(
-            null,
-            expect.stringContaining('No readable text found'),
-            'file:///blank.jpg',
-            'IMAGE',
-            'TEXT',
-        );
-        expect(mockAlert).toHaveBeenCalledWith('Scan Success', expect.any(String));
+        expect(mockIndexDocument).not.toHaveBeenCalled();
+        expect(mockAlert).toHaveBeenCalledWith('No words found', expect.stringContaining('clearer photo'));
+        expect(mockAlert).not.toHaveBeenCalledWith('Ready to find', expect.any(String));
+    });
+
+    test('only objects (no words) is not a success either', async () => {
+        mockLaunchImageLibrary.mockResolvedValue({ assets: [{ uri: 'file:///dog.jpg' }] });
+        mockAnalyzeImage.mockResolvedValue({ detection_type: 'OBJECT', content: 'Dog Grass' });
+
+        await renderAndScan();
+
+        expect(mockIndexDocument).not.toHaveBeenCalled();
+        expect(mockAlert).toHaveBeenCalledWith('No words found', expect.any(String));
     });
 
     test('cancelled picker is a silent no-op', async () => {
@@ -360,7 +365,7 @@ describe('usePinpointer — handleScan', () => {
         await renderAndScan();
 
         expect(AppLogger.error).toHaveBeenCalledWith('Pinpointer', 'OCR scan failed', err);
-        expect(mockAlert).toHaveBeenCalledWith('OCR Error', 'The AI could not read this image.');
+        expect(mockAlert).toHaveBeenCalledWith('This photo could not be read', 'Please try again, or pick another photo.');
         expect(mockIndexDocument).not.toHaveBeenCalled();
     });
 
@@ -372,7 +377,7 @@ describe('usePinpointer — handleScan', () => {
         await renderAndScan();
 
         expect(AppLogger.error).toHaveBeenCalledWith('Pinpointer', 'OCR scan failed', err);
-        expect(mockAlert).toHaveBeenCalledWith('OCR Error', 'The AI could not read this image.');
+        expect(mockAlert).toHaveBeenCalledWith('This photo could not be read', 'Please try again, or pick another photo.');
         expect(mockIndexDocument).not.toHaveBeenCalled();
     });
 });
