@@ -115,3 +115,6 @@ final_project_audit.md
 
 # Generated code graph (rebuild with `graphify update .`)
 graphify-out/
+
+# Kotlin compiler session files
+android/.kotlin/
