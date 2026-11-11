@@ -34,6 +34,13 @@ describe('native libraries that share libonnxruntime.so', () => {
     expect(gradle).not.toMatch(/implementation\s+fileTree\(dir:\s*'libs'/);
   });
 
+  it('leaves out the sherpa-onnx API libraries the app never loads', () => {
+    expect(gradle).toMatch(/exclude\s+'jni\/\*\/libsherpa-onnx-c-api\.so'/);
+    expect(gradle).toMatch(/exclude\s+'jni\/\*\/libsherpa-onnx-cxx-api\.so'/);
+    // The one the Kotlin classes load must stay.
+    expect(gradle).not.toMatch(/exclude\s+'jni\/\*\/libsherpa-onnx-jni\.so'/);
+  });
+
   it('does not let Gradle pick one of two libonnxruntime.so copies', () => {
     const pickFirsts = /pickFirsts\s*=\s*\[([\s\S]*?)\]/.exec(gradle);
     expect(pickFirsts).not.toBeNull();

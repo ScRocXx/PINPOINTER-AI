@@ -49,7 +49,7 @@ def releaseStoreFile = releaseSigning('PINPOINTER_RELEASE_STORE_FILE')
  */
 def sherpaAars = fileTree(dir: 'libs', include: ['sherpa-onnx-*.aar'])
 def slimSherpaAar = tasks.register('slimSherpaAar', Zip) {
-    description = 'Copies the sherpa-onnx AAR without its bundled libonnxruntime.so.'
+    description = 'Copies the sherpa-onnx AAR without its bundled libonnxruntime.so and unused API libraries.'
     doFirst {
         if (sherpaAars.files.size() != 1) {
             throw new GradleException(
@@ -59,6 +59,11 @@ def slimSherpaAar = tasks.register('slimSherpaAar', Zip) {
     }
     from({ sherpaAars.files.collect { zipTree(it) } }) {
         exclude 'jni/*/libonnxruntime.so'
+        // The AAR also carries sherpa-onnx's C and C++ API libraries. The
+        // Kotlin classes only load libsherpa-onnx-jni.so, which does not
+        // depend on them, so they would be dead weight on every phone.
+        exclude 'jni/*/libsherpa-onnx-c-api.so'
+        exclude 'jni/*/libsherpa-onnx-cxx-api.so'
     }
     archiveFileName = 'sherpa-onnx-slim.aar'
     destinationDirectory = layout.buildDirectory.dir('sherpa-onnx')
