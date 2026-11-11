@@ -38,6 +38,11 @@ describe('colours', () => {
     ['onPrimary on danger', Colors.onPrimary, Colors.danger],
     ['onNight on night', Colors.onNight, Colors.night],
     ['onNightMuted on night', Colors.onNightMuted, Colors.night],
+    // Home's wash: the greeting and title sit on the beam's two soft colours.
+    ['text on foundSoft', Colors.text, Colors.foundSoft],
+    ['text on primarySoft', Colors.text, Colors.primarySoft],
+    ['textSecondary on foundSoft', Colors.textSecondary, Colors.foundSoft],
+    ['textSecondary on primarySoft', Colors.textSecondary, Colors.primarySoft],
   ];
 
   it.each(textPairs)('%s passes 4.5:1', (_name, fg, bg) => {
