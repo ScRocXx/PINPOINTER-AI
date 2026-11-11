@@ -28,7 +28,8 @@ export {
   markEmbedSkipped,
   markStageFailed,
   getIndexingStats,
+  getReadyCounts,
 } from './fileState';
-export type { FileKind, FileState, IndexingStats, PendingWork, Stage, StageStatus } from './fileState';
+export type { FileKind, FileState, IndexingStats, PendingWork, ReadyCounts, Stage, StageStatus } from './fileState';
 export { beginTransaction, commitTransaction, rollbackTransaction } from './transactions';
 export { searchDocuments, extractSnippet } from './search';

@@ -51,8 +51,10 @@ const Papers = () => <Page name="papers" />;
 const Settings = () => <Page name="settings" />;
 const Scan = () => <Text>scan page</Text>;
 
+let mockBanner: ((routeName: string) => React.ReactNode) | undefined;
+
 const MainTabs = () => (
-  <Tab.Navigator onScanPress={navigation => navigation.navigate('SmartClipboard')}>
+  <Tab.Navigator onScanPress={navigation => navigation.navigate('SmartClipboard')} banner={mockBanner}>
     <Tab.Screen name="Pinpointer" component={Home} options={{ tabLabelKey: 'tab.home', tabIcon: 'home' }} />
     <Tab.Screen name="Gallery" component={Photos} options={{ tabLabelKey: 'tab.photos', tabIcon: 'photos' }} />
     <Tab.Screen name="DocumentVault" component={Papers} options={{ tabLabelKey: 'tab.papers', tabIcon: 'papers' }} />
@@ -72,7 +74,10 @@ const renderApp = (lang: 'en' | 'hi' = 'en') =>
     </LanguageProvider>,
   );
 
-beforeEach(() => Object.keys(mounts).forEach(k => delete mounts[k]));
+beforeEach(() => {
+  Object.keys(mounts).forEach(k => delete mounts[k]);
+  mockBanner = undefined;
+});
 
 describe('MainTabs', () => {
   it('opens on the first tab and mounts only it', async () => {
@@ -142,6 +147,26 @@ describe('MainTabs', () => {
     });
     expect(screen.getByText('home page focused')).toBeTruthy();
     spy.mockRestore();
+  });
+});
+
+describe('MainTabs banner', () => {
+  it('shows above the bar for the open tab, and hides with the bar', async () => {
+    mockBanner = name => (name === 'Gallery' ? null : <Text>{`banner for ${name}`}</Text>);
+    await renderApp();
+    expect(screen.getByText('banner for Pinpointer')).toBeTruthy();
+    await fireEvent.press(screen.getByRole('tab', { name: 'Photos' }));
+    expect(screen.queryByText(/banner for/)).toBeNull();
+    await fireEvent.press(screen.getByRole('tab', { name: 'Papers' }));
+    expect(screen.getByText('banner for DocumentVault')).toBeTruthy();
+    await fireEvent.press(screen.getByRole('tab', { name: 'Home' }));
+    await fireEvent.press(screen.getByText('hide bar home'));
+    expect(screen.queryByText(/banner for/)).toBeNull();
+  });
+
+  it('has no slot without a banner', async () => {
+    await renderApp();
+    expect(screen.queryByTestId('tab-banner')).toBeNull();
   });
 });
 

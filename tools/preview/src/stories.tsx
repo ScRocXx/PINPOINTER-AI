@@ -29,7 +29,15 @@ import {
 } from '../../../src/components/ui';
 import { useStrings } from '../../../src/i18n';
 import { Colors, GUTTER, Space } from '../../../src/theme';
-import { SettingsScreen } from '../../../src/screens/SettingsScreen';
+import { SettingsView } from '../../../src/screens/SettingsView';
+import { WelcomeStep } from '../../../src/screens/firstRun/WelcomeStep';
+import { PhotosStep } from '../../../src/screens/firstRun/PhotosStep';
+import { FilesStep } from '../../../src/screens/firstRun/FilesStep';
+import { ReadyView, ReadyViewProps } from '../../../src/screens/firstRun/ReadyView';
+import { PhotoAccessBannerView } from '../../../src/components/PhotoAccessBannerView';
+import { ModelSheetView } from '../../../src/components/ModelSheetView';
+import type { DocumentAccessApi, PhotoAccessApi } from '../../../src/hooks/useStorageAccess';
+import type { PhotoAccess } from '../../../src/utils/StoragePermissions';
 
 const TABS = (t: ReturnType<typeof useStrings>['t']) => [
   { key: 'home', label: t('tab.home'), icon: 'home' as const },
@@ -188,11 +196,160 @@ const Kit: React.FC = () => {
   );
 };
 
+const noop = () => {};
+
+/** Stand-ins for the access hooks: the steps only read `access` and call these. */
+const fakePhotos = (access: PhotoAccess | null, answer: PhotoAccess = 'denied'): PhotoAccessApi => ({
+  access,
+  refresh: async () => access ?? 'denied',
+  request: async () => answer,
+  openSettings: async () => answer,
+});
+const fakeDocs = (canAskAll = true): DocumentAccessApi => ({
+  access: 'none',
+  canAskAll,
+  refresh: async () => 'none',
+  allowAll: async () => 'none',
+  chooseFolder: async () => false,
+  pickFiles: async () => 0,
+});
+
+/** First-run steps fill the phone, like FirstRunScreen. */
+const Step: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <Screen padBottom>{children}</Screen>
+);
+
+const READY: Omit<ReadyViewProps, 'dots'> = {
+  photos: { allowed: true, done: 120, total: 2400, busy: true, finished: false },
+  papers: { allowed: true, done: 0, total: null, running: false, waiting: true },
+  onAllowPhotos: noop,
+  onAllowPapers: noop,
+  onFinish: noop,
+};
+const READY_DOTS = { index: 3, count: 4, from: 3 };
+
+const welcome = () => (
+  <Step>
+    <WelcomeStep dots={{ index: 0, count: 4, from: 0 }} onNext={noop} />
+  </Step>
+);
+const photos = () => (
+  <Step>
+    <PhotosStep dots={{ index: 1, count: 4, from: 1 }} photos={fakePhotos(null)} onNext={noop} onBack={noop} />
+  </Step>
+);
+const files = () => (
+  <Step>
+    <FilesStep dots={{ index: 2, count: 4, from: 2 }} docs={fakeDocs()} onNext={noop} onBack={noop} />
+  </Step>
+);
+const ready = () => (
+  <Step>
+    <ReadyView dots={READY_DOTS} {...READY} />
+  </Step>
+);
+const settings = () => (
+  <WithTabs active="settings">
+    <SettingsView
+      photoAccess="limited"
+      docAccess="all"
+      voice="ready"
+      onChangePhotos={noop}
+      onChangePapers={noop}
+      onOpenHelpers={noop}
+    />
+  </WithTabs>
+);
+const models = () => (
+  <WithTabs active="settings">
+    <SettingsView
+      photoAccess="full"
+      docAccess="all"
+      voice="ready"
+      onChangePhotos={noop}
+      onChangePapers={noop}
+      onOpenHelpers={noop}
+      sheet={<ModelSheetView visible voice="ready" photo="missing" onPrepare={noop} onClose={noop} />}
+    />
+  </WithTabs>
+);
+
+const photosBlocked = () => (
+  <Step>
+    <PhotosStep dots={{ index: 1, count: 4, from: 1 }} photos={fakePhotos('blocked')} onNext={noop} onBack={noop} />
+  </Step>
+);
+
+const filesFolder = () => (
+  <Step>
+    <FilesStep dots={{ index: 2, count: 4, from: 2 }} docs={fakeDocs(false)} onNext={noop} onBack={noop} />
+  </Step>
+);
+
+const readyLimited = () => (
+  <Step>
+    <ReadyView
+      dots={READY_DOTS}
+      {...READY}
+      photos={{ allowed: true, done: 18, total: 40, busy: true, finished: false }}
+      banner={<PhotoAccessBannerView inline onAllow={noop} onKeep={noop} />}
+    />
+  </Step>
+);
+
+const readyDone = () => (
+  <Step>
+    <ReadyView
+      dots={READY_DOTS}
+      {...READY}
+      photos={{ allowed: true, done: 2400, total: 2400, busy: false, finished: true }}
+      papers={{ allowed: true, done: 14, total: null, running: false, waiting: false }}
+    />
+  </Step>
+);
+
+const readyOff = () => (
+  <Step>
+    <ReadyView
+      dots={READY_DOTS}
+      {...READY}
+      photos={{ allowed: false, done: 0, total: null, busy: false, finished: false }}
+      papers={{ allowed: false, done: 0, total: null, running: false, waiting: false }}
+    />
+  </Step>
+);
+
+const tabBanner = () => (
+  <WithTabs active="photos">
+    <Screen>
+      <ScreenHeader title="Photos" />
+      <View style={styles.fill} />
+      <PhotoAccessBannerView style={styles.tabBanner} onAllow={noop} onKeep={noop} />
+    </Screen>
+  </WithTabs>
+);
+
 export const STORIES: Record<string, { title: string; lang: 'en' | 'hi'; render: () => React.ReactElement }> = {
   kit: { title: 'UI kit (English)', lang: 'en', render: () => <WithTabs active="home"><Kit /></WithTabs> },
   'kit-hi': { title: 'UI kit (Hindi)', lang: 'hi', render: () => <WithTabs active="home"><Kit /></WithTabs> },
-  settings: { title: 'Settings', lang: 'en', render: () => <WithTabs active="settings"><SettingsScreen /></WithTabs> },
-  'settings-hi': { title: 'Settings (Hindi)', lang: 'hi', render: () => <WithTabs active="settings"><SettingsScreen /></WithTabs> },
+  settings: { title: 'Settings', lang: 'en', render: settings },
+  'settings-hi': { title: 'Settings (Hindi)', lang: 'hi', render: settings },
+  models: { title: 'Voice and photo search sheet', lang: 'en', render: models },
+  'models-hi': { title: 'Voice and photo search sheet (Hindi)', lang: 'hi', render: models },
+  welcome: { title: 'First run: welcome', lang: 'en', render: welcome },
+  'welcome-hi': { title: 'First run: welcome (Hindi)', lang: 'hi', render: welcome },
+  photos: { title: 'First run: photos', lang: 'en', render: photos },
+  'photos-hi': { title: 'First run: photos (Hindi)', lang: 'hi', render: photos },
+  'photos-blocked': { title: 'First run: photos, Android won’t ask again', lang: 'en', render: photosBlocked },
+  files: { title: 'First run: PDFs', lang: 'en', render: files },
+  'files-hi': { title: 'First run: PDFs (Hindi)', lang: 'hi', render: files },
+  'files-folder': { title: 'First run: PDFs, folder only', lang: 'en', render: filesFolder },
+  ready: { title: 'First run: getting photos ready', lang: 'en', render: ready },
+  'ready-hi': { title: 'First run: getting photos ready (Hindi)', lang: 'hi', render: ready },
+  'ready-limited': { title: 'First run: only some photos allowed', lang: 'en', render: readyLimited },
+  'ready-done': { title: 'First run: every photo ready', lang: 'en', render: readyDone },
+  'ready-off': { title: 'First run: nothing allowed yet', lang: 'en', render: readyOff },
+  'tab-banner': { title: 'Only some photos: banner above the tabs', lang: 'en', render: tabBanner },
 };
 
 const styles = StyleSheet.create({
@@ -206,4 +363,5 @@ const styles = StyleSheet.create({
   topGap: { marginTop: Space.md },
   lockDemo: { alignItems: 'center', paddingVertical: Space.xxl },
   lockTarget: { paddingHorizontal: Space.md, paddingVertical: Space.xs },
+  tabBanner: { marginHorizontal: GUTTER, marginBottom: Space.sm },
 });

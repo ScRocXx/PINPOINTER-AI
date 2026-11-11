@@ -208,6 +208,16 @@ class MockDB {
       }
       return { rows: [...groups.values()] };
     }
+    if (/^SELECT kind, ocr_status, COUNT\(\*\) AS cnt FROM files GROUP BY kind, ocr_status/i.test(q)) {
+      const groups = new Map();
+      for (const f of this.files.values()) {
+        const key = `${f.kind}|${f.ocr_status}`;
+        const g = groups.get(key) || { kind: f.kind, ocr_status: f.ocr_status, cnt: 0 };
+        g.cnt++;
+        groups.set(key, g);
+      }
+      return { rows: [...groups.values()] };
+    }
     if (/^DELETE FROM files\s*;?\s*$/i.test(q)) {
       this.files = new Map();
       return { rows: [] };

@@ -229,6 +229,35 @@ export const getIndexingStats = (): IndexingStats => {
   return stats;
 };
 
+/** How many photos and papers have been looked at (read, or given up on). */
+export interface ReadyCounts {
+  photos: number;
+  papers: number;
+}
+
+/**
+ * Files whose text step is finished, per kind: done, skipped, or failed.
+ * A failed file still counts, so progress reaches the end even when a few
+ * photos can't be read. Cheap enough to call while a sync runs.
+ */
+export const getReadyCounts = (): ReadyCounts => {
+  const counts: ReadyCounts = { photos: 0, papers: 0 };
+  try {
+    const rows = getDb().executeSync(
+      'SELECT kind, ocr_status, COUNT(*) AS cnt FROM files GROUP BY kind, ocr_status',
+    )?.rows ?? [];
+    for (const raw of rows) {
+      const r = raw as unknown as { kind: FileKind; ocr_status: StageStatus; cnt: number };
+      if (r.ocr_status === 'pending') continue;
+      if (r.kind === 'IMAGE') counts.photos += r.cnt;
+      else if (r.kind === 'DOCUMENT') counts.papers += r.cnt;
+    }
+  } catch (e) {
+    AppLogger.warn('DB', 'getReadyCounts failed:', e);
+  }
+  return counts;
+};
+
 /**
  * Migration helper: gives every already-indexed file a state row, so an
  * upgrade doesn't re-OCR the whole gallery. Photos with a vector count as
