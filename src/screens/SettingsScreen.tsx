@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { ModelDownloadSheet } from '../components/ModelDownloadSheet';
 import { useDocumentAccess, usePhotoAccess } from '../hooks/useStorageAccess';
 import { useModelService } from '../services/ModelService';
+import { allFilesAccessApplies } from '../utils/StoragePermissions';
 import { SettingsView } from './SettingsView';
 
 export { SettingsView } from './SettingsView';
@@ -28,7 +29,18 @@ export const SettingsScreen: React.FC = () => {
       onChangePhotos={() =>
         photos.access === 'full' || photos.access === 'blocked' ? photos.openSettings() : photos.request()
       }
-      onChangePapers={() => (docs.canAskAll || docs.access === 'all' ? docs.allowAll() : docs.chooseFolder())}
+      // Android 11+: the All files switch (also to turn it off), or a folder
+      // when this build can't ask. Older phones: the file permission, or
+      // Settings once it is already on.
+      onChangePapers={() =>
+        !allFilesAccessApplies()
+          ? docs.access === 'all'
+            ? photos.openSettings()
+            : docs.allowAll()
+          : docs.canAskAll || docs.access === 'all'
+            ? docs.allowAll()
+            : docs.chooseFolder()
+      }
       onOpenHelpers={() => setHelpersOpen(true)}
       sheet={<ModelDownloadSheet visible={helpersOpen} onClose={() => setHelpersOpen(false)} />}
     />
