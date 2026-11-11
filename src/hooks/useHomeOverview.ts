@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { InteractionManager } from 'react-native';
 import { CameraRoll } from '@react-native-camera-roll/camera-roll';
 import { countCheckedFiles, getCollectionPreview, getSimilarPhotos } from '../database';
 import { encodeText } from '../services/EmbeddingService';
@@ -138,7 +137,7 @@ export const useHomeOverview = ({ busy, progressTick = 0 }: HomeOverviewOptions)
   // First load once the first frame is up, then Family by look.
   useEffect(() => {
     alive.current = true;
-    const task = InteractionManager.runAfterInteractions(() => {
+    const frame = requestAnimationFrame(() => {
       loadAll().catch(e => AppLogger.warn('Home', 'Home overview failed', e));
     });
     const timer = setTimeout(async () => {
@@ -149,7 +148,7 @@ export const useHomeOverview = ({ busy, progressTick = 0 }: HomeOverviewOptions)
     }, SEMANTIC_DELAY_MS);
     return () => {
       alive.current = false;
-      task?.cancel?.();
+      cancelAnimationFrame(frame);
       clearTimeout(timer);
     };
   }, [loadAll, mergeTiles]);

@@ -40,7 +40,8 @@ interface PreviewRow {
 export const getCollectionPreview = (collection: Collection, photoLimit = 3): CollectionPreview => {
   const terms = collectionTerms(collection);
   if (!terms) return EMPTY;
-  // One row more than the cap tells us whether there are more.
+  // One row more than the cap tells us whether there are more. Newest index
+  // rows first, so a collection over the cap still shows recent photos.
   const limit = COLLECTION_COUNT_CAP + 1;
   try {
     const db = getDb();
@@ -50,12 +51,14 @@ export const getCollectionPreview = (collection: Collection, photoLimit = 3): Co
            FROM fts_index f
            JOIN document_index d ON d.id = f.rowid
            WHERE f.fts_index MATCH ?
+           ORDER BY f.rowid DESC
            LIMIT ${limit}`,
           [terms.fts],
         )
       : db.executeSync(
           `SELECT filePath, type, timestamp FROM document_index
            WHERE ${terms.like.map(() => 'content LIKE ? COLLATE NOCASE').join(' OR ')}
+           ORDER BY id DESC
            LIMIT ${limit}`,
           terms.like,
         );
