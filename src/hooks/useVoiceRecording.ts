@@ -33,6 +33,8 @@ export const useVoiceRecording = (onTranscription: (text: string) => void) => {
     // Set while we cancel on purpose: the "end" event that follows must not
     // show "Understanding…", because no words will come.
     const cancellingRef = useRef(false);
+    // Cancelled while the words were being read: drop them when they arrive.
+    const discardRef = useRef(false);
     // One stop or cancel per recording, whoever asks first (tap or silence).
     const endingRef = useRef(false);
     const levelUnsubRef = useRef<(() => void) | null>(null);
@@ -55,7 +57,12 @@ export const useVoiceRecording = (onTranscription: (text: string) => void) => {
     }, [stopLevelWatch]);
 
     const cancelListening = useCallback(async () => {
-        if (endingRef.current) return;
+        if (endingRef.current) {
+            // Already stopped and reading the words: don't search with them.
+            discardRef.current = true;
+            setIsTranscribing(false);
+            return;
+        }
         endingRef.current = true;
         cancellingRef.current = true;
         stopLevelWatch();
@@ -82,6 +89,7 @@ export const useVoiceRecording = (onTranscription: (text: string) => void) => {
             setIsTranscribing(false);
             endingRef.current = false;
             cancellingRef.current = false;
+            discardRef.current = false;
 
             // End by itself once the person has finished speaking.
             levelUnsubRef.current?.();
@@ -107,6 +115,10 @@ export const useVoiceRecording = (onTranscription: (text: string) => void) => {
 
         const onSpeechResults = sherpaEmitter.addListener('onSpeechResults', (event: { value?: string[] }) => {
             setIsTranscribing(false);
+            if (discardRef.current) {
+                discardRef.current = false;
+                return;
+            }
             const text = event?.value?.[0] || '';
             if (text.trim()) {
                 onTranscription(text.trim());
