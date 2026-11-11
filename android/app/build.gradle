@@ -17,6 +17,24 @@ react {
 def enableProguardInReleaseBuilds = true
 
 /**
+ * Release signing. The keystore and its passwords live outside the repo:
+ * set these four as Gradle properties (~/.gradle/gradle.properties, or -P on
+ * the command line) or as environment variables of the same name.
+ *
+ *   PINPOINTER_RELEASE_STORE_FILE      path to the keystore (.jks / .keystore)
+ *   PINPOINTER_RELEASE_STORE_PASSWORD
+ *   PINPOINTER_RELEASE_KEY_ALIAS
+ *   PINPOINTER_RELEASE_KEY_PASSWORD
+ *
+ * Without them a release build is signed with the debug key, which is fine
+ * for trying a build on your own phone and nothing else.
+ */
+def releaseSigning = { String name ->
+    providers.gradleProperty(name).orElse(providers.environmentVariable(name)).getOrNull()
+}
+def releaseStoreFile = releaseSigning('PINPOINTER_RELEASE_STORE_FILE')
+
+/**
  * The preferred build flavor of JavaScriptCore (JSC)
  */
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
@@ -54,15 +72,23 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
+        release {
+            if (releaseStoreFile) {
+                storeFile file(releaseStoreFile)
+                storePassword releaseSigning('PINPOINTER_RELEASE_STORE_PASSWORD')
+                keyAlias releaseSigning('PINPOINTER_RELEASE_KEY_ALIAS')
+                keyPassword releaseSigning('PINPOINTER_RELEASE_KEY_PASSWORD')
+            }
+        }
     }
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
         }
         release {
-            // Caution! In production, you need to generate your own keystore file.
-            // see https://reactnative.dev/docs/signed-apk-android.
-            signingConfig signingConfigs.debug
+            // Signed with your own keystore when one is configured (see the
+            // top of this file), otherwise with the debug key.
+            signingConfig releaseStoreFile ? signingConfigs.release : signingConfigs.debug
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
         }
