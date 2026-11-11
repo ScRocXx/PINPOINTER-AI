@@ -72,3 +72,23 @@ describe('removeOtherSherpaAars', () => {
     expect(removeOtherSherpaAars(path.join(dir, 'nope'), 'sherpa-onnx-1.13.4.aar')).toEqual([]);
   });
 });
+
+describe('CPU types in the APK', () => {
+  // The build type's own block: no closing brace between its name and its abiFilters.
+  const block = (name) => new RegExp(name + '\\s*\\{[^}]*?abiFilters\\(\\*abisFor\\(([^)]*)\\)\\)').exec(gradle);
+
+  it('release is for phones: ARM only, 64-bit and 32-bit', () => {
+    expect(/def phoneAbis = \[([^\]]*)\]/.exec(gradle)[1]).toBe("'arm64-v8a', 'armeabi-v7a'");
+    expect(block('release')[1]).toBe('phoneAbis');
+  });
+
+  it('debug still runs on emulators', () => {
+    expect(block('debug')[1]).toBe('phoneAbis + emulatorAbis');
+    expect(/def emulatorAbis = \[([^\]]*)\]/.exec(gradle)[1]).toContain("'x86_64'");
+  });
+
+  it('has no CPU list in defaultConfig that would add to both', () => {
+    const defaultConfig = /defaultConfig\s*\{([\s\S]*?)\n {4}\}/.exec(gradle)[1];
+    expect(defaultConfig).not.toContain('abiFilters');
+  });
+});

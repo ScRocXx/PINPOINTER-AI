@@ -72,6 +72,22 @@ def slimSherpaAar = tasks.register('slimSherpaAar', Zip) {
 }
 
 /**
+ * Which CPU types go into the APK. Phones are ARM: arm64-v8a, plus
+ * armeabi-v7a for the many low-end phones that still run 32-bit Android.
+ * x86 and x86_64 only exist on emulators, and each adds about 80 MB, so a
+ * release APK leaves them out. Debug builds keep all four, so
+ * `npm run android` works on any emulator.
+ *
+ * To try a release build on an emulator, name the CPU types yourself:
+ *   ./gradlew assembleRelease -PpinpointerAbis=arm64-v8a,armeabi-v7a,x86_64
+ */
+def phoneAbis = ['arm64-v8a', 'armeabi-v7a']
+def emulatorAbis = ['x86_64', 'x86']
+def requestedAbis = (providers.gradleProperty('pinpointerAbis').getOrNull() ?: '')
+        .split(',').collect { it.trim() }.findAll { it }
+def abisFor = { List<String> defaults -> requestedAbis ?: defaults }
+
+/**
  * The preferred build flavor of JavaScriptCore (JSC)
  */
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
@@ -98,9 +114,6 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
         versionName "1.0"
-        ndk {
-            abiFilters "arm64-v8a", "x86_64", "x86", "armeabi-v7a"
-        }
     }
     signingConfigs {
         debug {
@@ -121,8 +134,14 @@ android {
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
+            ndk {
+                abiFilters(*abisFor(phoneAbis + emulatorAbis))
+            }
         }
         release {
+            ndk {
+                abiFilters(*abisFor(phoneAbis))
+            }
             // Signed with your own keystore when one is configured (see the
             // top of this file), otherwise with the debug key.
             signingConfig releaseStoreFile ? signingConfigs.release : signingConfigs.debug
