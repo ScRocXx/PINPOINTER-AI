@@ -13,20 +13,24 @@ Phase 1 covers photos and PDFs. Phase 2 (later) is video search for creators.
 ## Commands
 
 ```bash
-npm install                 # postinstall runs download-models.js (sherpa AAR + Whisper STT)
+npm install                 # postinstall runs download-models.js (sherpa-onnx AAR + Whisper STT; needs network to GitHub)
 npm start                   # Metro
 npm run android             # build + install (needs Android SDK, a device or emulator)
 npx tsc --noEmit            # type check (must be clean)
 npm run lint                # eslint (must be clean)
-npx jest                    # 64 suites / ~1740 tests (must all pass). Slow on the D: drive; use --silent (--runInBand if workers run out of memory)
-cd android && ./gradlew assembleDebug    # native compile check
+npx jest                    # 70 suites / ~1840 tests (must all pass). Slow on the D: drive; use --silent (--runInBand if workers run out of memory)
+cd android && ./gradlew assembleDebug    # native compile check (JDK 17 from JAVA_HOME)
+cd android && ./gradlew assembleRelease  # release APK; signed with your keystore if configured (see below), else the debug key
 adb shell cmd jobscheduler run -f com.pinpointer.app 4711   # force the charging-time indexing job
 cd tools/preview && npm install && npm run dev   # browser preview of the UI kit and screens (react-native-web), `npm run shots -- out` for phone screenshots (stories in `tools/preview/src/stories.tsx`)
 ```
 
 - CLIP models (`android/app/src/main/assets/models/clip/vision_encoder_int8.onnx`, `text_encoder_int8.onnx`, vocab) are gitignored and made with `scripts/export_mobileclip.py`. Without them semantic search is off, and the app falls back to text search.
 - `react-native-screens` is pinned to exactly `4.23.0` in `package.json`. Only `@react-navigation/stack` uses it, and 4.30.1 fails React Native 0.83's codegen (`generateCodegenSchemaFromJavaScript`), which breaks the Android build. Upgrade it only together with React Native.
-- `fix_aar.py` (untracked) strips `libonnxruntime.so` from the sherpa-onnx AAR so it doesn't clash with `onnxruntime-android` 1.20.0 (`pickFirst`). If STT or CLIP crashes at load, check this first.
+- **One ONNX Runtime, two users.** An APK holds one `libonnxruntime.so`, and sherpa-onnx (voice) and `onnxruntime-android` (CLIP) each ask for it by exact version tag. They must be built for the same ONNX Runtime version, or one of them cannot load on the phone (the build does not fail). Current pair: sherpa-onnx `1.13.4` (`SHERPA_ONNX_VERSION` in `download-models.js`) + `onnxruntime-android:1.27.0` (`android/app/build.gradle`). Change both together, add the pair to `__tests__/nativeLibraries.test.js`, and try it on a phone. The Gradle task `slimSherpaAar` links the sherpa AAR without its own `libonnxruntime.so`, so the one in the APK is always onnxruntime-android's (the build with XNNPACK); `libonnxruntime.so` is not in `pickFirsts`, so a second copy fails the build. The sherpa AAR is downloaded by `npm install` and is not tracked in git. (This replaces the old untracked `fix_aar.py` step.)
+- `@op-engineering/op-sqlite` is pinned to exactly `14.0.4`. Versions before it (including 11.4.9) declare a synchronous `@ReactMethod` that returns nothing; React Native 0.83 refuses to load such a module, and the app crashed at startup. `__tests__/nativeModules.test.js` checks every native dependency for this.
+- The JDK is not set in `android/gradle.properties`: Gradle uses `JAVA_HOME` (JDK 17). If you need a fixed path on your machine, put `org.gradle.java.home=...` in your own `~/.gradle/gradle.properties`.
+- Release signing comes from outside the repo: `PINPOINTER_RELEASE_STORE_FILE`, `PINPOINTER_RELEASE_STORE_PASSWORD`, `PINPOINTER_RELEASE_KEY_ALIAS`, `PINPOINTER_RELEASE_KEY_PASSWORD`, as Gradle properties (`~/.gradle/gradle.properties` or `-P`) or environment variables. Without them `assembleRelease` signs with the debug key.
 - Done means: tsc clean, lint clean, all Jest tests pass, and for native changes, `assembleDebug` builds.
 
 ## Architecture
@@ -97,5 +101,5 @@ cd tools/preview && npm install && npm run dev   # browser preview of the UI kit
 - UI → build from `src/components/ui` and `src/theme` tokens; text through `AppText` and `t()` (add every string to `en` and `hi`); 48dp minimum touch (56dp for main actions); respect Reduce Motion; the beam only on things that find. Restyled screens drop `AppColors`.
 - Imports are relative (no path aliases).
 - Tests live in `__tests__/` next to the code. Native modules are mocked in `jest.setup.js` and `__mocks__/`. Add or adjust tests with every change.
-- Don't commit: model files, `.claude/settings.local.json`, crash logs, `graphify-out/` (gitignored, regenerate with `graphify update .`).
+- Don't commit: model files, the sherpa-onnx AAR, keystores or their passwords, `.claude/settings.local.json`, crash logs, `graphify-out/` (gitignored, regenerate with `graphify update .`).
 - One branch per task (`feat/…`, `fix/…`, `chore/…`). Small commits. Don't push or merge without the owner's OK.
