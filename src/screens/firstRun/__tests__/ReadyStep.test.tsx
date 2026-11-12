@@ -11,7 +11,7 @@ jest.mock('../../../components/PhotoAccessBanner', () => ({ PhotoAccessBanner: (
 jest.mock('../../../hooks/useIndexingProgress', () => ({
   useIndexingProgress: () => ({
     // Photos still being read, so only the step's own "finished" can say "all ready".
-    photos: { done: 1, total: 5, running: true, queued: false },
+    photos: { done: 1, total: 5, running: true, queued: false, quick: false },
     papers: { done: 0, total: null, running: false, queued: false },
   }),
 }));

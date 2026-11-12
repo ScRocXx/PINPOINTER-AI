@@ -26,6 +26,7 @@ import {
 } from '../utils/GallerySync';
 import { performDocumentSync, type DocumentSyncResult } from '../utils/DocumentSync';
 import { pruneMissingFiles } from '../utils/MissingFiles';
+import { markChecked } from '../utils/LastChecked';
 import { AppLogger } from '../utils/AppLogger';
 
 export type JobKind = 'gallery-quick' | 'gallery-quick-background' | 'gallery-deep' | 'documents' | 'backfill' | 'prune';
@@ -93,19 +94,24 @@ class IndexingServiceImpl {
                 this.enqueue<number>('gallery-quick-background', 0, (c) => performQuickSyncBackground(cursor, c))
                     .catch((e) => AppLogger.warn('IndexingService', 'Quick sync background pass failed', e));
             }
+            if (!result.wasCancelled) await markChecked('photos');
             return { processed: result.processed, wasCancelled: result.wasCancelled };
         });
     }
 
     /** Index every photo, resuming from `resumeFrom` (or the saved cursor). */
     deepGallerySync(onProgress?: (count: number, uri?: string) => void, resumeFrom?: string): Promise<GallerySyncResult> {
-        return this.enqueue<GallerySyncResult>('gallery-deep', { processed: 0, wasCancelled: true }, (cancel) => {
+        return this.enqueue<GallerySyncResult>('gallery-deep', { processed: 0, wasCancelled: true }, async (cancel) => {
             this.setProgress({ galleryProcessed: 0 });
-            return performFullGallerySync(
+            const result = await performFullGallerySync(
                 (count, uri) => { this.setProgress({ galleryProcessed: count }); onProgress?.(count, uri); },
                 cancel,
                 resumeFrom,
             );
+            // Stamped here, not in a hook: the first run and the charging-time
+            // job finish checks too, and Home must not say "not checked yet".
+            if (!result.wasCancelled) await markChecked('photos');
+            return result;
         });
     }
 
@@ -114,11 +120,13 @@ class IndexingServiceImpl {
         const dropped: DocumentSyncResult = { status: 'done', processed: 0, total: 0, wasCancelled: true };
         return this.enqueue<DocumentSyncResult>('documents', dropped, async (cancel) => {
             try {
-                return await performDocumentSync(
+                const result = await performDocumentSync(
                     limit,
                     (processed, total) => { this.setProgress({ docsProcessed: processed, docsTotal: total }); onProgress?.(processed, total); },
                     cancel,
                 );
+                if (result.status === 'done' && !result.wasCancelled) await markChecked('papers');
+                return result;
             } finally {
                 this.setProgress({ docsProcessed: 0, docsTotal: 0 });
             }

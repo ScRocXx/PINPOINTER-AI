@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  AppState,
   RefreshControl,
   ScrollView,
   SectionList,
@@ -36,6 +35,8 @@ import { RootStackParamList } from '../navigation/types';
 import { usePinpointerShared } from '../hooks/PinpointerContext';
 import { usePinnedItems } from '../hooks/usePinnedItems';
 import { useScreenFocus } from '../hooks/useScreenFocus';
+import { useIndexingProgress } from '../hooks/useIndexingProgress';
+import { usePhotoAccess } from '../hooks/useStorageAccess';
 import { addRecentPhoto } from '../utils/RecentPhotos';
 import { AppLogger } from '../utils/AppLogger';
 import {
@@ -47,12 +48,7 @@ import {
   groupIntoSections,
   inWindow,
 } from '../utils/PhotoDates';
-import {
-  PhotoAccess,
-  ensurePhotoAccess,
-  getPhotoAccess,
-  openAppSettingsAndWait,
-} from '../utils/StoragePermissions';
+import { ensurePhotoAccess } from '../utils/StoragePermissions';
 
 /** The chips above the grid. */
 export type PhotoFilter = DateFilter | 'screenshots' | 'important';
@@ -117,10 +113,15 @@ export const GalleryScreen: React.FC = () => {
   const focused = useScreenFocus();
   const { width } = useWindowDimensions();
   const { items: pinnedItems, isPinned } = usePinnedItems();
-  const { syncCount, isSyncing, isPaused, handlePauseSync, handleResumeSync } = usePinpointerShared();
+  const { isPaused, handlePauseSync, handleResumeSync, setIsSearching } = usePinpointerShared();
+  // Kept current: checked again whenever the person comes back to the app
+  // (they may have just allowed photos in Settings).
+  const { access, refresh: refreshAccess, openSettings } = usePhotoAccess();
+  // How many photos are ready, and whether more are being got ready now,
+  // whoever started that (this app, the first run, the charging-time job).
+  const progress = useIndexingProgress(access);
 
   const [filter, setFilter] = useState<PhotoFilter>('all');
-  const [access, setAccess] = useState<PhotoAccess | null>(null);
   const [photos, setPhotos] = useState<GalleryPhoto[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -136,13 +137,10 @@ export const GalleryScreen: React.FC = () => {
   const filterRef = useRef(filter);
   filterRef.current = filter;
 
-  const canSee = access === 'full' || access === 'limited';
-
-  const checkAccess = useCallback(async () => {
-    const next = await getPhotoAccess();
-    setAccess(next);
-    return next;
-  }, []);
+  // What may be read: changes when photos are allowed, and again when
+  // "some photos" becomes "all photos", so the grid starts again both times.
+  const allowed = access === 'full' || access === 'limited' ? access : null;
+  const canSee = allowed !== null;
 
   const fetchPage = useCallback(async (reset: boolean) => {
     const current = filterRef.current;
@@ -220,21 +218,9 @@ export const GalleryScreen: React.FC = () => {
     }
   }, []);
 
-  // Access first; check again whenever the person comes back to the app
-  // (they may have just allowed photos in Settings).
+  // A new filter (or more photos just allowed) starts the grid again.
   useEffect(() => {
-    checkAccess();
-    const sub = AppState.addEventListener('change', state => {
-      if (state === 'active') {
-        checkAccess();
-      }
-    });
-    return () => sub.remove();
-  }, [checkAccess]);
-
-  // A new filter (or access just granted) starts the grid again.
-  useEffect(() => {
-    if (!canSee) {
+    if (!allowed) {
       return;
     }
     cursor.current = undefined;
@@ -242,7 +228,7 @@ export const GalleryScreen: React.FC = () => {
     setPhotos([]);
     setFailed(false);
     fetchPage(true);
-  }, [canSee, fetchPage, filter]);
+  }, [allowed, fetchPage, filter]);
 
   // Back on this tab: add photos taken since.
   const wasFocused = useRef(focused);
@@ -311,18 +297,28 @@ export const GalleryScreen: React.FC = () => {
     [navigation],
   );
 
+  // Asks, or shows the Settings steps when Android won't ask again.
   const allowPhotos = useCallback(async () => {
     await ensurePhotoAccess();
-    await checkAccess();
-  }, [checkAccess]);
+    await refreshAccess();
+  }, [refreshAccess]);
 
   const allowAllPhotos = useCallback(async () => {
-    await openAppSettingsAndWait();
-    const next = await checkAccess();
-    if (next === 'full') {
-      fetchPage(true);
-    }
-  }, [checkAccess, fetchPage]);
+    await openSettings();
+  }, [openSettings]);
+
+  // The search button opens search itself, not just the Home tab.
+  const openSearch = useCallback(() => {
+    setIsSearching(true);
+    navigation.navigate('Pinpointer');
+  }, [navigation, setIsSearching]);
+
+  const ready = progress.photos.done;
+  const total = progress.photos.total;
+  const readyText =
+    total !== null && total > ready
+      ? t('progress.countShort', { done: ready, total })
+      : t('gallery.readyCount', { n: ready });
 
   const onRefresh = useCallback(() => {
     if (filter === 'important') {
@@ -368,25 +364,26 @@ export const GalleryScreen: React.FC = () => {
     <View>
       <ScreenHeader
         title={t('gallery.title')}
-        subtitle={syncCount > 0 ? t('gallery.readyCount', { n: syncCount }) : undefined}
+        subtitle={ready > 0 ? t('gallery.readyCount', { n: ready }) : undefined}
         actions={
           <IconButton
             icon="search"
             label={t('gallery.search')}
             variant="tonal"
-            onPress={() => navigation.navigate('Pinpointer')}
+            onPress={openSearch}
             testID="gallery-search"
           />
         }
       />
 
-      {isSyncing || isPaused ? (
+      {progress.photos.running || isPaused ? (
         <ProgressCard
           title={t('progress.photosTitle')}
-          detail={t('gallery.readyCount', { n: syncCount })}
-          state={isPaused ? 'paused' : 'running'}
-          actionLabel={t(isPaused ? 'progress.resume' : 'progress.pause')}
-          onAction={isPaused ? handleResumeSync : handlePauseSync}
+          detail={readyText}
+          value={total !== null && total > 0 ? Math.min(1, ready / total) : undefined}
+          state={progress.photos.running ? 'running' : 'paused'}
+          actionLabel={t(progress.photos.running ? 'progress.pause' : 'progress.resume')}
+          onAction={progress.photos.running ? handlePauseSync : handleResumeSync}
           note={t('progress.keepsGoing')}
           style={styles.gutter}
           testID="gallery-progress"

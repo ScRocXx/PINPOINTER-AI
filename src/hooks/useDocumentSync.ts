@@ -1,47 +1,57 @@
-import { useRef, useState } from 'react';
-import { Alert } from 'react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { IndexingService } from '../services/IndexingService';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useCallback, useEffect } from 'react';
 import { AppLogger } from '../utils/AppLogger';
 import { ensureDocumentAccess } from '../utils/StoragePermissions';
 import { subscribeToSharedPdfs } from '../utils/PdfImport';
+import { getLastChecked, subscribeLastChecked } from '../utils/LastChecked';
+import { useToast } from '../components/ui/Toast';
+import { tNow } from '../i18n/current';
 
 /**
  * Tracks document-sync state. The PDF crawl itself (utils/DocumentSync.ts)
  * runs in IndexingService's queue, one job at a time with gallery sync.
  *
- * Persists the last sync time in AsyncStorage and exposes the manual
- * `handleDocumentSync` trigger. Permission handling (including the Android
- * "All files access" settings screen) lives in utils/StoragePermissions.
+ * The "last checked" time is stamped by IndexingService (so the first run
+ * and the charging-time job count too) and followed here. Permission
+ * handling (including the Android "All files access" settings screen)
+ * lives in utils/StoragePermissions.
+ *
+ * `handleDocumentSync(limit, fromShare, ask)`:
+ * - `fromShare`: a PDF was just shared or picked. No permission is needed,
+ *   and if a check is already running one more runs right after it.
+ * - `ask` (default: unless `fromShare`): explain and ask for PDF access when
+ *   it is missing. Pass false for a check the person didn't start for PDFs
+ *   ("Check again" on Home), so no pop-up interrupts them.
  *
  * @returns Sync progress flags, counts, and control callbacks.
  */
 export const useDocumentSync = () => {
+    const toast = useToast();
     const [isSyncingDocs, setIsSyncingDocs] = useState(false);
     const [docSyncCount, setDocSyncCount] = useState(0);
     const [totalDocs, setTotalDocs] = useState(0);
     const [lastDocSyncTime, setLastDocSyncTime] = useState<number | null>(null);
 
     const loadPersistedState = useCallback(async () => {
-        try {
-            const timeStr = await AsyncStorage.getItem('doc_last_sync_time');
-            if (timeStr) setLastDocSyncTime(parseInt(timeStr, 10));
-        } catch (e) {
-            AppLogger.error('DocumentSync', 'Failed to load persisted time', e);
-        }
+        const at = await getLastChecked('papers');
+        if (at) setLastDocSyncTime(at);
     }, []);
+
+    // The service stamps every finished check, whoever started it.
+    useEffect(() => subscribeLastChecked((kind, at) => {
+        if (kind === 'papers') setLastDocSyncTime(at);
+    }), []);
 
     useEffect(() => {
         loadPersistedState();
     }, [loadPersistedState]);
 
     // Latest handleDocumentSync, for the Share listener below.
-    const syncRef = useRef<(limit?: number, fromShare?: boolean) => Promise<void>>(async () => {});
+    const syncRef = useRef<(limit?: number, fromShare?: boolean, ask?: boolean) => Promise<void>>(async () => {});
     const syncingRef = useRef(false);
     const rerunRef = useRef(false);
 
-    const handleDocumentSync = async (limit?: number, fromShare = false) => {
+    const handleDocumentSync = async (limit?: number, fromShare = false, ask = !fromShare) => {
         if (isSyncingDocs || syncingRef.current) {
             if (fromShare) rerunRef.current = true; // pick the shared PDF up right after
             return;
@@ -50,7 +60,7 @@ export const useDocumentSync = () => {
         // Check the real permission (not "the scan found no PDFs"). If it is
         // missing, explain it and wait for the user to come back from Settings.
         // A shared PDF needs no permission, so don't ask then.
-        if (!fromShare && !(await ensureDocumentAccess())) return;
+        if (ask && !(await ensureDocumentAccess())) return;
         syncingRef.current = true;
 
         try {
@@ -70,10 +80,6 @@ export const useDocumentSync = () => {
             setDocSyncCount(0);
             setTotalDocs(0);
 
-            const now = Date.now();
-            setLastDocSyncTime(now);
-            await AsyncStorage.setItem('doc_last_sync_time', now.toString());
-
             if (rerunRef.current) {
                 rerunRef.current = false;
                 syncRef.current(undefined, true);
@@ -84,12 +90,12 @@ export const useDocumentSync = () => {
 
     // PDFs shared to Pinpointer from other apps: confirm, then index them.
     useEffect(() => subscribeToSharedPdfs((count) => {
-        Alert.alert(
-            count === 1 ? 'PDF added' : `${count} PDFs added`,
-            `Pinpointer is reading ${count === 1 ? 'it' : 'them'} now. ${count === 1 ? 'It' : 'They'} will show up in search in a moment.`,
+        toast.show(
+            count === 1 ? tNow('papers.sharedOne') : tNow('papers.sharedMany', { n: count }),
+            { icon: 'papers', duration: 4000 },
         );
         syncRef.current(undefined, true);
-    }), []);
+    }), [toast]);
 
     return {
         isSyncingDocs,

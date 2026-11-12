@@ -28,8 +28,13 @@ export interface KindProgress {
   queued: boolean;
 }
 
+export interface PhotoProgress extends KindProgress {
+  /** The running check only looks at the newest photos ("Check again"), not at all of them. */
+  quick: boolean;
+}
+
 export interface IndexingProgress {
-  photos: KindProgress;
+  photos: PhotoProgress;
   papers: KindProgress;
 }
 
@@ -53,6 +58,7 @@ export const toIndexingProgress = (
       total: photoTotal === null || photoTotal < 0 ? null : Math.max(photoTotal, counts.photos),
       running: isGalleryJob(snapshot.running),
       queued: snapshot.queued.some(isGalleryJob),
+      quick: snapshot.running === 'gallery-quick',
     },
     papers: {
       done: papersRunning ? snapshot.docsProcessed : counts.papers,

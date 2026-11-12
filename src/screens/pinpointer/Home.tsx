@@ -4,6 +4,7 @@ import { useToast } from '../../components/ui';
 import { useStrings } from '../../i18n';
 import { usePinpointerShared } from '../../hooks/PinpointerContext';
 import { useHomeOverview } from '../../hooks/useHomeOverview';
+import type { IndexingProgress } from '../../hooks/useIndexingProgress';
 import { usePinnedItems } from '../../hooks/usePinnedItems';
 import { AppLogger } from '../../utils/AppLogger';
 import type { CollectionId } from '../../utils/Collections';
@@ -15,6 +16,8 @@ import { TILE_LOOK } from './HomeParts';
 export interface HomeProps {
   /** Open a photo in the viewer (the screen also remembers it as recent). */
   onOpenImage: (uri: string) => void;
+  /** What is being got ready right now, whoever started it. */
+  progress: IndexingProgress;
 }
 
 const noop = () => {};
@@ -33,7 +36,7 @@ const openPaper = (filePath: string) => {
  * Home's wiring: the shared Pinpointer state, the Important stars and the
  * Home overview (tiles, photo totals, recent photos) into `HomeView`.
  */
-export const Home: React.FC<HomeProps> = ({ onOpenImage }) => {
+export const Home: React.FC<HomeProps> = ({ onOpenImage, progress }) => {
   const { t } = useStrings();
   const toast = useToast();
   const {
@@ -53,14 +56,18 @@ export const Home: React.FC<HomeProps> = ({ onOpenImage }) => {
     handleDeepSync,
     handlePauseSync,
     handleResumeSync,
-    isSyncingDocs,
-    docSyncCount,
-    totalDocs,
     lastDocSyncTime,
     handleDocumentSync,
   } = usePinpointerShared();
   const { items: pinned, toggle } = usePinnedItems();
-  const overview = useHomeOverview({ busy: isSyncing || isSyncingDocs, progressTick: syncCount + docSyncCount });
+  // The queue itself says what is running: a check started by the first run
+  // or while charging shows here too, not only one started from this screen.
+  const photosRunning = progress.photos.running;
+  const papersRunning = progress.papers.running;
+  const overview = useHomeOverview({
+    busy: photosRunning || papersRunning,
+    progressTick: progress.photos.done + progress.papers.done,
+  });
 
   const openSearch = useCallback(
     (query?: string) => {
@@ -79,7 +86,9 @@ export const Home: React.FC<HomeProps> = ({ onOpenImage }) => {
     (everything: boolean) => {
       if (everything) handleDeepSync();
       else handleQuickSync();
-      handleDocumentSync(50);
+      // New papers too, but quietly: "Check again" must not open a pop-up
+      // about PDFs every time for someone who chose not to allow them.
+      handleDocumentSync(50, false, false);
     },
     [handleDeepSync, handleDocumentSync, handleQuickSync],
   );
@@ -105,15 +114,21 @@ export const Home: React.FC<HomeProps> = ({ onOpenImage }) => {
       listening={isRecording}
       understanding={isTranscribing}
       photos={{
-        running: isSyncing,
-        paused: isPaused && !isSyncing,
-        quick: !isDeepSync,
+        running: photosRunning,
+        paused: isPaused && !photosRunning,
+        // "Check again" from here looks at the newest photos only.
+        quick: progress.photos.quick && isSyncing && !isDeepSync,
         processed: syncCount,
-        checked: overview.photosChecked,
-        total: overview.photoTotal,
+        checked: progress.photos.done,
+        total: progress.photos.total ?? overview.photoTotal,
         lastChecked: lastSyncTime,
       }}
-      papers={{ running: isSyncingDocs, done: docSyncCount, total: totalDocs, lastChecked: lastDocSyncTime }}
+      papers={{
+        running: papersRunning,
+        done: papersRunning ? progress.papers.done : 0,
+        total: papersRunning ? progress.papers.total ?? 0 : 0,
+        lastChecked: lastDocSyncTime,
+      }}
       onCheck={onCheck}
       onPause={handlePauseSync}
       onResume={handleResumeSync}

@@ -36,7 +36,7 @@ beforeEach(() => {
 describe('toIndexingProgress', () => {
   it('counts photos ready out of every photo', () => {
     const p = toIndexingProgress(snap({ running: 'gallery-deep', queued: ['documents'] }), { photos: 120, papers: 3 }, 2400);
-    expect(p.photos).toEqual({ done: 120, total: 2400, running: true, queued: false });
+    expect(p.photos).toEqual({ done: 120, total: 2400, running: true, queued: false, quick: false });
     expect(p.papers).toEqual({ done: 3, total: null, running: false, queued: true });
   });
 
@@ -52,6 +52,12 @@ describe('toIndexingProgress', () => {
   it('shows this pass of PDFs while they are being read', () => {
     const p = toIndexingProgress(snap({ running: 'documents', docsProcessed: 4, docsTotal: 9 }), { photos: 0, papers: 30 }, 0);
     expect(p.papers).toEqual({ done: 4, total: 9, running: true, queued: false });
+  });
+
+  it('says when the running check only looks at the newest photos', () => {
+    expect(toIndexingProgress(snap({ running: 'gallery-quick' }), { photos: 0, papers: 0 }, 1).photos.quick).toBe(true);
+    expect(toIndexingProgress(snap({ running: 'gallery-quick-background' }), { photos: 0, papers: 0 }, 1).photos.quick).toBe(false);
+    expect(toIndexingProgress(snap({ running: 'gallery-deep' }), { photos: 0, papers: 0 }, 1).photos.quick).toBe(false);
   });
 
   it('counts quick and background gallery jobs as photo work', () => {

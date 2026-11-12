@@ -1,5 +1,4 @@
 import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
-import { ModelDownloadSheet } from '../components';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../navigation/types';
@@ -13,14 +12,20 @@ import {
     View,
     TextInput,
     Keyboard,
+    StyleSheet,
     Vibration,
     BackHandler,
 } from 'react-native';
 import { usePinpointerShared } from '../hooks/PinpointerContext';
+import { useIndexingProgress } from '../hooks/useIndexingProgress';
+import { usePhotoAccess } from '../hooks/useStorageAccess';
+import { Colors } from '../theme';
 import { Home } from './pinpointer/Home';
 import { SearchBar } from './pinpointer/SearchBar';
 import { SearchOverlay } from './pinpointer/SearchOverlay';
-import { styles } from './pinpointer/styles';
+
+/** How long the search screen takes to leave, before its words are cleared. */
+const CLOSE_CLEAR_MS = 300;
 
 /**
  * Main Pinpointer screen: universal search over indexed photos and documents.
@@ -40,14 +45,16 @@ export const PinpointerScreen: React.FC = () => {
         isSearching, setIsSearching, isSearchPending,
         isRecording, isTranscribing, isModelLoading,
         startListening, stopListening, cancelListening,
-        isSyncing, isPaused, syncCount, totalImages,
         handleDeepSync, handleDocumentSync,
         searchHistory, handleSelectHistory, handleDeleteHistory, handleClearHistory,
     } = usePinpointerShared();
 
     const route = useRoute<RouteProp<RootStackParamList, 'Pinpointer'>>();
 
-    const [showModelSheet, setShowModelSheet] = useState(false);
+    // What is being got ready right now, whoever started it (Home, the first
+    // run, the charging-time job). Counted again when photo access changes.
+    const { access: photoAccess } = usePhotoAccess();
+    const progress = useIndexingProgress(photoAccess);
     // The photos as they were when one was tapped, so a re-rank underneath
     // doesn't move the viewer to another photo.
     const [viewer, setViewer] = useState<{ items: ViewerItem[]; index: number; query: string } | null>(null);
@@ -62,32 +69,41 @@ export const PinpointerScreen: React.FC = () => {
         tabs.setOptions?.({ tabBarHidden: isSearching });
     }, [isSearching, navigation]);
 
+    // Closing search clears its words once it has slid away. Opening it again
+    // (a "Find quickly" tile, a recent search) before then keeps the new words.
+    const clearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const cancelClear = useCallback(() => {
+        if (clearTimer.current) {
+            clearTimeout(clearTimer.current);
+            clearTimer.current = null;
+        }
+    }, []);
     useEffect(() => {
-        const backAction = () => {
-            // First behavior: cancel search if search is active
-            if (isSearching) {
-                // Closing search also stops the mic, so it can't reopen search later.
-                if (isRecording || isTranscribing) cancelListening();
-                Keyboard.dismiss();
-                setIsSearching(false);
-                // Delay state clearing so the Animated.timing isn't dropped by
-                // native layout shifts caused by unmounting the Results List
-                setTimeout(() => {
-                    setSearchText('');
-                }, 300);
-                return true;
-            }
-            // Secondary behavior: go back to previous screen (exit)
-            return false;
-        };
+        if (isSearching) cancelClear();
+    }, [isSearching, cancelClear]);
+    useEffect(() => cancelClear, [cancelClear]);
 
-        const backHandler = BackHandler.addEventListener(
-            'hardwareBackPress',
-            backAction
-        );
+    const closeSearch = useCallback(() => {
+        // Closing search also stops the mic, so it can't reopen search later.
+        if (isRecording || isTranscribing) cancelListening();
+        Keyboard.dismiss();
+        setIsSearching(false);
+        cancelClear();
+        clearTimer.current = setTimeout(() => {
+            clearTimer.current = null;
+            setSearchText('');
+        }, CLOSE_CLEAR_MS);
+    }, [isRecording, isTranscribing, cancelListening, setIsSearching, setSearchText, cancelClear]);
 
+    // Android back closes search first; from Home it leaves the app.
+    useEffect(() => {
+        if (!isSearching) return;
+        const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
+            closeSearch();
+            return true;
+        });
         return () => backHandler.remove();
-    }, [isSearching, isRecording, isTranscribing, cancelListening, setIsSearching, setSearchText]);
+    }, [isSearching, closeSearch]);
 
     // Another screen can ask for a look through all photos (startUniversalSync)
     useEffect(() => {
@@ -98,17 +114,6 @@ export const PinpointerScreen: React.FC = () => {
             navigation.setParams({ startUniversalSync: false });
         }
     }, [route.params?.startUniversalSync, handleDeepSync, navigation]);
-
-    const handleBackPress = () => {
-        if (isRecording || isTranscribing) cancelListening();
-        Keyboard.dismiss();
-        setIsSearching(false);
-        // Delay state clearing so the Animated.timing isn't dropped by
-        // native layout shifts caused by unmounting the Results List
-        setTimeout(() => {
-            setSearchText('');
-        }, 300);
-    };
 
     const handleSearchFocus = () => {
         setIsSearching(true);
@@ -141,24 +146,16 @@ export const PinpointerScreen: React.FC = () => {
     }, [viewer, viewerAt]);
 
     const handleLookEverywhere = () => {
-        // 1. Close Search State
-        Keyboard.dismiss();
-        setIsSearching(false);
-
-        // Delay state clearing so the Animated.timing isn't dropped by
-        // native layout shifts caused by unmounting the Results List
-        setTimeout(() => {
-            setSearchText('');
-        }, 300);
-
-        // 2. Look through all photos and papers; Home shows the progress
+        closeSearch();
+        // Look through all photos and papers; Home shows the progress. Papers
+        // are checked without a pop-up: the person asked about photos.
         handleDeepSync();
-        handleDocumentSync();
+        handleDocumentSync(undefined, false, false);
     };
 
-    const renderSearchBar = (isTop: boolean) => (
+    const searchBar = (
         <SearchBar
-            isTop={isTop}
+            isTop
             searchText={searchText}
             onChangeText={setSearchText}
             onFocus={handleSearchFocus}
@@ -168,7 +165,7 @@ export const PinpointerScreen: React.FC = () => {
             isModelLoading={isModelLoading}
             onStartListening={startListening}
             onStopListening={stopListening}
-            active={isTop && isSearchPending}
+            active={isSearchPending}
             inputRef={searchInputRef}
         />
     );
@@ -183,7 +180,7 @@ export const PinpointerScreen: React.FC = () => {
                     importantForAccessibility={isSearching ? 'no-hide-descendants' : 'auto'}
                     accessibilityElementsHidden={isSearching}
                 >
-                    <Home onOpenImage={openImage} />
+                    <Home onOpenImage={openImage} progress={progress} />
                 </View>
 
                 {/* ────── SEARCHING MODE OVERLAY ────── */}
@@ -196,15 +193,17 @@ export const PinpointerScreen: React.FC = () => {
                     onSelectHistory={handleSelectHistory}
                     onDeleteHistory={handleDeleteHistory}
                     onClearHistory={handleClearHistory}
-                    onBack={handleBackPress}
+                    onBack={closeSearch}
                     onLookEverywhere={handleLookEverywhere}
                     onOpenPhoto={openPhotoResult}
                     isRecording={isRecording}
                     isTranscribing={isTranscribing}
                     onStopListening={stopListening}
                     onCancelListening={cancelListening}
-                    indexing={isSyncing && !isPaused ? { done: syncCount, total: totalImages || undefined } : null}
-                    searchBar={renderSearchBar(true)}
+                    indexing={progress.photos.running
+                        ? { done: progress.photos.done, total: progress.photos.total ?? undefined }
+                        : null}
+                    searchBar={searchBar}
                 />
             </View>
 
@@ -225,12 +224,11 @@ export const PinpointerScreen: React.FC = () => {
                 highlightTerms={viewerTerms}
                 testID="search-photo-viewer"
             />
-
-            {/* MODEL DOWNLOAD SHEET */}
-            <ModelDownloadSheet
-                visible={showModelSheet}
-                onClose={() => setShowModelSheet(false)}
-            />
         </View>
     );
 };
+
+const styles = StyleSheet.create({
+    container: { flex: 1, backgroundColor: Colors.canvas },
+    flex1: { flex: 1 },
+});

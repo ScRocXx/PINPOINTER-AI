@@ -48,10 +48,14 @@ jest.mock('../../utils/DocumentClassifier', () => ({
   classifyDocument: jest.fn(() => ({ emoji: '📄', category: 'OTHER', confidence: 1 })),
 }));
 
-// ModelDownloadSheet calls useModelService() unconditionally, which throws
-// outside a ModelServiceProvider — replace just that component.
-jest.mock('../../components/ModelDownloadSheet', () => ({
-  ModelDownloadSheet: () => null,
+// What the indexing queue is doing (its own tests cover the counting); here
+// it is a fixed value per test. Photo access only decides when to recount.
+jest.mock('../../hooks/useIndexingProgress', () => ({
+  useIndexingProgress: jest.fn(),
+}));
+
+jest.mock('../../hooks/useStorageAccess', () => ({
+  usePhotoAccess: () => ({ access: 'full' }),
 }));
 
 import React from 'react';
@@ -74,6 +78,8 @@ import { addRecentPhoto } from '../../utils/RecentPhotos';
 import { forgetIfGone } from '../../utils/MissingFiles';
 import { useHomeOverview } from '../../hooks/useHomeOverview';
 import type { HomeOverview } from '../../hooks/useHomeOverview';
+import { useIndexingProgress } from '../../hooks/useIndexingProgress';
+import type { IndexingProgress } from '../../hooks/useIndexingProgress';
 import { usePinnedItems } from '../../hooks/usePinnedItems';
 import type { PinnedItem } from '../../utils/PinnedItems';
 import type { DocumentRecord } from '../../database';
@@ -94,7 +100,6 @@ interface ScreenState {
   isPaused: boolean;
   isDeepSync: boolean;
   syncCount: number;
-  totalImages: number;
   lastSyncTime: number | null;
   isSyncingDocs: boolean;
   docSyncCount: number;
@@ -115,7 +120,6 @@ const baseState = (): ScreenState => ({
   isPaused: false,
   isDeepSync: false,
   syncCount: 0,
-  totalImages: 0,
   lastSyncTime: null,
   isSyncingDocs: false,
   docSyncCount: 0,
@@ -126,6 +130,7 @@ const baseState = (): ScreenState => ({
 let state: ScreenState;
 let actions: Record<string, jest.Mock>;
 let overview: HomeOverview;
+let progress: IndexingProgress;
 let pinned: PinnedItem[];
 let toggleStar: jest.Mock;
 
@@ -142,6 +147,10 @@ const baseOverview = (): HomeOverview => ({
   photoTotal: null,
   photosChecked: null,
   recent: [],
+});
+const idleProgress = (): IndexingProgress => ({
+  photos: { done: 0, total: null, running: false, queued: false, quick: false },
+  papers: { done: 0, total: null, running: false, queued: false },
 });
 let mockNav: { navigate: jest.Mock; setParams: jest.Mock };
 
@@ -185,7 +194,6 @@ const makeCtx = () => ({
   isPaused: state.isPaused,
   isDeepSync: state.isDeepSync,
   syncCount: state.syncCount,
-  totalImages: state.totalImages,
   lastSyncTime: state.lastSyncTime,
   isSyncingDocs: state.isSyncingDocs,
   docSyncCount: state.docSyncCount,
@@ -256,6 +264,8 @@ beforeEach(() => {
   pinned = [];
   toggleStar = jest.fn(async () => false);
   (useHomeOverview as jest.Mock).mockImplementation(() => overview);
+  progress = idleProgress();
+  (useIndexingProgress as jest.Mock).mockImplementation(() => progress);
   (usePinnedItems as jest.Mock).mockImplementation(() => ({ items: pinned, isPinned: () => false, toggle: toggleStar }));
   (useNavigation as jest.Mock).mockReturnValue(mockNav);
   (useRoute as jest.Mock).mockReturnValue({ params: {} });
@@ -330,6 +340,26 @@ describe('PinpointerScreen — Home', () => {
       () => expect(actions.setSearchText).toHaveBeenCalledWith(''),
       { timeout: 2000 },
     );
+  });
+});
+
+describe('PinpointerScreen — closing and reopening search', () => {
+  test('opening search again right after closing it keeps the new words', async () => {
+    state.isSearching = true;
+    state.searchText = 'old words';
+    overview.collections.id = tile(12, ['content://media/1']);
+    const view = await renderScreen();
+    await press(screen.getByRole('button', { name: 'Close search' }));
+    // Search is closing (its words clear in 300 ms)...
+    await view.rerender(<PinpointerScreen />);
+    // ...and a tile opens it again with its own words before that.
+    await press(screen.getByLabelText('ID cards, 12 found, Aadhaar, PAN, voter ID'));
+    await view.rerender(<PinpointerScreen />);
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 450));
+    });
+    expect(state.searchText).toBe('ID cards');
+    expect(actions.setSearchText).not.toHaveBeenCalledWith('');
   });
 });
 
@@ -528,7 +558,8 @@ describe('PinpointerScreen — empty results', () => {
     await press(screen.getByRole('button', { name: 'Look through all photos' }));
     expect(actions.setIsSearching).toHaveBeenCalledWith(false);
     expect(actions.handleDeepSync).toHaveBeenCalled();
-    expect(actions.handleDocumentSync).toHaveBeenCalled();
+    // Papers are checked too, without a pop-up asking for PDF access.
+    expect(actions.handleDocumentSync).toHaveBeenCalledWith(undefined, false, false);
     // Drain the 300ms delayed query-clear so it cannot leak into later tests.
     await waitFor(
       () => expect(actions.setSearchText).toHaveBeenCalledWith(''),
@@ -539,9 +570,7 @@ describe('PinpointerScreen — empty results', () => {
   test('says so when photos are still being read, instead of offering to look again', async () => {
     state.isSearching = true;
     state.searchText = 'zzz';
-    state.isSyncing = true;
-    state.syncCount = 10;
-    state.totalImages = 300;
+    progress.photos = { done: 10, total: 300, running: true, queued: false, quick: false };
     await renderScreen();
     expect(screen.getByText(/still getting your photos ready \(10 of 300\)/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Look through all photos' })).toBeNull();
@@ -563,13 +592,32 @@ describe('PinpointerScreen — getting ready (indexing)', () => {
     state.isSyncing = true;
     state.isDeepSync = true;
     state.syncCount = 10;
-    overview.photoTotal = 2400;
-    overview.photosChecked = 1240;
+    progress.photos = { done: 1240, total: 2400, running: true, queued: false, quick: false };
     await renderScreen();
     expect(screen.getByText('Getting your photos ready')).toBeTruthy();
     expect(screen.getByText('1,240 of 2,400 · you can search now')).toBeTruthy();
     await press(screen.getByText('Pause'));
     expect(actions.handlePauseSync).toHaveBeenCalled();
+  });
+
+  test('a check this screen did not start (the first run, while charging) shows too', async () => {
+    // The shared hooks know nothing about it: only the queue says it runs.
+    progress.photos = { done: 300, total: 2400, running: true, queued: false, quick: false };
+    await renderScreen();
+    expect(screen.getByText('Getting your photos ready')).toBeTruthy();
+    expect(screen.getByText('300 of 2,400 · you can search now')).toBeTruthy();
+    expect(screen.queryByText(/still to check/)).toBeNull();
+    await press(screen.getByText('Pause'));
+    expect(actions.handlePauseSync).toHaveBeenCalled();
+  });
+
+  test('"Check again" from here counts the newest photos it has looked at', async () => {
+    state.isSyncing = true;
+    state.isDeepSync = false;
+    state.syncCount = 12;
+    progress.photos = { done: 2000, total: 2400, running: true, queued: false, quick: true };
+    await renderScreen();
+    expect(screen.getByText('12 ready · you can search now')).toBeTruthy();
   });
 
   test('a paused check offers Resume', async () => {
@@ -580,9 +628,7 @@ describe('PinpointerScreen — getting ready (indexing)', () => {
   });
 
   test('papers getting ready shows their own card', async () => {
-    state.isSyncingDocs = true;
-    state.docSyncCount = 5;
-    state.totalDocs = 20;
+    progress.papers = { done: 5, total: 20, running: true, queued: false };
     await renderScreen();
     expect(screen.getByText('Getting your papers ready')).toBeTruthy();
     expect(screen.getByText('5 of 20')).toBeTruthy();
@@ -597,7 +643,8 @@ describe('PinpointerScreen — getting ready (indexing)', () => {
     expect(screen.queryByTestId('home-progress')).toBeNull();
     await press(screen.getByText('Check again'));
     expect(actions.handleQuickSync).toHaveBeenCalled();
-    expect(actions.handleDocumentSync).toHaveBeenCalledWith(50);
+    // The newest 50 papers, and never a pop-up about PDF access.
+    expect(actions.handleDocumentSync).toHaveBeenCalledWith(50, false, false);
     expect(actions.handleDeepSync).not.toHaveBeenCalled();
   });
 
@@ -610,13 +657,20 @@ describe('PinpointerScreen — getting ready (indexing)', () => {
 
   test('photos still to check: Check now looks through all of them', async () => {
     state.lastSyncTime = Date.now() - 60 * 1000;
-    overview.photoTotal = 2400;
-    overview.photosChecked = 1240;
+    progress.photos = { done: 1240, total: 2400, running: false, queued: false, quick: false };
     await renderScreen();
     expect(screen.getByText('1,160 photos still to check')).toBeTruthy();
     await press(screen.getByText('Check now'));
     expect(actions.handleDeepSync).toHaveBeenCalled();
-    expect(actions.handleDocumentSync).toHaveBeenCalledWith(50);
+    expect(actions.handleDocumentSync).toHaveBeenCalledWith(50, false, false);
+  });
+
+  test('before the phone has counted its photos, Home falls back to the album total', async () => {
+    state.lastSyncTime = Date.now() - 60 * 1000;
+    overview.photoTotal = 500;
+    progress.photos = { done: 200, total: null, running: false, queued: false, quick: false };
+    await renderScreen();
+    expect(screen.getByText('300 photos still to check')).toBeTruthy();
   });
 });
 

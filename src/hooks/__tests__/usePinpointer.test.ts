@@ -82,7 +82,6 @@ describe('usePinpointer — composition wiring', () => {
             isPaused: false,
             isDeepSync: false,
             syncCount: 42,
-            totalImages: 100,
             lastSyncTime: 123456,
             handleQuickSync: jest.fn(),
             handleDeepSync: jest.fn(),
@@ -144,7 +143,6 @@ describe('usePinpointer — composition wiring', () => {
         expect(result.current.isPaused).toBe(false);
         expect(result.current.isDeepSync).toBe(false);
         expect(result.current.syncCount).toBe(42);
-        expect(result.current.totalImages).toBe(100);
         expect(result.current.lastSyncTime).toBe(123456);
         expect(result.current.handleQuickSync).toBe(galleryState.handleQuickSync);
         expect(result.current.handleDeepSync).toBe(galleryState.handleDeepSync);

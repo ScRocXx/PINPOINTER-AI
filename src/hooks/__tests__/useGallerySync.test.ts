@@ -10,7 +10,7 @@
  * are overridden per-test via defineProperty and restored afterwards.
  */
 import { renderHook, act } from '@testing-library/react-native';
-import { Alert, Platform, PermissionsAndroid } from 'react-native';
+import { AccessibilityInfo, Alert, Platform, PermissionsAndroid } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { useGallerySync } from '../useGallerySync';
@@ -23,6 +23,7 @@ import {
 import { getIndexedCount } from '../../database';
 import { IndexingService } from '../../services/IndexingService';
 import { AppLogger } from '../../utils/AppLogger';
+import { setCurrentLanguage } from '../../i18n/current';
 
 jest.mock('../../utils/GallerySync', () => ({
   performFullGallerySync: jest.fn(),
@@ -66,6 +67,8 @@ const mockedError = AppLogger.error as jest.Mock;
 type CancelRef = { current: boolean };
 
 describe('useGallerySync', () => {
+  let said: jest.SpyInstance;
+
   beforeEach(() => {
     jest.clearAllMocks();
     IndexingService.reset();
@@ -81,6 +84,9 @@ describe('useGallerySync', () => {
     jest
       .spyOn(Alert, 'alert')
       .mockImplementation(() => {});
+    // Without a ToastProvider a toast is only read aloud: that is the note
+    // the person gets when a check ends.
+    said = jest.spyOn(AccessibilityInfo, 'announceForAccessibility').mockImplementation(() => {});
     jest
       .spyOn(PermissionsAndroid, 'request')
       .mockResolvedValue(PermissionsAndroid.RESULTS.GRANTED);
@@ -111,7 +117,6 @@ describe('useGallerySync', () => {
       expect(result.current.isPaused).toBe(false);
       expect(result.current.isDeepSync).toBe(false);
       expect(result.current.syncCount).toBe(0);
-      expect(result.current.totalImages).toBe(0);
       expect(result.current.lastSyncTime).toBeNull();
     });
 
@@ -190,11 +195,8 @@ describe('useGallerySync', () => {
       });
       // DB count was applied before storage failed
       expect(result.current.syncCount).toBe(10);
-      expect(mockedWarn).toHaveBeenCalledWith(
-        'GallerySync',
-        'Failed to load persisted state',
-        boom,
-      );
+      expect(mockedWarn).toHaveBeenCalledWith('LastChecked', 'Could not read the time', boom);
+      expect(result.current.lastSyncTime).toBeNull();
     });
 
     it('parses the stored timestamp string into a number', async () => {
@@ -386,7 +388,7 @@ describe('useGallerySync', () => {
   });
 
   describe('handleQuickSync — failure path', () => {
-    it('logs, resets syncing, and shows the Sync Error alert', async () => {
+    it('logs, resets syncing, and says so in plain words', async () => {
       const boom = new Error('camera roll exploded');
       quickSync.mockRejectedValue(boom);
       const { result } = await renderHook(() => useGallerySync());
@@ -399,11 +401,38 @@ describe('useGallerySync', () => {
         boom,
       );
       expect(result.current.isSyncing).toBe(false);
-      expect(Alert.alert).toHaveBeenCalledWith(
-        'Sync Error',
-        'Quick sync failed. Please try again.',
-      );
+      // A short note in plain words, not a pop-up.
+      expect(said).toHaveBeenCalledWith('Could not check for new photos. Please try again.');
+      expect(Alert.alert).not.toHaveBeenCalled();
       expect(result.current.lastSyncTime).toBeNull();
+    });
+  });
+
+  describe('checks started somewhere else', () => {
+    it('follows the time of a check the first run or the charging-time job finished', async () => {
+      const { result } = await renderHook(() => useGallerySync());
+      expect(result.current.lastSyncTime).toBeNull();
+      await act(async () => {
+        // Straight through the service, as FirstRun's Ready step does.
+        await IndexingService.deepGallerySync();
+        await flush();
+      });
+      expect(result.current.lastSyncTime).toEqual(expect.any(Number));
+      expect(await AsyncStorage.getItem('gallery_last_sync_time')).not.toBeNull();
+    });
+
+    it('speaks Hindi when the app is in Hindi', async () => {
+      setCurrentLanguage('hi');
+      try {
+        const { result } = await renderHook(() => useGallerySync());
+        await act(async () => {
+          result.current.handleDeepSync();
+          await flush();
+        });
+        expect(said).toHaveBeenCalledWith('आपकी फ़ोटो खोजने के लिए तैयार हैं');
+      } finally {
+        setCurrentLanguage('en');
+      }
     });
   });
 
@@ -461,7 +490,7 @@ describe('useGallerySync', () => {
       });
     });
 
-    it('on success shows the Gallery Indexed alert and persists the sync time', async () => {
+    it('on success says the photos are ready and the sync time is saved', async () => {
       const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(1700000000001);
       fullSync.mockResolvedValue({ processed: 42, wasCancelled: false });
       const { result } = await renderHook(() => useGallerySync());
@@ -476,10 +505,8 @@ describe('useGallerySync', () => {
       expect(await AsyncStorage.getItem('gallery_last_sync_time')).toBe(
         '1700000000001',
       );
-      expect(Alert.alert).toHaveBeenCalledWith(
-        'Gallery Indexed',
-        'Done! 42 photos indexed for AI search.',
-      );
+      expect(said).toHaveBeenCalledWith('Your photos are ready to search');
+      expect(Alert.alert).not.toHaveBeenCalled();
       nowSpy.mockRestore();
     });
 
@@ -506,13 +533,10 @@ describe('useGallerySync', () => {
       expect(result.current.isPaused).toBe(true);
       expect(result.current.lastSyncTime).toBeNull();
       expect(await AsyncStorage.getItem('gallery_last_sync_time')).toBeNull();
-      expect(Alert.alert).not.toHaveBeenCalledWith(
-        'Gallery Indexed',
-        expect.anything(),
-      );
+      expect(said).not.toHaveBeenCalled();
     });
 
-    it('on error logs, marks paused, and shows the Sync Paused alert', async () => {
+    it('on error logs, marks paused, and says how to carry on', async () => {
       const boom = new Error('deep sync blew up');
       fullSync.mockRejectedValue(boom);
       const { result } = await renderHook(() => useGallerySync());
@@ -528,10 +552,8 @@ describe('useGallerySync', () => {
       expect(result.current.isSyncing).toBe(false);
       // errors are treated as pause — the cursor was saved
       expect(result.current.isPaused).toBe(true);
-      expect(Alert.alert).toHaveBeenCalledWith(
-        'Sync Paused',
-        'Progress saved. Tap Resume to continue.',
-      );
+      expect(said).toHaveBeenCalledWith('Stopped for now. Tap “Resume” to carry on.');
+      expect(Alert.alert).not.toHaveBeenCalled();
     });
 
     it('does nothing when permission is denied', async () => {
@@ -698,7 +720,7 @@ describe('useGallerySync', () => {
         await flush();
       });
       expect(result.current.isSyncing).toBe(false);
-      expect(Alert.alert).not.toHaveBeenCalledWith('Sync Error', expect.anything());
+      expect(said).not.toHaveBeenCalledWith('Could not check for new photos. Please try again.');
       // the service runs the backfill as a queued job, so the throw arrives as a rejection
       expect(mockedWarn).toHaveBeenCalledWith('GallerySync', 'Backfill failed', expect.any(Error));
     });
