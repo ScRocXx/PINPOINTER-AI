@@ -16,7 +16,12 @@ import {
   pickPdfFiles,
   pickPdfFolder,
 } from '../../utils/PdfImport';
-import { hasDocumentAccess, openAllFilesAccessAndWait } from '../../utils/StoragePermissions';
+import {
+  allFilesAccessApplies,
+  ensureDocumentAccess,
+  hasDocumentAccess,
+  openAllFilesAccessAndWait,
+} from '../../utils/StoragePermissions';
 import { translate } from '../../i18n/strings';
 
 jest.mock('../PinpointerContext', () => ({ usePinpointerShared: jest.fn() }));
@@ -31,6 +36,8 @@ jest.mock('../../utils/PdfImport', () => ({
 jest.mock('../../utils/StoragePermissions', () => ({
   hasDocumentAccess: jest.fn(),
   openAllFilesAccessAndWait: jest.fn(),
+  allFilesAccessApplies: jest.fn(() => true),
+  ensureDocumentAccess: jest.fn(),
 }));
 
 const sync = jest.fn(async () => {});
@@ -157,6 +164,22 @@ describe('usePdfPlaces', () => {
     });
     expect(sync).toHaveBeenCalledWith();
     expect(result.current.standard).toBe(true);
+  });
+
+  it('on Android 10 and older asks for file access, since there is no All files switch to wait for', async () => {
+    (allFilesAccessApplies as jest.Mock).mockReturnValue(false);
+    (ensureDocumentAccess as jest.Mock).mockResolvedValue(true);
+    (hasDocumentAccess as jest.Mock).mockResolvedValue(false);
+    const { result } = await renderHook(() => usePdfPlaces());
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    (hasDocumentAccess as jest.Mock).mockResolvedValue(true);
+    await act(async () => {
+      expect(await result.current.allowStandard()).toBe(true);
+    });
+    expect(openAllFilesAccessAndWait).not.toHaveBeenCalled();
+    expect(ensureDocumentAccess).toHaveBeenCalledTimes(1);
+    expect(sync).toHaveBeenCalledWith();
+    (allFilesAccessApplies as jest.Mock).mockReturnValue(true);
   });
 });
 

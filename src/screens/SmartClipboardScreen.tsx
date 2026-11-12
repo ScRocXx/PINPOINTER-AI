@@ -116,16 +116,21 @@ export const SmartClipboardScreen: React.FC = () => {
     return () => clearTimeout(timer);
   }, [navigation, read, scanUri]);
 
+  // The picker reports "no camera" or "not allowed" as a result, not an
+  // error: say so, instead of a button that seems to do nothing.
   const takePhoto = async () => {
     try {
       const result = await launchCamera({ ...PICKER, saveToPhotos: false });
       const uri = result.assets?.[0]?.uri;
       if (uri) {
         read(uri);
+      } else if (result.errorCode) {
+        AppLogger.warn('Scan', `Camera did not open: ${result.errorCode}`, result.errorMessage);
+        toast.show(t('scan.cameraFailed'), { icon: 'alert', duration: 5000 });
       }
     } catch (e) {
       AppLogger.error('Scan', 'Camera failed', e);
-      toast.show(t('scan.errorTitle'), { icon: 'alert' });
+      toast.show(t('scan.cameraFailed'), { icon: 'alert', duration: 5000 });
     }
   };
 
@@ -135,10 +140,13 @@ export const SmartClipboardScreen: React.FC = () => {
       const uri = result.assets?.[0]?.uri;
       if (uri) {
         read(uri);
+      } else if (result.errorCode) {
+        AppLogger.warn('Scan', `Photos did not open: ${result.errorCode}`, result.errorMessage);
+        toast.show(t('scan.pickFailed'), { icon: 'alert', duration: 5000 });
       }
     } catch (e) {
       AppLogger.error('Scan', 'Gallery picker failed', e);
-      toast.show(t('scan.errorTitle'), { icon: 'alert' });
+      toast.show(t('scan.pickFailed'), { icon: 'alert', duration: 5000 });
     }
   };
 

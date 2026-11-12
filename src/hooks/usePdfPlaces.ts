@@ -12,7 +12,12 @@ import {
   pickPdfFiles,
   pickPdfFolder,
 } from '../utils/PdfImport';
-import { hasDocumentAccess, openAllFilesAccessAndWait } from '../utils/StoragePermissions';
+import {
+  allFilesAccessApplies,
+  ensureDocumentAccess,
+  hasDocumentAccess,
+  openAllFilesAccessAndWait,
+} from '../utils/StoragePermissions';
 import { AppLogger } from '../utils/AppLogger';
 
 /** Where Pinpointer looks for PDFs, as the Papers screens show it. */
@@ -116,9 +121,13 @@ export const usePdfPlaces = () => {
     [refresh, t, toast],
   );
 
-  /** Opens the All files access switch; looks for papers if it was turned on. */
+  /**
+   * Opens the All files access switch (Android 11+), or asks for file access
+   * on older phones, where that switch doesn't exist and waiting for it
+   * would leave the button stuck. Looks for papers if access was given.
+   */
   const allowStandard = useCallback(async (): Promise<boolean> => {
-    const granted = await openAllFilesAccessAndWait();
+    const granted = allFilesAccessApplies() ? await openAllFilesAccessAndWait() : await ensureDocumentAccess();
     await refresh();
     if (granted) {
       Promise.resolve(handleDocumentSync()).catch(e => AppLogger.warn('PdfPlaces', 'Document check failed', e));
