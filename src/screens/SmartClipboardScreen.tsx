@@ -192,7 +192,7 @@ export const SmartClipboardScreen: React.FC = () => {
   const words = countWords(text);
 
   return (
-    <Screen padBottom testID="scan-screen">
+    <Screen wash padBottom testID="scan-screen">
       <View style={styles.header}>
         <IconButton icon="close" label={t('common.close')} onPress={close} style={styles.close} testID="scan-close" />
         <AppText variant="heading" accessibilityRole="header" align="center" numberOfLines={2} style={styles.flex}>

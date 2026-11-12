@@ -437,7 +437,7 @@ export const GalleryScreen: React.FC = () => {
 
   if (access === 'denied' || access === 'blocked') {
     return (
-      <Screen testID="gallery-screen">
+      <Screen wash testID="gallery-screen">
         <ScreenHeader title={t('gallery.title')} />
         <EmptyState
           icon="photos"
@@ -485,7 +485,7 @@ export const GalleryScreen: React.FC = () => {
   );
 
   return (
-    <Screen testID="gallery-screen">
+    <Screen wash testID="gallery-screen">
       <SectionList
         sections={sections}
         keyExtractor={row => row.map(p => p.uri).join('|')}

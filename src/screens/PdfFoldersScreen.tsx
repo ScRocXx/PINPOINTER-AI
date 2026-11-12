@@ -62,7 +62,7 @@ export const PdfFoldersScreen: React.FC = () => {
   );
 
   return (
-    <Screen testID="folders-screen">
+    <Screen wash testID="folders-screen">
       <ScrollView contentContainerStyle={styles.content}>
         <ScreenHeader
           title={t('papers.whereLooks')}

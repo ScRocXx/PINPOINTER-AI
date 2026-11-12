@@ -183,27 +183,33 @@ const HomeStatusArea: React.FC<
       ].filter((l): l is string => !!l);
       return (
         <View style={styles.checked} testID="home-checked">
-          <Icon
-            name={photos.lastChecked ? 'check' : 'clock'}
-            size={22}
-            color={photos.lastChecked ? Colors.success : Colors.textSecondary}
-            strokeWidth={2.25}
-          />
-          <View style={styles.flex}>
-            {lines.map(line => (
-              <AppText key={line} variant="small" color="textSecondary">
-                {line}
-              </AppText>
-            ))}
+          <View style={styles.checkedTop}>
+            <View style={[styles.checkedBadge, photos.lastChecked ? styles.checkedBadgeDone : null]}>
+              <Icon
+                name={photos.lastChecked ? 'check' : 'clock'}
+                size={22}
+                color={photos.lastChecked ? Colors.success : Colors.textSecondary}
+                strokeWidth={2.25}
+              />
+            </View>
+            <View style={styles.flex}>
+              {lines.map(line => (
+                <AppText key={line} variant="small" color="textSecondary">
+                  {line}
+                </AppText>
+              ))}
+            </View>
           </View>
-          <Button
-            label={photos.lastChecked ? t('progress.checkAgain') : t('home.checkNow')}
-            onPress={() => onCheck(false)}
-            variant="ghost"
-            size="compact"
-            icon="refresh"
-            testID="home-check"
-          />
+          <View style={styles.checkedAction}>
+            <Button
+              label={photos.lastChecked ? t('progress.checkAgain') : t('home.checkNow')}
+              onPress={() => onCheck(false)}
+              variant="ghost"
+              size="compact"
+              icon="refresh"
+              testID="home-check"
+            />
+          </View>
         </View>
       );
     }
@@ -366,12 +372,27 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.surface,
   },
   hello: { paddingHorizontal: GUTTER, gap: Space.xxs },
+  // A small card: when things were checked, then the button on its own line,
+  // so the words never squeeze into a narrow column beside it.
   checked: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Space.md,
-    paddingLeft: Space.xs,
+    gap: Space.xs,
+    padding: Space.md,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.line,
+    backgroundColor: Colors.surface,
   },
+  checkedAction: { alignSelf: 'flex-end' },
+  checkedTop: { flexDirection: 'row', alignItems: 'center', gap: Space.md, alignSelf: 'stretch' },
+  checkedBadge: {
+    width: 40,
+    height: 40,
+    borderRadius: Radius.pill,
+    backgroundColor: Colors.sunken,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkedBadgeDone: { backgroundColor: Colors.successSoft },
   section: { gap: 0 },
   sectionTitle: { paddingHorizontal: GUTTER, marginBottom: Space.md },
   grid: { paddingHorizontal: GUTTER, gap: Space.md },

@@ -142,4 +142,25 @@ describe('Screen', () => {
     expect(screen.getByTestId('s')).toHaveStyle({ backgroundColor: '#0E0C14' });
     expect(screen.getByText('viewer')).toBeTruthy();
   });
+
+  it('draws the soft wash only when asked, and never on the night stage', async () => {
+    await render(
+      <Screen wash testID="lit">
+        <Text>photos</Text>
+      </Screen>,
+    );
+    expect(screen.getByTestId('lit-wash')).toBeTruthy();
+    await render(
+      <Screen testID="plain">
+        <Text>plain</Text>
+      </Screen>,
+    );
+    expect(screen.queryByTestId('plain-wash')).toBeNull();
+    await render(
+      <Screen wash tone="night" testID="dark">
+        <Text>viewer</Text>
+      </Screen>,
+    );
+    expect(screen.queryByTestId('dark-wash')).toBeNull();
+  });
 });
