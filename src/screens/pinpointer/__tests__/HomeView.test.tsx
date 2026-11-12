@@ -210,6 +210,14 @@ describe('HomeView', () => {
     expect(screen.getByLabelText('Stop listening')).toBeTruthy();
   });
 
+  test('while voice search loads on its first use, the bar says so and the mic waits', async () => {
+    const p = props({ preparing: true });
+    await renderHome(p);
+    expect(screen.getByLabelText('Getting voice search ready…')).toBeTruthy();
+    await fireEvent.press(screen.getByLabelText('Search by voice'));
+    expect(p.onVoicePress).not.toHaveBeenCalled();
+  });
+
   test('reads in Hindi', async () => {
     await renderHome(props(), 'hi');
     expect(screen.getByText('आप क्या ढूँढ रहे हैं?')).toBeTruthy();

@@ -40,13 +40,16 @@ jest.mock('../../utils/AppLogger', () => ({
     },
 }));
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AppLogger } from '../../utils/AppLogger';
+import { VOICE_USED_KEY, __resetSpeechModel, ensureSpeechModel } from '../../services/SpeechModel';
 import { useVoiceRecording } from '../useVoiceRecording';
 
 const { SherpaOnnxModule } = NativeModules;
 const startRecognition = SherpaOnnxModule.startRecognition as jest.Mock;
 const stopRecognition = SherpaOnnxModule.stopRecognition as jest.Mock;
 const cancelRecognition = SherpaOnnxModule.cancelRecognition as jest.Mock;
+const initSTT = SherpaOnnxModule.initSTT as jest.Mock;
 const logError = AppLogger.error as jest.Mock;
 
 // ---------------------------------------------------------------------------
@@ -95,6 +98,8 @@ beforeEach(() => {
     }
     removals.length = 0;
     jest.clearAllMocks();
+    __resetSpeechModel();
+    (AsyncStorage as unknown as { __reset: () => void }).__reset();
     jest.useFakeTimers();
     addListenerSpy = jest
         .spyOn(NativeEventEmitter.prototype, 'addListener')
@@ -497,6 +502,96 @@ describe('useVoiceRecording — startListening', () => {
             startRecognition.mock.invocationCallOrder[0],
         );
         expect(vibrateSpy).toHaveBeenCalledWith(40);
+    });
+
+    test('the first tap loads the speech model, then starts recording', async () => {
+        setOS('android');
+        mockPermission(PermissionsAndroid.RESULTS.GRANTED);
+        mockVibrate();
+        let finishLoading!: (v: boolean) => void;
+        initSTT.mockReturnValueOnce(new Promise<boolean>((resolve) => { finishLoading = resolve; }));
+        const { result } = await renderHook(() => useVoiceRecording(jest.fn()));
+        expect(initSTT).not.toHaveBeenCalled(); // nothing is loaded before the mic is used
+
+        let started!: Promise<void>;
+        await act(async () => {
+            started = result.current.startListening();
+            await Promise.resolve();
+        });
+        await act(async () => { await Promise.resolve(); });
+        expect(result.current.isModelLoading).toBe(true);
+        expect(startRecognition).not.toHaveBeenCalled();
+
+        await act(async () => {
+            finishLoading(true);
+            await started;
+        });
+        expect(result.current.isModelLoading).toBe(false);
+        expect(initSTT).toHaveBeenCalledTimes(1);
+        expect(startRecognition).toHaveBeenCalledTimes(1);
+        expect(initSTT.mock.invocationCallOrder[0]).toBeLessThan(startRecognition.mock.invocationCallOrder[0]);
+    });
+
+    test('a loaded model is not loaded again', async () => {
+        setOS('android');
+        mockPermission(PermissionsAndroid.RESULTS.GRANTED);
+        mockVibrate();
+        await ensureSpeechModel();
+        initSTT.mockClear();
+        const { result } = await renderHook(() => useVoiceRecording(jest.fn()));
+
+        await act(async () => {
+            await result.current.startListening();
+        });
+
+        expect(initSTT).not.toHaveBeenCalled();
+        expect(result.current.isModelLoading).toBe(false);
+        expect(startRecognition).toHaveBeenCalledTimes(1);
+    });
+
+    test('remembers that voice search was used, for the next app start', async () => {
+        setOS('android');
+        mockPermission(PermissionsAndroid.RESULTS.GRANTED);
+        mockVibrate();
+        const { result } = await renderHook(() => useVoiceRecording(jest.fn()));
+        expect(await AsyncStorage.getItem(VOICE_USED_KEY)).toBeNull();
+
+        await act(async () => {
+            await result.current.startListening();
+        });
+
+        expect(await AsyncStorage.getItem(VOICE_USED_KEY)).toBe('1');
+    });
+
+    test('a model that cannot be loaded: says so and never starts recording', async () => {
+        setOS('android');
+        mockPermission(PermissionsAndroid.RESULTS.GRANTED);
+        mockVibrate();
+        const alertSpy = mockAlert();
+        initSTT.mockRejectedValueOnce(new Error('out of memory'));
+        const { result } = await renderHook(() => useVoiceRecording(jest.fn()));
+
+        await act(async () => {
+            await result.current.startListening();
+        });
+
+        expect(startRecognition).not.toHaveBeenCalled();
+        expect(result.current.isModelLoading).toBe(false);
+        expect(alertSpy).toHaveBeenCalledWith('Voice Error', expect.any(String));
+        expect(await AsyncStorage.getItem(VOICE_USED_KEY)).toBeNull();
+    });
+
+    test('a denied microphone does not load the model', async () => {
+        setOS('android');
+        mockPermission(PermissionsAndroid.RESULTS.DENIED);
+        mockAlert();
+        const { result } = await renderHook(() => useVoiceRecording(jest.fn()));
+
+        await act(async () => {
+            await result.current.startListening();
+        });
+
+        expect(initSTT).not.toHaveBeenCalled();
     });
 
     test('android + denied permission: alerts and never starts recognition', async () => {

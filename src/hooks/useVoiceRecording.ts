@@ -9,6 +9,7 @@ import {
 } from 'react-native';
 import { AppLogger } from '../utils/AppLogger';
 import { createSilenceDetector, subscribeMicLevel } from '../utils/MicLevel';
+import { ensureSpeechModel, getSpeechModelState, noteVoiceSearchUsed } from '../services/SpeechModel';
 
 const { SherpaOnnxModule } = NativeModules;
 const sherpaEmitter = new NativeEventEmitter(SherpaOnnxModule);
@@ -16,6 +17,9 @@ const sherpaEmitter = new NativeEventEmitter(SherpaOnnxModule);
 /**
  * useVoiceRecording — handles mic recording and STT via sherpa-onnx (on-device Whisper).
  * 100% offline. No internet needed. No Google dependency.
+ *
+ * The speech model is loaded on the first tap on the mic (`isModelLoading`
+ * is true meanwhile); see services/SpeechModel.ts.
  *
  * Listening ends by itself after the person stops speaking (or cancels when
  * nothing was said), so a tap on stop is optional. The live mic level is not
@@ -28,7 +32,8 @@ const sherpaEmitter = new NativeEventEmitter(SherpaOnnxModule);
 export const useVoiceRecording = (onTranscription: (text: string) => void) => {
     const [isRecording, setIsRecording] = useState(false);
     const [isTranscribing, setIsTranscribing] = useState(false);
-    const [isModelLoading] = useState(false);
+    // True while the speech model loads, on the first use of the mic.
+    const [isModelLoading, setIsModelLoading] = useState(false);
 
     // Set while we cancel on purpose: the "end" event that follows must not
     // show "Understanding…", because no words will come.
@@ -149,7 +154,20 @@ export const useVoiceRecording = (onTranscription: (text: string) => void) => {
                 }
             }
 
+            // The speech model is loaded on first use, not at app start.
+            if (getSpeechModelState() !== 'ready') {
+                setIsModelLoading(true);
+                let ready = false;
+                try {
+                    ready = await ensureSpeechModel();
+                } finally {
+                    setIsModelLoading(false);
+                }
+                if (!ready) throw new Error('The speech model could not be loaded');
+            }
+
             await SherpaOnnxModule.startRecognition();
+            noteVoiceSearchUsed();
         } catch (error) {
             AppLogger.error('VoiceRecording', 'Start failed', error);
             Vibration.vibrate([0, 30, 50, 30]);

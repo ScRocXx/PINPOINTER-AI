@@ -52,6 +52,8 @@ export interface HomeViewProps {
   listening: boolean;
   /** Speech is being turned into words. */
   understanding: boolean;
+  /** Voice search is loading, on its first use. */
+  preparing?: boolean;
 
   photos: PhotoIndexing;
   papers: PaperIndexing;
@@ -221,6 +223,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
   onVoicePress,
   listening,
   understanding,
+  preparing = false,
   photos,
   papers,
   onCheck,
@@ -240,7 +243,9 @@ export const HomeView: React.FC<HomeViewProps> = ({
     ? t('search.listening')
     : understanding
       ? t('search.understanding')
-      : t('home.searchHint');
+      : preparing
+        ? t('search.voiceGettingReady')
+        : t('home.searchHint');
 
   const rows: CollectionId[][] = [];
   for (let i = 0; i < TILE_ORDER.length; i += 2) rows.push(TILE_ORDER.slice(i, i + 2));
@@ -289,9 +294,9 @@ export const HomeView: React.FC<HomeViewProps> = ({
           <SearchField
             placeholder={placeholder}
             onPressFake={onOpenSearch}
-            onVoicePress={understanding ? () => {} : onVoicePress}
+            onVoicePress={understanding || preparing ? () => {} : onVoicePress}
             listening={listening}
-            active={listening || understanding}
+            active={listening || understanding || preparing}
             testID="home-search"
           />
         </Reveal>

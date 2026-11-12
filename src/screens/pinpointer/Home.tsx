@@ -104,6 +104,7 @@ export const Home: React.FC<HomeProps> = ({ onOpenImage }) => {
       onVoicePress={isModelLoading ? noop : isRecording ? stopListening : startListening}
       listening={isRecording}
       understanding={isTranscribing}
+      preparing={isModelLoading}
       photos={{
         running: isSyncing,
         paused: isPaused && !isSyncing,

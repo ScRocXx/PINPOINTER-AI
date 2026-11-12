@@ -15,14 +15,14 @@ export type { SettingsViewProps } from './SettingsView';
 export const SettingsScreen: React.FC = () => {
   const photos = usePhotoAccess();
   const docs = useDocumentAccess();
-  const { isSTTLoaded, isSTTLoading } = useModelService();
+  const { voice } = useModelService();
   const [helpersOpen, setHelpersOpen] = useState(false);
 
   return (
     <SettingsView
       photoAccess={photos.access}
       docAccess={docs.access}
-      voice={isSTTLoaded ? 'ready' : isSTTLoading ? 'loading' : 'off'}
+      voice={voice}
       // All photos: only Settings can change it. Otherwise Android's own
       // dialog, unless Android won't show it any more.
       onChangePhotos={() =>

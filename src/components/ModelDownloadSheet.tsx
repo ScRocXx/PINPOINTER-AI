@@ -14,7 +14,7 @@ interface Props {
 /**
  * Voice and photo search, in plain words: whether each on-phone helper
  * works right now, and the one fix when it doesn't. Whisper (voice) ships
- * inside the app and only needs loading; the CLIP models ("search by what's
+ * inside the app and is loaded at the first tap on the mic; the CLIP models ("search by what's
  * in a photo") are in some builds only, and word search works without them.
  * Opened from Settings.
  *
@@ -22,7 +22,7 @@ interface Props {
  * @param onClose Called when the sheet is dismissed.
  */
 export const ModelDownloadSheet: React.FC<Props> = ({ visible, onClose }) => {
-  const { isSTTLoading, isSTTLoaded, downloadAndLoadSTT } = useModelService();
+  const { voice, downloadAndLoadSTT } = useModelService();
   const [clip, setClip] = useState<boolean | null>(null);
 
   useEffect(() => {
@@ -45,7 +45,7 @@ export const ModelDownloadSheet: React.FC<Props> = ({ visible, onClose }) => {
   return (
     <ModelSheetView
       visible={visible}
-      voice={isSTTLoaded ? 'ready' : isSTTLoading ? 'loading' : 'off'}
+      voice={voice}
       photo={clip === null ? 'checking' : clip ? 'ready' : 'missing'}
       onPrepare={downloadAndLoadSTT}
       onClose={onClose}

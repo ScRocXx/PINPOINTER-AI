@@ -4,7 +4,15 @@ import { ModelDownloadSheet, ModelSheetView } from '../ModelDownloadSheet';
 import { LanguageProvider, en, hi } from '../../i18n';
 import { areClipModelsAvailable } from '../../services/EmbeddingService';
 
-const mockModels = { isSTTLoaded: false, isSTTLoading: false, downloadAndLoadSTT: jest.fn(async () => {}) };
+// `voice` is what the screens read; the two flags describe the model behind it.
+const mockModels = {
+  isSTTLoaded: false,
+  isSTTLoading: false,
+  downloadAndLoadSTT: jest.fn(async () => {}),
+  get voice(): 'ready' | 'loading' | 'off' {
+    return this.isSTTLoaded ? 'ready' : this.isSTTLoading ? 'loading' : 'off';
+  },
+};
 jest.mock('../../services/ModelService', () => ({ useModelService: () => mockModels }));
 jest.mock('../../services/EmbeddingService', () => ({ areClipModelsAvailable: jest.fn(async () => true) }));
 
