@@ -40,7 +40,7 @@ export const PhotoAccessBannerView: React.FC<PhotoAccessBannerViewProps> = ({
               {settingsNext ? t('perm.limitedSettingsBody') : t('perm.limitedBody')}
             </AppText>
           </View>
-          <IconButton icon="close" label={t('perm.keepChoice')} onPress={onKeep} size={44} testID={`${testID}-keep`} />
+          <IconButton icon="close" label={t('perm.keepChoice')} onPress={onKeep} size={48} testID={`${testID}-keep`} />
         </View>
         <Button
           label={settingsNext ? t('perm.openSettings') : t('perm.allowAll')}

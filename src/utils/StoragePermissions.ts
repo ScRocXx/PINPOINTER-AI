@@ -198,6 +198,18 @@ export const keepLimitedAccess = async (): Promise<void> => {
 export const allFilesAccessApplies = (): boolean => Platform.OS === 'android' && apiLevel() >= ANDROID_11;
 
 /**
+ * What this phone's Settings call the photo permission and its "yes":
+ * "Photos and videos" → "Allow all" on Android 14+, "Allow" on 13, and
+ * "Files and media" (or "Storage") → "Allow" on older phones.
+ */
+export const photoSettingsWording = (): { list: 'photos' | 'files'; choice: 'allowAll' | 'allow' } => {
+  if (Platform.OS !== 'android' || apiLevel() >= ANDROID_14) {
+    return { list: 'photos', choice: 'allowAll' };
+  }
+  return { list: apiLevel() >= ANDROID_13 ? 'photos' : 'files', choice: 'allow' };
+};
+
+/**
  * all = every PDF in Download/ and Documents/; folders = only folders the
  * person picked; none = no PDFs yet (shared and picked PDFs still work).
  */

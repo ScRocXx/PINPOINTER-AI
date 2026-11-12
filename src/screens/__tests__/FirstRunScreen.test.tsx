@@ -84,6 +84,7 @@ jest.mock('../../hooks/useStorageAccess', () => {
 
 jest.mock('../../utils/StoragePermissions', () => ({
   allFilesAccessApplies: () => mockAndroid.allFilesApplies,
+  photoSettingsWording: () => ({ list: 'photos', choice: 'allowAll' }),
   isLimitedAccessKept: jest.fn(async () => false),
   keepLimitedAccess: jest.fn(async () => {}),
 }));
@@ -311,6 +312,9 @@ describe('PDFs', () => {
     await tap('first-run-pick-pdfs');
     expect(mockAndroid.calls.pickFiles).toBe(1);
     expect(screen.getByTestId('first-run-ready')).toBeTruthy();
+    // The picked PDFs are read now, though no folder was allowed.
+    expect(IndexingService.documentSync).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('first-run-row-allow-papers')).toBeNull();
   });
 
   it('has no step of its own below Android 11 (the photo permission covers files)', async () => {

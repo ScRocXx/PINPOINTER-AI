@@ -38,6 +38,27 @@ const useAliveRef = () => {
   return alive;
 };
 
+/**
+ * Android only says "won't ask again" when asked: a plain check reads the
+ * same as "denied". So once a request comes back blocked, later checks keep
+ * saying blocked (and callers open Settings) until photos are allowed.
+ * Shared by every screen for the rest of the session.
+ */
+let photosBlocked = false;
+const rememberBlocked = (raw: PhotoAccess): PhotoAccess => {
+  if (raw === 'blocked') {
+    photosBlocked = true;
+  } else if (raw === 'full' || raw === 'limited') {
+    photosBlocked = false;
+  }
+  return raw === 'denied' && photosBlocked ? 'blocked' : raw;
+};
+
+/** @internal Test helper. */
+export const __forgetBlockedPhotos = () => {
+  photosBlocked = false;
+};
+
 export interface PhotoAccessApi {
   /** null until the first check finishes. */
   access: PhotoAccess | null;
@@ -58,7 +79,8 @@ export const usePhotoAccess = (): PhotoAccessApi => {
   const alive = useAliveRef();
 
   const settle = useCallback(
-    (next: PhotoAccess) => {
+    (raw: PhotoAccess) => {
+      const next = rememberBlocked(raw);
       if (alive.current) {
         setAccess(next);
       }

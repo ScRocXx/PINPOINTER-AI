@@ -23,6 +23,8 @@ const mockDocs: DocumentAccessApi = {
   chooseFolder: jest.fn(async () => true),
   pickFiles: jest.fn(async () => 1),
 };
+let mockAllFiles = true;
+jest.mock('../../utils/StoragePermissions', () => ({ allFilesAccessApplies: () => mockAllFiles }));
 jest.mock('../../hooks/useStorageAccess', () => ({
   usePhotoAccess: () => mockPhotos,
   useDocumentAccess: () => mockDocs,
@@ -40,6 +42,7 @@ beforeEach(() => {
   mockPhotos.access = 'full';
   mockDocs.access = 'all';
   mockDocs.canAskAll = true;
+  mockAllFiles = true;
   mockModels.isSTTLoaded = true;
   mockModels.isSTTLoading = false;
 });
@@ -98,6 +101,26 @@ describe('what Pinpointer can see', () => {
     await fireEvent.press(screen.getByTestId('settings-papers'));
     expect(mockDocs.chooseFolder).toHaveBeenCalledTimes(1);
     expect(mockDocs.allowAll).not.toHaveBeenCalled();
+  });
+
+  it('below Android 11 asks for the file permission, or opens Settings once it is on', async () => {
+    mockAllFiles = false;
+    mockDocs.canAskAll = false;
+    mockDocs.access = 'none';
+    const { rerender } = await renderSettings();
+    await fireEvent.press(screen.getByTestId('settings-papers'));
+    expect(mockDocs.allowAll).toHaveBeenCalledTimes(1);
+    expect(mockDocs.chooseFolder).not.toHaveBeenCalled();
+
+    mockDocs.access = 'all';
+    await rerender(
+      <LanguageProvider initialLanguage="en">
+        <SettingsScreen />
+      </LanguageProvider>,
+    );
+    await fireEvent.press(screen.getByTestId('settings-papers'));
+    expect(mockPhotos.openSettings).toHaveBeenCalledTimes(1);
+    expect(mockDocs.allowAll).toHaveBeenCalledTimes(1);
   });
 
   it('shows nothing under a row while still checking', async () => {

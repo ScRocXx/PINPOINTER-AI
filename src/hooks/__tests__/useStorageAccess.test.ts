@@ -1,6 +1,6 @@
 import { act, renderHook } from '@testing-library/react-native';
 import { AppState } from 'react-native';
-import { useDocumentAccess, usePhotoAccess } from '../useStorageAccess';
+import { __forgetBlockedPhotos, useDocumentAccess, usePhotoAccess } from '../useStorageAccess';
 import * as Perms from '../../utils/StoragePermissions';
 import * as Pdf from '../../utils/PdfImport';
 
@@ -27,6 +27,7 @@ const remove = jest.fn();
 
 beforeEach(() => {
   jest.clearAllMocks();
+  __forgetBlockedPhotos();
   appStateHandler = null;
   jest.spyOn(AppState, 'addEventListener').mockImplementation(((_: string, fn: (s: string) => void) => {
     appStateHandler = fn;
@@ -67,6 +68,42 @@ describe('usePhotoAccess', () => {
     expect(result.current.access).toBe('full');
     await unmount();
     expect(remove).toHaveBeenCalled();
+  });
+});
+
+describe('usePhotoAccess when Android won’t ask again', () => {
+  it('keeps saying blocked after a check, so the next tap opens Settings, until photos are allowed', async () => {
+    perms.getPhotoAccess.mockResolvedValue('denied');
+    const { result } = await renderHook(() => usePhotoAccess());
+    await act(async () => {});
+    expect(result.current.access).toBe('denied');
+
+    perms.requestPhotoAccess.mockResolvedValueOnce('blocked');
+    await act(async () => {
+      await result.current.request();
+    });
+    expect(result.current.access).toBe('blocked');
+
+    // Back from the (instant, invisible) answer: a plain check says denied.
+    await act(async () => appStateHandler?.('active'));
+    expect(result.current.access).toBe('blocked');
+
+    // Another screen opening later knows too.
+    const other = await renderHook(() => usePhotoAccess());
+    await act(async () => {});
+    expect(other.result.current.access).toBe('blocked');
+
+    perms.getPhotoAccess.mockResolvedValue('full');
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.access).toBe('full');
+    perms.getPhotoAccess.mockResolvedValue('denied');
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.access).toBe('denied');
+    perms.getPhotoAccess.mockResolvedValue('limited');
   });
 });
 

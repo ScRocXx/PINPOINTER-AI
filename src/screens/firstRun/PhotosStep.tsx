@@ -4,6 +4,7 @@ import { AppText, Button, IconButton } from '../../components/ui';
 import { useStrings } from '../../i18n';
 import { Space } from '../../theme';
 import type { PhotoAccessApi } from '../../hooks/useStorageAccess';
+import { photoSettingsWording } from '../../utils/StoragePermissions';
 import { PhotosArt } from './FirstRunArt';
 import { CheckPoints, Notice, NumberedSteps } from './Points';
 import { StepDotsProps, StepFrame } from './StepFrame';
@@ -26,6 +27,7 @@ type Phase = 'ask' | 'denied' | 'blocked';
  */
 export const PhotosStep: React.FC<PhotosStepProps> = ({ dots, direction, photos, onNext, onBack }) => {
   const { t } = useStrings();
+  const wording = photoSettingsWording();
   const [phase, setPhase] = useState<Phase>(photos.access === 'blocked' ? 'blocked' : 'ask');
   const [busy, setBusy] = useState(false);
 
@@ -101,7 +103,11 @@ export const PhotosStep: React.FC<PhotosStepProps> = ({ dots, direction, photos,
           testID="first-run-photos-blocked"
         >
           <NumberedSteps
-            steps={[t('onboarding.settingsStep1'), t('onboarding.photosStep2'), t('onboarding.photosStep3')]}
+            steps={[
+              t('onboarding.settingsStep1'),
+              t(wording.list === 'photos' ? 'onboarding.photosStep2' : 'onboarding.photosStep2Files'),
+              t(wording.choice === 'allowAll' ? 'onboarding.photosStep3' : 'onboarding.photosStep3Allow'),
+            ]}
           />
         </Notice>
       )}

@@ -4,6 +4,7 @@ import type { DocumentAccessApi, PhotoAccessApi } from '../../hooks/useStorageAc
 import { useIndexingProgress } from '../../hooks/useIndexingProgress';
 import { IndexingService } from '../../services/IndexingService';
 import { AppLogger } from '../../utils/AppLogger';
+import { allFilesAccessApplies } from '../../utils/StoragePermissions';
 import type { StepDotsProps } from './StepFrame';
 import { ReadyView } from './ReadyView';
 
@@ -15,8 +16,63 @@ export interface ReadyStepProps {
   direction?: 1 | -1;
   photos: PhotoAccessApi;
   docs: DocumentAccessApi;
+  /** PDFs were picked one by one on the PDF step (they don't count as folder access). */
+  pickedPdfs?: boolean;
   onFinish: () => void;
 }
+
+/**
+ * Runs `pass` now, and again each time `key` changes while a pass is going.
+ * IndexingService joins a second ask to the running job, so a pass that
+ * started before more photos (or folders) were allowed would miss them.
+ */
+const useWideningRun = (
+  key: string | null,
+  enabled: boolean,
+  pass: () => Promise<{ wasCancelled: boolean } | void>,
+  onDone: () => void,
+  label: string,
+) => {
+  const keyRef = useRef(key);
+  keyRef.current = key;
+  const running = useRef(false);
+  const alive = useRef(true);
+  const latest = useRef({ pass, onDone });
+  latest.current = { pass, onDone };
+
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!enabled || running.current) {
+      return;
+    }
+    running.current = true;
+    (async () => {
+      try {
+        let ranFor: string | null;
+        do {
+          ranFor = keyRef.current;
+          const result = await latest.current.pass();
+          if (result && result.wasCancelled) {
+            return;
+          }
+        } while (alive.current && keyRef.current !== ranFor);
+        if (alive.current) {
+          latest.current.onDone();
+        }
+      } catch (e) {
+        AppLogger.warn('FirstRun', label, e);
+      } finally {
+        running.current = false;
+      }
+    })();
+  }, [enabled, key, label]);
+};
 
 /**
  * Step 4: the first look through the gallery starts here, and the step
@@ -25,44 +81,34 @@ export interface ReadyStepProps {
  * after this screen (IndexingService), then while charging, even with the
  * app closed. PDFs start after the photos.
  */
-export const ReadyStep: React.FC<ReadyStepProps> = ({ dots, direction, photos, docs, onFinish }) => {
+export const ReadyStep: React.FC<ReadyStepProps> = ({ dots, direction, photos, docs, pickedPdfs = false, onFinish }) => {
   const photosAllowed = photos.access === 'full' || photos.access === 'limited';
-  const docsAllowed = docs.access === 'all' || docs.access === 'folders';
+  const docsAllowed = docs.access === 'all' || docs.access === 'folders' || pickedPdfs;
   const progress = useIndexingProgress(photos.access);
   const [photosFinished, setPhotosFinished] = useState(false);
-  const started = useRef<{ photos: string | null; docs: string | null }>({ photos: null, docs: null });
 
-  // Start (or widen) the work whenever access is given, here or on an earlier
-  // step. Asking twice joins the running job instead of starting another.
+  // More photos allowed means a new first look: not "all ready" any more.
   useEffect(() => {
-    if (!photosAllowed || started.current.photos === photos.access) {
-      return;
-    }
-    started.current.photos = photos.access;
-    let alive = true;
-    IndexingService.deepGallerySync()
-      .then(result => {
-        if (result.wasCancelled) {
-          return;
-        }
-        if (alive) {
-          setPhotosFinished(true);
-        }
-        IndexingService.backfill().catch(e => AppLogger.warn('FirstRun', 'Backfill failed', e));
-      })
-      .catch(e => AppLogger.warn('FirstRun', 'First look through photos stopped', e));
-    return () => {
-      alive = false;
-    };
-  }, [photos.access, photosAllowed]);
+    setPhotosFinished(false);
+  }, [photos.access]);
 
-  useEffect(() => {
-    if (!docsAllowed || started.current.docs === docs.access) {
-      return;
-    }
-    started.current.docs = docs.access;
-    IndexingService.documentSync().catch(e => AppLogger.warn('FirstRun', 'First look through PDFs stopped', e));
-  }, [docs.access, docsAllowed]);
+  useWideningRun(
+    photos.access,
+    photosAllowed,
+    () => IndexingService.deepGallerySync(),
+    () => {
+      setPhotosFinished(true);
+      IndexingService.backfill().catch(e => AppLogger.warn('FirstRun', 'Backfill failed', e));
+    },
+    'First look through photos stopped',
+  );
+  useWideningRun(
+    docs.access,
+    docsAllowed,
+    () => IndexingService.documentSync().then(() => undefined),
+    () => undefined,
+    'First look through PDFs stopped',
+  );
 
   return (
     <ReadyView
@@ -84,7 +130,8 @@ export const ReadyStep: React.FC<ReadyStepProps> = ({ dots, direction, photos, d
       }}
       banner={<PhotoAccessBanner inline onAccessChange={() => photos.refresh()} testID="first-run-limited" />}
       onAllowPhotos={() => (photos.access === 'blocked' ? photos.openSettings() : photos.request())}
-      onAllowPapers={() => (docs.canAskAll ? docs.allowAll() : docs.chooseFolder())}
+      // Below Android 11 the photo permission covers files, so ask for that.
+      onAllowPapers={() => (!allFilesAccessApplies() || docs.canAskAll ? docs.allowAll() : docs.chooseFolder())}
       onFinish={onFinish}
     />
   );

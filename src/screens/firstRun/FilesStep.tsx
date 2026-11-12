@@ -14,6 +14,8 @@ export interface FilesStepProps {
   docs: DocumentAccessApi;
   onNext: () => void;
   onBack: () => void;
+  /** Some PDFs were picked one by one (so the last step reads them). */
+  onPickedFiles?: () => void;
 }
 
 type Busy = null | 'all' | 'folder' | 'files';
@@ -25,7 +27,7 @@ type Busy = null | 'all' | 'folder' | 'files';
  * folder is offered alongside, and is the only way when the build can't ask
  * for All files access.
  */
-export const FilesStep: React.FC<FilesStepProps> = ({ dots, direction, docs, onNext, onBack }) => {
+export const FilesStep: React.FC<FilesStepProps> = ({ dots, direction, docs, onNext, onBack, onPickedFiles }) => {
   const { t } = useStrings();
   const [busy, setBusy] = useState<Busy>(null);
   const [stillOff, setStillOff] = useState(false);
@@ -47,7 +49,14 @@ export const FilesStep: React.FC<FilesStepProps> = ({ dots, direction, docs, onN
 
   const allowAll = () => run('all', async () => (await docs.allowAll()) === 'all');
   const chooseFolder = () => run('folder', docs.chooseFolder);
-  const pickFiles = () => run('files', async () => (await docs.pickFiles()) > 0);
+  const pickFiles = () =>
+    run('files', async () => {
+      const picked = (await docs.pickFiles()) > 0;
+      if (picked) {
+        onPickedFiles?.();
+      }
+      return picked;
+    });
 
   const actions = docs.canAskAll ? (
     <>

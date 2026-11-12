@@ -33,6 +33,13 @@ export interface IndexingProgress {
   papers: KindProgress;
 }
 
+const sameShownState = (a: IndexingSnapshot, b: IndexingSnapshot): boolean =>
+  a.running === b.running &&
+  a.docsProcessed === b.docsProcessed &&
+  a.docsTotal === b.docsTotal &&
+  a.queued.length === b.queued.length &&
+  a.queued.every((kind, i) => kind === b.queued[i]);
+
 /** Pure: the progress to show, from the queue snapshot, the database counts and the photo count. */
 export const toIndexingProgress = (
   snapshot: IndexingSnapshot,
@@ -80,7 +87,8 @@ export const useIndexingProgress = (recountKey?: unknown): IndexingProgress => {
       setCounts(getReadyCounts());
     };
     const unsubscribe = IndexingService.subscribe(next => {
-      setSnapshot(next);
+      // galleryProcessed ticks on every photo but isn't shown; skip those.
+      setSnapshot(prev => (sameShownState(prev, next) ? prev : next));
       if (timer) {
         return;
       }
@@ -97,42 +105,39 @@ export const useIndexingProgress = (recountKey?: unknown): IndexingProgress => {
   }, []);
 
   const galleryBusy = isGalleryJob(snapshot.running) || snapshot.queued.some(isGalleryJob);
+  // Count the photos on mount, when the access key changes (even if a job
+  // starts in the same moment) and when gallery work ends. A job starting
+  // must not throw away a count already on its way, so only unmounting
+  // drops a result, and only the newest count is kept.
+  const countedFor = useRef<{ key: unknown } | null>(null);
+  const countSeq = useRef(0);
+  const mounted = useRef(true);
   useEffect(() => {
-    if (galleryBusy) {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  useEffect(() => {
+    if (galleryBusy && countedFor.current && countedFor.current.key === recountKey) {
       return;
     }
-    let alive = true;
+    countedFor.current = { key: recountKey };
+    const seq = ++countSeq.current;
     getGalleryTotalCount()
       .then(total => {
-        if (alive) {
-          setPhotoTotal(total);
-          setCounts(getReadyCounts());
+        if (!mounted.current || seq !== countSeq.current) {
+          return;
         }
+        setPhotoTotal(total < 0 ? null : total);
+        if (total < 0) {
+          // Try again next time instead of "Counting…" for the whole session.
+          countedFor.current = null;
+        }
+        setCounts(getReadyCounts());
       })
       .catch(e => AppLogger.warn('IndexingProgress', 'Could not count photos', e));
-    return () => {
-      alive = false;
-    };
   }, [galleryBusy, recountKey]);
-
-  // While photos are being read, count once at the start too (the effect
-  // above waits for idle so it doesn't count on every batch).
-  useEffect(() => {
-    if (!galleryBusy || photoTotal !== null) {
-      return;
-    }
-    let alive = true;
-    getGalleryTotalCount()
-      .then(total => {
-        if (alive) {
-          setPhotoTotal(total);
-        }
-      })
-      .catch(() => undefined);
-    return () => {
-      alive = false;
-    };
-  }, [galleryBusy, photoTotal]);
 
   return toIndexingProgress(snapshot, counts, photoTotal);
 };
