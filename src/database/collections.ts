@@ -10,7 +10,7 @@ import { AppLogger } from '../utils/AppLogger';
 import type { Collection } from '../utils/Collections';
 import { collectionTerms } from './collectionTerms';
 import { getDb, isFtsAvailable, isVecAvailable } from './connection';
-import { MAX_VECTOR_DISTANCE } from './search';
+import { findLookAlikes } from './vectors';
 
 /** Collections are counted up to this many files; more shows as "999+". */
 export const COLLECTION_COUNT_CAP = 999;
@@ -86,25 +86,22 @@ export const getCollectionPreview = (collection: Collection, photoLimit = 3): Co
 
 /**
  * Photos whose CLIP vector is close to `queryVector`, closest first. Empty
- * when the vector index isn't available. Same cutoff as search.
+ * when the vector index isn't available. Same rule as search: only photos
+ * that stand out for this query.
  */
 export const getSimilarPhotos = (queryVector: Float32Array, limit = 12): string[] => {
   if (!isVecAvailable()) return [];
   try {
-    const blob = new Uint8Array(queryVector.buffer);
+    const ids = findLookAlikes(queryVector, limit).map(l => l.documentId);
+    if (ids.length === 0) return [];
     const result = getDb().executeSync(
-      `WITH knn AS (
-         SELECT document_id, distance FROM vec_index
-         WHERE embedding MATCH vec_f32(?) AND k = ?
-       )
-       SELECT d.filePath
-       FROM knn JOIN document_index d ON d.id = knn.document_id
-       WHERE knn.distance <= ? AND d.type = 'IMAGE'
-       ORDER BY knn.distance ASC`,
-      [blob, Math.max(1, Math.floor(limit)), MAX_VECTOR_DISTANCE],
+      `SELECT id, filePath FROM document_index
+       WHERE type = 'IMAGE' AND id IN (${ids.map(() => '?').join(', ')})`,
+      ids,
     );
-    const rows = (result?.rows ?? []) as unknown as Array<{ filePath?: string }>;
-    return [...new Set(rows.map(r => r.filePath).filter((p): p is string => !!p))];
+    const rows = (result?.rows ?? []) as unknown as Array<{ id: number; filePath?: string }>;
+    const pathById = new Map(rows.map(r => [r.id, r.filePath]));
+    return [...new Set(ids.map(id => pathById.get(id)).filter((p): p is string => !!p))];
   } catch (e) {
     AppLogger.warn('DB', 'getSimilarPhotos failed:', e);
     return [];

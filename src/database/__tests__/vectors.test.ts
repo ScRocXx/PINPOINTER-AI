@@ -8,7 +8,10 @@
  * jest.spyOn on the connection module's isVecAvailable binding.
  * Raw stored bytes are read back through the mock's vec_index rows.
  */
-import { getEmbeddingCount, getImagesMissingEmbeddings, hasEmbedding, indexEmbedding } from '../vectors';
+import {
+  findLookAlikes, getEmbeddingCount, getImagesMissingEmbeddings, hasEmbedding, indexEmbedding,
+  standOutLimit, FAR_PERCENTILE, MAX_VECTOR_DISTANCE, MIN_PHOTOS_FOR_STAND_OUT, STAND_OUT_GAP,
+} from '../vectors';
 import { indexDocument } from '../documents';
 import { closeDatabase, getDb, isVecAvailable, setupDatabase } from '../connection';
 import * as connectionModule from '../connection';
@@ -252,5 +255,79 @@ describe('getImagesMissingEmbeddings', () => {
     indexDocument(null, 'a', '/a.jpg', 'IMAGE', 'TEXT');
     jest.spyOn(connectionModule, 'isVecAvailable').mockReturnValue(false);
     expect(getImagesMissingEmbeddings()).toEqual([]);
+  });
+});
+
+describe('findLookAlikes', () => {
+  /** A unit vector at `cosine` to the query (the first axis). */
+  const atCosine = (cosine: number, axis: number): Float32Array => {
+    const v = new Float32Array(DIM);
+    v[0] = cosine;
+    v[axis] = Math.sqrt(1 - cosine * cosine);
+    return v;
+  };
+  const query = atCosine(1, 1);
+  const distanceAt = (cosine: number) => Math.sqrt(2 - 2 * cosine);
+
+  test('is empty without the vector index or without vectors', () => {
+    expect(findLookAlikes(query)).toEqual([]);
+    jest.spyOn(connectionModule, 'isVecAvailable').mockReturnValue(false);
+    expect(findLookAlikes(query)).toEqual([]);
+  });
+
+  test('the limit is the far photo distance minus the gap', () => {
+    expect(standOutLimit(1.4)).toBeCloseTo(1.4 - STAND_OUT_GAP);
+    expect(FAR_PERCENTILE).toBeGreaterThan(0.5);
+    expect(FAR_PERCENTILE).toBeLessThan(1);
+  });
+
+  test('returns only photos clearly closer than the far photos, closest first', () => {
+    for (let i = 0; i < 30; i++) indexEmbedding(100 + i, atCosine(0.05, 2 + i));
+    indexEmbedding(1, atCosine(0.3, 200));
+    indexEmbedding(2, atCosine(0.4, 201));
+    // Just inside the far distance minus the gap is not enough.
+    const nearMiss = 1 - (distanceAt(0.05) - STAND_OUT_GAP + 0.01) ** 2 / 2;
+    indexEmbedding(3, atCosine(nearMiss, 202));
+    const found = findLookAlikes(query);
+    expect(found.map(l => l.documentId)).toEqual([2, 1]);
+    expect(found[0].distance).toBeCloseTo(distanceAt(0.4), 4);
+  });
+
+  test('photos all about as close as each other give nothing, even inside the fixed limit', () => {
+    for (let i = 0; i < 30; i++) indexEmbedding(100 + i, atCosine(0.26 + i * 0.001, 2 + i));
+    expect(distanceAt(0.26)).toBeLessThan(MAX_VECTOR_DISTANCE);
+    expect(findLookAlikes(query)).toEqual([]);
+  });
+
+  test('respects the limit on how many are returned', () => {
+    for (let i = 0; i < 30; i++) indexEmbedding(100 + i, atCosine(0.05, 2 + i));
+    for (let i = 0; i < 5; i++) indexEmbedding(1 + i, atCosine(0.4 - i * 0.01, 200 + i));
+    expect(findLookAlikes(query, 3).map(l => l.documentId)).toEqual([1, 2, 3]);
+  });
+
+  test('fewer photos than the minimum use the fixed limit', () => {
+    indexEmbedding(1, atCosine(0.3, 2));
+    indexEmbedding(2, atCosine(0.05, 3));
+    expect(getEmbeddingCount()).toBeLessThan(MIN_PHOTOS_FOR_STAND_OUT);
+    expect(findLookAlikes(query).map(l => l.documentId)).toEqual([1]);
+  });
+
+  test('falls back to the fixed limit when the far distance cannot be read', () => {
+    for (let i = 0; i < 30; i++) indexEmbedding(100 + i, atCosine(0.26, 2 + i));
+    const db = getDb();
+    const real = db.executeSync.bind(db);
+    jest.spyOn(db, 'executeSync').mockImplementation(((sql: string, params?: unknown[]) => {
+      if (/vec_distance_l2/.test(sql)) throw new Error('no such function');
+      return real(sql, params as never);
+    }) as never);
+    expect(findLookAlikes(query)).toHaveLength(30);
+  });
+
+  test('reads a query vector that is a view into a larger buffer', () => {
+    for (let i = 0; i < 30; i++) indexEmbedding(100 + i, atCosine(0.05, 2 + i));
+    indexEmbedding(1, atCosine(0.4, 200));
+    const big = new Float32Array(DIM * 2);
+    big.set(query, DIM);
+    expect(findLookAlikes(big.subarray(DIM)).map(l => l.documentId)).toEqual([1]);
   });
 });

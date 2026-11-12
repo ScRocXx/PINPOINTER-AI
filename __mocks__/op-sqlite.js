@@ -337,7 +337,26 @@ class MockDB {
       return { rows };
     }
 
-    // FTS5 MATCH (simple FTS path + hybrid WITH query)
+    // sqlite-vec: nearest photos (KNN) and the distance of the photo at an offset
+    if (/FROM vec_index\s+WHERE embedding MATCH vec_f32\(\?\) AND k = \?/i.test(q)) {
+      const [blob, k] = params;
+      return { rows: this._vectorDistances(blob).slice(0, k) };
+    }
+    if (/^SELECT vec_distance_l2\(embedding, vec_f32\(\?\)\) AS distance\s+FROM vec_index ORDER BY distance LIMIT 1 OFFSET \?/i.test(q)) {
+      const [blob, offset] = params;
+      const row = this._vectorDistances(blob)[offset];
+      return { rows: row ? [{ distance: row.distance }] : [] };
+    }
+
+    // Rows by id (look-alike photos)
+    if (/FROM document_index\s+WHERE (type = 'IMAGE' AND )?id IN \(/i.test(q)) {
+      const ids = new Set(params);
+      const imagesOnly = /type = 'IMAGE'/i.test(q);
+      const rows = this.documents.filter((r) => ids.has(r.id) && (!imagesOnly || r.type === 'IMAGE'));
+      return { rows: this._project(rows, this._selectList(q)) };
+    }
+
+    // FTS5 MATCH
     if (/\bMATCH\b/i.test(q)) return this._ftsSearch(q, params);
 
     // LIKE fallback
@@ -379,15 +398,26 @@ class MockDB {
     return isOr ? groups.some(groupHit) : groups.every(groupHit);
   }
 
+  /** Every stored vector's L2 distance to the query blob, closest first. */
+  _vectorDistances(blob) {
+    const floats = (b) => new Float32Array(b.buffer, b.byteOffset, Math.floor(b.byteLength / 4));
+    const query = floats(blob);
+    return this.vectors
+      .map((v) => {
+        const e = floats(v.embedding);
+        let sum = 0;
+        for (let i = 0; i < query.length; i++) sum += (query[i] - e[i]) ** 2;
+        return { document_id: v.document_id, distance: Math.sqrt(sum) };
+      })
+      .sort((a, b) => a.distance - b.distance);
+  }
+
   _ftsSearch(q, params) {
-    // params: [ftsTerms] for the simple path, [vectorBlob, ftsTerms] for hybrid
     const matchParam = String(params[params.length - 1] ?? '');
     const { groups, isOr } = this._matchTerms(matchParam);
-    const hybrid = /rrf_score/i.test(q);
     let rows = this.documents.filter((d) => this._docMatchesTerms(d, groups, isOr));
     rows = rows.slice(0, 50);
-    const extra = hybrid ? { rrf_score: 1.0 } : {};
-    return { rows: this._project(rows, this._selectList(q), extra) };
+    return { rows: this._project(rows, this._selectList(q)) };
   }
 
   _likeSearch(q, params) {

@@ -1,15 +1,16 @@
 /**
- * Search: FTS5 full-text search with LIKE fallback, hybrid vector search
- * via Reciprocal Rank Fusion, synonym expansion, phonetic matching,
- * relevance ranking, and snippet extraction.
+ * Search: FTS5 full-text search with LIKE fallback (synonyms, phonetic
+ * matching, relevance ranking), photos that look like the query (CLIP), the
+ * merge of the two, and snippet extraction.
  */
 import { soundex } from '../utils/Soundex';
-import { queryWords, termsForQueryWord } from '../utils/SearchKeys';
+import { searchWords, termsForQueryWord } from '../utils/SearchKeys';
 import { collectionForQuery } from '../utils/Collections';
 import { AppLogger } from '../utils/AppLogger';
-import { getDb, isFtsAvailable, isVecAvailable } from './connection';
+import { getDb, isFtsAvailable } from './connection';
 import { processResults } from './documents';
 import { collectionTerms } from './collectionTerms';
+import { findLookAlikes } from './vectors';
 import type { DocumentRecord } from './types';
 
 // ─── Synonym Map for Indian Documents ───────────────────────────────────────
@@ -31,13 +32,51 @@ const SYNONYM_GROUPS: string[][] = [
   ['property', 'deed', 'rent agreement', 'lease'],
 ];
 
-// ─── Semantic relevance cutoff ──────────────────────────────────────────────
-// vec_index uses L2 distance. Both CLIP vectors are unit length, so
-// distance = sqrt(2 - 2·cosine). Without a cutoff the 50 nearest photos are
-// returned for every query, even nonsense. 1.26 keeps matches with cosine
-// similarity ≳ 0.21, a typical floor for a real CLIP text→image match.
-// Tune on device: lower = stricter, fewer semantic results.
-export const MAX_VECTOR_DISTANCE = 1.26;
+// The rule for which photos count as look-alikes lives in vectors.ts.
+export { MAX_VECTOR_DISTANCE } from './vectors';
+
+// ─── Merging word matches with look-alikes ──────────────────────────────────
+// Reciprocal rank fusion: a result scores weight / (RANK_K + its rank) in each
+// list it is in, and the sums are sorted. Words count double, so the first
+// eleven word matches come before the best look-alike; after that one
+// look-alike follows every two word matches. A photo in both lists rises to
+// the top. (With the usual RANK_K of 60 every one of 50 word matches outranked
+// the best look-alike, so look-alikes never made the list.)
+export const RANK_K = 10;
+export const TEXT_WEIGHT = 2;
+
+/** Word matches and look-alikes as one list, best first, each file once. */
+export const mergeByRank = (textHits: DocumentRecord[], lookAlikes: DocumentRecord[]): DocumentRecord[] => {
+  const scores = new Map<string, { doc: DocumentRecord; score: number }>();
+  const add = (docs: DocumentRecord[], weight: number) => {
+    const ranked = new Set<string>();
+    for (const doc of docs) {
+      if (ranked.has(doc.filePath)) continue;
+      ranked.add(doc.filePath);
+      const points = weight / (RANK_K + ranked.size);
+      const entry = scores.get(doc.filePath);
+      if (entry) entry.score += points;
+      else scores.set(doc.filePath, { doc, score: points });
+    }
+  };
+  add(textHits, TEXT_WEIGHT);
+  add(lookAlikes, 1);
+  // Array.sort is stable: equal scores keep word matches ahead of look-alikes.
+  return [...scores.values()].sort((x, y) => y.score - x.score).map(e => e.doc);
+};
+
+/** The photos that look like the query vector, closest first. */
+const searchByLook = (queryVector: Float32Array): DocumentRecord[] => {
+  const ids = findLookAlikes(queryVector).map(l => l.documentId);
+  if (ids.length === 0) return [];
+  const result = getDb().executeSync(
+    `SELECT id, title, content, filePath, type, detection_type, timestamp
+     FROM document_index WHERE id IN (${ids.map(() => '?').join(', ')})`,
+    ids,
+  );
+  const byId = new Map(processResults(result).map(doc => [doc.id, doc]));
+  return ids.map(id => byId.get(id)).filter((doc): doc is DocumentRecord => !!doc);
+};
 
 /**
  * Expand a search word with synonyms if it matches any group.
@@ -68,16 +107,32 @@ const ftsGroup = (word: string): string => {
 };
 
 /**
- * Search documents — uses FTS5 if available, falls back to LIKE.
+ * Search documents by their words and, when `queryVector` is given, by what
+ * the photos look like.
  *
- * Improvements:
- *  1. Searches BOTH title and content columns
- *  2. Multi-word queries are split and AND-matched
- *  3. Synonym expansion for common Indian document terms
- *  4. A query that names a Home collection ("ID cards", "पहचान पत्र") finds
- *     every concept in it (Aadhaar, PAN, voter ID...) instead of the words
+ *  1. Words: FTS5 if available, else LIKE. Title and content, every word of
+ *     the query must match (filler words like "of" are left out), synonym
+ *     expansion for common Indian document terms. A query that names a Home
+ *     collection ("ID cards", "पहचान पत्र") finds every concept in it
+ *     (Aadhaar, PAN, voter ID...) instead of the words.
+ *  2. Look: photos that stand out as close to the query vector.
+ *  3. The two lists merged by rank (see mergeByRank).
  */
 export const searchDocuments = (query: string, queryVector?: Float32Array): DocumentRecord[] => {
+  const textHits = searchByWords(query);
+  if (!queryVector || !query.trim()) return textHits;
+  const t0 = Date.now();
+  try {
+    const lookAlikes = searchByLook(queryVector);
+    AppLogger.info('DB', `Look-alike search took ${Date.now() - t0}ms. Found ${lookAlikes.length} photos.`);
+    return lookAlikes.length > 0 ? mergeByRank(textHits, lookAlikes) : textHits;
+  } catch (e) {
+    AppLogger.warn('DB', 'Look-alike search failed, showing word matches only:', e);
+    return textHits;
+  }
+};
+
+const searchByWords = (query: string): DocumentRecord[] => {
   const t0 = Date.now();
   try {
     const db = getDb();
@@ -86,68 +141,12 @@ export const searchDocuments = (query: string, queryVector?: Float32Array): Docu
 
     let results: DocumentRecord[] = [];
     // Split query into individual words for multi-word AND matching
-    const words = queryWords(trimmed);
+    const words = searchWords(trimmed);
     const safeQuery = words.join(' ');
     // "ID cards" means any ID card: match the collection's concept tokens
     // and phrases (any of them) instead of the words "id" AND "cards".
     const collection = collectionTerms(collectionForQuery(trimmed));
     const collectionFts = collection?.fts ?? '';
-
-    // ── Hybrid Search: FTS5 + Vector via Reciprocal Rank Fusion ──────────
-    if (isFtsAvailable() && isVecAvailable() && queryVector && safeQuery) {
-      try {
-        const ftsTerms = collectionFts || words.map(ftsGroup).join(' OR ');
-        const vectorBlob = new Uint8Array(queryVector.buffer);
-
-        const hybridResults = db.executeSync(`
-          WITH
-          vector_knn AS (
-            SELECT document_id, distance
-            FROM vec_index
-            WHERE embedding MATCH vec_f32(?)
-              AND k = 50
-          ),
-          vector_matches AS (
-            SELECT
-              document_id AS rowid,
-              ROW_NUMBER() OVER (ORDER BY distance ASC) AS vec_rank
-            FROM vector_knn
-            WHERE distance <= ?
-          ),
-          fts_matches AS (
-            SELECT
-              rowid,
-              ROW_NUMBER() OVER (ORDER BY rank ASC) AS fts_rank
-            FROM fts_index
-            WHERE fts_index MATCH ?
-            LIMIT 50
-          ),
-          combined AS (
-            SELECT rowid, fts_rank AS rank, 'fts' AS source FROM fts_matches
-            UNION ALL
-            SELECT rowid, vec_rank AS rank, 'vec' AS source FROM vector_matches
-          )
-          SELECT
-            d.id, d.title, d.content, d.filePath, d.type,
-            d.detection_type, d.timestamp,
-            SUM(CASE WHEN c.source = 'fts' THEN 2.0 / (60.0 + c.rank)
-                     ELSE 1.0 / (60.0 + c.rank) END) AS rrf_score
-          FROM combined c
-          JOIN document_index d ON d.id = c.rowid
-          GROUP BY c.rowid
-          ORDER BY rrf_score DESC
-          LIMIT 50
-        `, [vectorBlob, MAX_VECTOR_DISTANCE, ftsTerms]);
-
-        const hybridHits = processResults(hybridResults);
-        if (hybridHits.length > 0) {
-          AppLogger.info('DB', `Hybrid Search for "${safeQuery}" took ${Date.now() - t0}ms. Found ${hybridHits.length} hits.`);
-          return hybridHits;
-        }
-      } catch (err) {
-        AppLogger.warn('DB', 'Hybrid search failed, falling back to FTS5:', err);
-      }
-    }
 
     if (isFtsAvailable() && safeQuery) {
       try {

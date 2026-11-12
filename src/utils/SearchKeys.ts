@@ -71,3 +71,36 @@ export const queryWords = (query: string): string[] =>
         .replace(/[^\p{L}\p{M}\p{N}\s-]/gu, ' ')
         .split(/\s+/)
         .filter(w => w.length > 0);
+
+/** Words that say nothing about what is being looked for. */
+const FILLER_WORDS = new Set([
+    'a', 'an', 'the', 'of', 'in', 'on', 'at', 'with', 'for', 'and', 'or', 'to', 'from', 'my', 'is', 'are',
+    'ka', 'ki', 'ke', 'ko', 'mein', 'aur', 'wala', 'wali', 'wale', 'mera', 'meri', 'mere',
+    'का', 'की', 'के', 'को', 'में', 'और', 'वाला', 'वाली', 'वाले', 'मेरा', 'मेरी', 'मेरे',
+]);
+
+/** "photo of X", "X ki photo": the word asks for a photo, it isn't written in one. */
+const PICTURE_WORDS = new Set([
+    'photo', 'photos', 'picture', 'pictures', 'pic', 'pics', 'image', 'images', 'foto', 'tasveer',
+    'फोटो', 'फ़ोटो', 'तस्वीर',
+]);
+const OF_WORDS = new Set(['of', 'ki', 'ka', 'ke', 'की', 'का', 'के']);
+
+/**
+ * The words of a query that must be found in a document's text: queryWords
+ * without filler ("of", "the", "ki") and without a picture word that only
+ * asks for a photo ("photo of biryani", "biryani ki photo" → biryani).
+ * Matching "of" as a word found every screenshot with "of" or "office" in it.
+ * A query made only of such words is kept, so typing "the" on the way to
+ * "thermometer" still searches.
+ */
+export const searchWords = (query: string): string[] => {
+    const all = queryWords(query);
+    const lower = all.map(w => w.toLowerCase());
+    const asksForPhoto = (i: number): boolean =>
+        PICTURE_WORDS.has(lower[i]) && (OF_WORDS.has(lower[i + 1]) || OF_WORDS.has(lower[i - 1]));
+    const notFiller = all.filter((_, i) => !FILLER_WORDS.has(lower[i]));
+    const kept = all.filter((_, i) => !FILLER_WORDS.has(lower[i]) && !asksForPhoto(i));
+    if (kept.length > 0) return kept;
+    return notFiller.length > 0 ? notFiller : all;
+};

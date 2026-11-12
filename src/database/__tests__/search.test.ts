@@ -1,6 +1,6 @@
 /**
- * Tests for src/database/search.ts — FTS5 search, LIKE fallback, hybrid
- * vector search, synonym expansion, soundex phonetics, relevance ranking,
+ * Tests for src/database/search.ts — FTS5 search, LIKE fallback, photos that
+ * look like the query (vector search) and their merge with word matches, synonym expansion, soundex phonetics, relevance ranking,
  * deduplication, and snippet extraction.
  *
  * Strategy: runs against the REAL database modules (connection + documents)
@@ -8,6 +8,7 @@
  * Mock behaviors these tests rely on:
  *   - DDL is a no-op → isFtsAvailable()/isVecAvailable() are true after setup
  *   - FTS5 MATCH → case-insensitive substring over title+content (AND/OR honored)
+ *   - vec_index → real L2 distances between the stored vectors and the query
  *   - LIKE → the generated WHERE clause is actually evaluated
  *   - open() caches per DB name → reset via __resetAll + closeDatabase
  * To reach the LIKE/ranking code while FTS is available, tests either use
@@ -15,9 +16,9 @@
  */
 import * as connection from '../connection';
 import { indexDocument } from '../documents';
-import { getEmbeddingCount, indexEmbedding } from '../vectors';
+import { getEmbeddingCount, indexEmbedding, MIN_PHOTOS_FOR_STAND_OUT } from '../vectors';
 import { soundex } from '../../utils/Soundex';
-import { extractSnippet, searchDocuments, MAX_VECTOR_DISTANCE } from '../search';
+import { extractSnippet, mergeByRank, searchDocuments, MAX_VECTOR_DISTANCE, RANK_K, TEXT_WEIGHT } from '../search';
 import type { DocumentRecord } from '../types';
 
 // Top-level import: jest's moduleNameMapper routes this to the SAME mock
@@ -240,29 +241,122 @@ describe('searchDocuments — dedup and limits', () => {
   });
 });
 
-describe('searchDocuments — hybrid vector path', () => {
-  test('queryVector returns hybrid hits without crashing', () => {
-    // The mock resolves the hybrid WITH query via its FTS substring matcher;
-    // docs containing "aadhaar" (aadhaar.pdf, notes.pdf) come back as hits.
-    const res = searchDocuments('aadhaar', new Float32Array(512));
-    expect(Array.isArray(res)).toBe(true);
-    expect(res).toHaveLength(2);
+// A unit vector at a chosen cosine to the query vector QUERY (the first axis).
+const QUERY = (() => {
+  const v = new Float32Array(512);
+  v[0] = 1;
+  return v;
+})();
+const atCosine = (cosine: number, axis: number): Float32Array => {
+  const v = new Float32Array(512);
+  v[0] = cosine;
+  v[axis] = Math.sqrt(1 - cosine * cosine);
+  return v;
+};
+
+/** Index a photo with no words in common with any query here, at `cosine` to QUERY. */
+const addPhoto = (name: string, cosine: number, axis: number): string => {
+  const path = `/photos/${name}.jpg`;
+  const id = indexDocument(null, `label${name}`, path, 'IMAGE', 'OBJECT');
+  indexEmbedding(id!, atCosine(cosine, axis));
+  return path;
+};
+
+describe('searchDocuments — photos that look like the query', () => {
+  test('with no photo vectors, a query vector changes nothing', () => {
+    expect(paths(searchDocuments('aadhaar', QUERY))).toEqual(paths(searchDocuments('aadhaar')));
+    expect(searchDocuments('zzz-no-match-qqq', QUERY)).toEqual([]);
   });
 
-  test('queryVector with no matching terms falls through gracefully to []', () => {
-    expect(searchDocuments('zzz-no-match-qqq', new Float32Array(512))).toEqual([]);
+  test('photos that stand out from the rest are found without any matching word, closest first', () => {
+    for (let i = 0; i < MIN_PHOTOS_FOR_STAND_OUT + 4; i++) addPhoto(`far${i}`, 0.05, 2 + i);
+    const close = addPhoto('close', 0.3, 100);
+    const closest = addPhoto('closest', 0.4, 101);
+    expect(paths(searchDocuments('zzzlook', QUERY))).toEqual([closest, close]);
   });
 
-  test('vector matches are limited by a distance cutoff', () => {
+  test('when every photo is about as close as the others, none is shown', () => {
+    // Nonsense text sits close to all photos alike: each one here is inside
+    // the old fixed limit, and none stands out.
+    for (let i = 0; i < MIN_PHOTOS_FOR_STAND_OUT + 4; i++) addPhoto(`same${i}`, 0.25 + i * 0.001, 2 + i);
+    expect(Math.sqrt(2 - 2 * 0.25)).toBeLessThan(MAX_VECTOR_DISTANCE);
+    expect(searchDocuments('hzjsbsjd', QUERY)).toEqual([]);
+  });
+
+  test('a gallery where most photos match still finds them', () => {
+    const matches: string[] = [];
+    for (let i = 0; i < 20; i++) matches.push(addPhoto(`family${i}`, 0.32 - i * 0.001, 2 + i));
+    for (let i = 0; i < 6; i++) addPhoto(`other${i}`, 0.05, 40 + i);
+    expect(paths(searchDocuments('zzzlook', QUERY))).toEqual(matches);
+  });
+
+  test('a very small gallery falls back to the fixed limit', () => {
+    const close = addPhoto('close', 0.3, 2);
+    addPhoto('far', 0.05, 3);
+    expect(paths(searchDocuments('zzzlook', QUERY))).toEqual([close]);
+  });
+
+  test('a photo that matches the words and the look comes first', () => {
+    for (let i = 0; i < MIN_PHOTOS_FOR_STAND_OUT + 4; i++) addPhoto(`far${i}`, 0.05, 2 + i);
+    const lookOnly = addPhoto('lookonly', 0.4, 100);
+    const goaId = connection.getDb().executeSync('SELECT id FROM document_index WHERE filePath = ? LIMIT 1', ['/photos/goa.jpg']);
+    indexEmbedding((goaId.rows[0] as { id: number }).id, atCosine(0.3, 101));
+    // "trip" is only in the goa photo's text; "lookonly" is closer by look.
+    expect(paths(searchDocuments('trip', QUERY))).toEqual(['/photos/goa.jpg', lookOnly]);
+  });
+
+  test('every word must match, with or without a query vector', () => {
+    // /docs/notes.pdf has "aadhaar" but not "card": one matching word is not enough.
+    expect(paths(searchDocuments('aadhaar card', QUERY))).toEqual(['/docs/aadhaar.pdf']);
+  });
+
+  test('a failing vector query still returns the word matches', () => {
     const db = connection.getDb();
-    const spy = jest.spyOn(db, 'executeSync');
-    searchDocuments('aadhaar', new Float32Array(512));
-    const hybridCall = spy.mock.calls.find(([sql]) => /rrf_score/.test(String(sql)));
-    expect(hybridCall).toBeDefined();
-    expect(String(hybridCall![0])).toMatch(/WHERE distance <= \?/);
-    expect(hybridCall![1]).toEqual([expect.any(Uint8Array), MAX_VECTOR_DISTANCE, expect.any(String)]);
-    expect(MAX_VECTOR_DISTANCE).toBeGreaterThan(0);
-    expect(MAX_VECTOR_DISTANCE).toBeLessThan(Math.SQRT2); // stricter than "any non-opposite vector"
+    const real = db.executeSync.bind(db);
+    jest.spyOn(db, 'executeSync').mockImplementation(((sql: string, params?: unknown[]) => {
+      if (/vec_index/.test(sql)) throw new Error('no vec0');
+      return real(sql, params as never);
+    }) as never);
+    expect(paths(searchDocuments('goa', QUERY))).toEqual(['/photos/goa.jpg']);
+  });
+});
+
+describe('searchDocuments — filler words', () => {
+  test('"photo of goa" searches for goa, not for "photo" and "of"', () => {
+    expect(paths(searchDocuments('photo of goa'))).toEqual(['/photos/goa.jpg']);
+    expect(paths(searchDocuments('the goa'))).toEqual(['/photos/goa.jpg']);
+  });
+
+  test('"of" does not match documents that merely contain it', () => {
+    // "proof" (aadhaar.pdf) contains "of"; with a real word in the query it must not count.
+    expect(paths(searchDocuments('photo of zzzqq'))).toEqual([]);
+  });
+});
+
+describe('mergeByRank', () => {
+  const doc = (name: string): DocumentRecord => ({ filePath: `/${name}` } as DocumentRecord);
+  const names = (docs: DocumentRecord[]) => docs.map(d => d.filePath.slice(1));
+
+  test('word matches lead, and the best look-alike still makes the first screens', () => {
+    const text = Array.from({ length: 50 }, (_, i) => doc(`t${i + 1}`));
+    const merged = names(mergeByRank(text, [doc('look1'), doc('look2')]));
+    expect(merged).toHaveLength(52);
+    expect(merged[0]).toBe('t1');
+    // 1 / (RANK_K + 1) ties with word match number RANK_K + 2; the word match stays ahead.
+    expect(merged.indexOf('look1')).toBe(RANK_K + 2);
+    expect(merged.indexOf('look1')).toBeLessThan(15);
+    expect(merged.indexOf('look2')).toBeGreaterThan(merged.indexOf('look1'));
+  });
+
+  test('a file in both lists outranks files in one', () => {
+    const merged = names(mergeByRank([doc('t1'), doc('t2'), doc('both')], [doc('look1'), doc('both')]));
+    expect(merged[0]).toBe('both');
+    expect(merged).toHaveLength(4);
+  });
+
+  test('each file appears once, and words weigh more than looks', () => {
+    expect(names(mergeByRank([doc('a'), doc('a')], [doc('b')]))).toEqual(['a', 'b']);
+    expect(TEXT_WEIGHT).toBeGreaterThan(1);
   });
 });
 

@@ -10,14 +10,17 @@
  */
 import { CONCEPTS, conceptsForWord } from './ConceptTable';
 import { bhashaKey, containsIndic, romanize, tokenizeWords } from './IndicText';
-import { queryWords } from './SearchKeys';
+import { searchWords } from './SearchKeys';
 
 const DEVANAGARI = /[ऀ-ॿ]/;
 const conceptWords = new Map(CONCEPTS.map(c => [c.id, c.words]));
 
-/** Lowercased query words, at least 2 letters (single letters match everything). */
+/**
+ * Lowercased query words that search matches on (no filler like "of"), at
+ * least 2 letters (single letters match everything).
+ */
 const cleanQueryWords = (query: string): string[] =>
-    queryWords(query).map(w => w.toLowerCase()).filter(w => w.length >= 2);
+    searchWords(query).map(w => w.toLowerCase()).filter(w => w.length >= 2);
 
 /** Two spellings of one word ("aadhaar" / "aadhaars"), not a new word. */
 const sameStem = (a: string, b: string): boolean => a.startsWith(b) || b.startsWith(a);

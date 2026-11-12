@@ -45,6 +45,12 @@ describe('matchTermsIn', () => {
     expect(matchTermsIn('Aadhaar card front', 'aadh')).toEqual(['Aadhaar']);
   });
 
+  test('filler words and "photo of" are not marked or offered as other spellings', () => {
+    expect(matchTermsIn('Photo of the office', 'photo of biryani')).toEqual([]);
+    expect(matchTermsIn('biryani order of today', 'photo of biryani')).toEqual(['biryani']);
+    expect(alsoSearchedAs('photo of biryani')).toEqual([]);
+  });
+
   test('finds the same word in Hindi for a Roman query (sound)', () => {
     expect(matchTermsIn('भारत सरकार आधार कार्ड', 'aadhaar')).toContain('आधार');
   });

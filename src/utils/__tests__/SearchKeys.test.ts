@@ -1,5 +1,5 @@
 import {
-    SEARCH_TAIL_MARK, buildSearchTail, queryWords, termsForQueryWord, visibleContent, withSearchTail,
+    SEARCH_TAIL_MARK, buildSearchTail, queryWords, searchWords, termsForQueryWord, visibleContent, withSearchTail,
 } from '../SearchKeys';
 import { bhashaKey } from '../IndicText';
 
@@ -58,5 +58,31 @@ describe('termsForQueryWord', () => {
 
     it('has no roman form for Latin words', () => {
         expect(termsForQueryWord('bill').roman).toBeNull();
+    });
+});
+
+describe('searchWords', () => {
+    it('drops filler words in English, Hinglish and Hindi', () => {
+        expect(searchWords('bill of the shop')).toEqual(['bill', 'shop']);
+        expect(searchWords('papa ka bill')).toEqual(['papa', 'bill']);
+        expect(searchWords('बिजली का बिल')).toEqual(['बिजली', 'बिल']);
+    });
+
+    it('drops a picture word that only asks for a photo', () => {
+        expect(searchWords('photo of biryani')).toEqual(['biryani']);
+        expect(searchWords('a picture of my dog')).toEqual(['dog']);
+        expect(searchWords('biryani ki photo')).toEqual(['biryani']);
+        expect(searchWords('शादी की फोटो')).toEqual(['शादी']);
+    });
+
+    it('keeps a picture word that is part of what is searched', () => {
+        expect(searchWords('passport photo')).toEqual(['passport', 'photo']);
+        expect(searchWords('photo')).toEqual(['photo']);
+    });
+
+    it('keeps a query made only of filler, so typing still searches', () => {
+        expect(searchWords('the')).toEqual(['the']);
+        expect(searchWords('photo of')).toEqual(['photo']);
+        expect(searchWords('of')).toEqual(['of']);
     });
 });

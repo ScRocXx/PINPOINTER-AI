@@ -6,6 +6,7 @@ import * as connection from '../connection';
 import { indexDocument } from '../documents';
 import { searchDocuments } from '../search';
 import { getCollectionPreview, getSimilarPhotos } from '../collections';
+import { indexEmbedding } from '../vectors';
 import { countCheckedFiles, markOcrDone, markStageFailed, noteFileSeen } from '../fileState';
 import { getCollection } from '../../utils/Collections';
 import { __resetAll } from '@op-engineering/op-sqlite';
@@ -93,17 +94,22 @@ describe('getSimilarPhotos', () => {
     expect(getSimilarPhotos(new Float32Array(512))).toEqual([]);
   });
 
-  test('returns unique photo paths, closest first, within the search cutoff', () => {
-    jest.spyOn(connection, 'isVecAvailable').mockReturnValue(true);
-    const spy = jest.spyOn(connection.getDb(), 'executeSync').mockReturnValue({
-      rows: [{ filePath: '/photos/a.jpg' }, { filePath: '/photos/b.jpg' }, { filePath: '/photos/a.jpg' }],
-    } as never);
-    expect(getSimilarPhotos(new Float32Array(512), 9)).toEqual(['/photos/a.jpg', '/photos/b.jpg']);
-    const [sql, params] = spy.mock.calls[0] as [string, unknown[]];
-    expect(sql).toMatch(/k = \?/);
-    expect(sql).toMatch(/d\.type = 'IMAGE'/);
-    expect(params[1]).toBe(9);
-    expect(params[2]).toBe(1.26);
+  test('returns photo paths, closest first, only those that stand out', () => {
+    const unit = (cosine: number, axis: number): Float32Array => {
+      const v = new Float32Array(512);
+      v[0] = cosine;
+      v[axis] = Math.sqrt(1 - cosine * cosine);
+      return v;
+    };
+    const query = unit(1, 1);
+    const add = (path: string, type: 'IMAGE' | 'DOCUMENT', cosine: number, axis: number) =>
+      indexEmbedding(indexDocument(null, 'words', path, type, 'TEXT')!, unit(cosine, axis));
+    for (let i = 0; i < 24; i++) add(`/photos/far${i}.jpg`, 'IMAGE', 0.05, 2 + i);
+    add('/photos/b.jpg', 'IMAGE', 0.3, 100);
+    add('/photos/a.jpg', 'IMAGE', 0.4, 101);
+    add('/docs/paper.pdf', 'DOCUMENT', 0.5, 102); // close, but not a photo
+    expect(getSimilarPhotos(query, 9)).toEqual(['/photos/a.jpg', '/photos/b.jpg']);
+    expect(getSimilarPhotos(query, 1)).toEqual([]); // the one nearest row is the paper
   });
 
   test('a vector query error gives no photos', () => {
