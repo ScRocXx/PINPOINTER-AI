@@ -22,6 +22,7 @@
 
 import {
     Alert,
+    Linking,
     NativeEventEmitter,
     NativeModules,
     PermissionsAndroid,
@@ -42,6 +43,7 @@ jest.mock('../../utils/AppLogger', () => ({
 
 import { AppLogger } from '../../utils/AppLogger';
 import { useVoiceRecording } from '../useVoiceRecording';
+import { setCurrentLanguage } from '../../i18n/current';
 
 const { SherpaOnnxModule } = NativeModules;
 const startRecognition = SherpaOnnxModule.startRecognition as jest.Mock;
@@ -537,25 +539,46 @@ describe('useVoiceRecording — startListening', () => {
         });
 
         expect(alertSpy).toHaveBeenCalledWith(
-            'Permission Denied',
-            'Microphone permission is required for voice search.',
+            'The microphone is off',
+            'To search by voice, allow the microphone.',
         );
         expect(startRecognition).not.toHaveBeenCalled();
         expect(result.current.isRecording).toBe(false);
     });
 
-    test('android + never-ask-again is treated as denied', async () => {
+    test('android + never-ask-again: offers Settings, since Android will not ask again', async () => {
         setOS('android');
         mockPermission(PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN);
         const alertSpy = mockAlert();
+        const openSettings = jest.spyOn(Linking, 'openSettings').mockResolvedValue(undefined);
         const { result } = await renderHook(() => useVoiceRecording(jest.fn()));
 
         await act(async () => {
             await result.current.startListening();
         });
 
-        expect(alertSpy).toHaveBeenCalledWith('Permission Denied', expect.any(String));
+        const [title, body, buttons] = alertSpy.mock.calls[0] as [string, string, Array<{ text: string; onPress?: () => void }>];
+        expect(title).toBe('The microphone is off');
+        expect(body).toContain('Settings');
+        expect(buttons.map(b => b.text)).toEqual(['Not now', 'Open Settings']);
+        buttons[1].onPress?.();
+        expect(openSettings).toHaveBeenCalledTimes(1);
         expect(startRecognition).not.toHaveBeenCalled();
+    });
+
+    test('the pop-ups are in Hindi when the app is', async () => {
+        setCurrentLanguage('hi');
+        setOS('android');
+        mockPermission(PermissionsAndroid.RESULTS.DENIED);
+        const alertSpy = mockAlert();
+        const { result } = await renderHook(() => useVoiceRecording(jest.fn()));
+
+        await act(async () => {
+            await result.current.startListening();
+        });
+        setCurrentLanguage('en');
+
+        expect(alertSpy).toHaveBeenCalledWith('माइक्रोफ़ोन बंद है', 'बोलकर खोजने के लिए माइक्रोफ़ोन की अनुमति दें।');
     });
 
     test('ios skips the permission request entirely', async () => {
@@ -587,8 +610,8 @@ describe('useVoiceRecording — startListening', () => {
         expect(logError).toHaveBeenCalledWith('VoiceRecording', 'Start failed', failure);
         expect(vibrateSpy).toHaveBeenCalledWith([0, 30, 50, 30]);
         expect(alertSpy).toHaveBeenCalledWith(
-            'Voice Error',
-            'Could not start voice recognition. Please try again.',
+            'Voice search did not start',
+            'Please try again, or type what you need.',
         );
         expect(result.current.isRecording).toBe(false);
     });
@@ -605,7 +628,7 @@ describe('useVoiceRecording — startListening', () => {
         });
 
         expect(logError).toHaveBeenCalledWith('VoiceRecording', 'Start failed', requestFailure);
-        expect(alertSpy).toHaveBeenCalledWith('Voice Error', expect.any(String));
+        expect(alertSpy).toHaveBeenCalledWith('Voice search did not start', expect.any(String));
         expect(startRecognition).not.toHaveBeenCalled();
     });
 

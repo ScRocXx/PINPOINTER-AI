@@ -95,6 +95,9 @@ export const en = {
   'progress.resume': 'Resume',
   'progress.keepsGoing': 'Keeps going while charging',
   'progress.keepsGoingBody': 'Even when the app is closed',
+  'progress.photosDone': 'Your photos are ready to search',
+  'progress.stopped': 'Stopped for now. Tap “Resume” to carry on.',
+  'progress.checkFailed': 'Could not check for new photos. Please try again.',
 
   // Relative time
   'time.never': 'never',
@@ -267,6 +270,8 @@ export const en = {
   'papers.folderAdded': 'Added “{name}”. Looking for papers now.',
   'papers.pdfsAdded': '{n} PDFs added',
   'papers.onePdfAdded': '1 PDF added',
+  'papers.sharedOne': 'PDF added. Pinpointer is reading it now.',
+  'papers.sharedMany': '{n} PDFs added. Pinpointer is reading them now.',
   'papers.more': 'More for {title}',
   'papers.open': 'Open',
   'papers.openFailed': 'This paper could not be opened.',
@@ -315,6 +320,8 @@ export const en = {
   'scan.pickAnother': 'Pick another photo',
   'scan.errorTitle': 'This photo could not be read',
   'scan.errorBody': 'Please try again, or pick another photo.',
+  'scan.cameraFailed': 'The camera could not open. You can pick a photo instead.',
+  'scan.pickFailed': 'Your photos could not open. Please try again.',
   'scan.readyTitle': 'Ready to find',
   'scan.readyBody': 'You can now search for the words in this photo.',
 
@@ -382,6 +389,20 @@ export const en = {
   'perm.micBody': 'To search by voice, allow the microphone.',
   'perm.keepChoice': 'Keep my choice',
   'perm.limitedSettingsBody': 'In Settings, tap “Permissions”, then “Photos and videos”, then “Allow all”.',
+  'perm.limitedAlertBody': 'Pinpointer can only search the photos you picked. To search all your photos:',
+  'perm.photosOffBody': 'To find your photos, Pinpointer needs to see them. Your photos never leave this phone.',
+  'perm.filesOffTitle': 'Files are turned off for Pinpointer',
+  'perm.filesOffBody': 'To find your PDFs, Pinpointer needs to read files. Your files never leave this phone.',
+  'perm.pdfsPickTitle': 'Show Pinpointer your PDFs',
+  'perm.pdfsPickBody': 'Choose a folder with your PDFs, or pick PDFs one by one. They never leave this phone.',
+  'perm.pdfsAllBody': 'Pinpointer searches the PDFs on this phone, for example in Downloads. They never leave the phone.',
+  'perm.pdfsOrFolder': 'Or tap “{button}” to pick just one folder.',
+  'perm.micTitle': 'The microphone is off',
+  'perm.micSettingsBody': 'To search by voice, turn on the microphone for Pinpointer in Settings.',
+
+  // Voice
+  'voice.errorTitle': 'Voice search did not start',
+  'voice.errorBody': 'Please try again, or type what you need.',
 
   // Settings
   'settings.title': 'Settings',
@@ -504,6 +525,9 @@ export const hi: Record<StringKey, string> = {
   'progress.resume': 'फिर शुरू करें',
   'progress.keepsGoing': 'चार्जिंग के समय चलता रहता है',
   'progress.keepsGoingBody': 'ऐप बंद होने पर भी',
+  'progress.photosDone': 'आपकी फ़ोटो खोजने के लिए तैयार हैं',
+  'progress.stopped': 'अभी के लिए रुक गया। आगे बढ़ने के लिए “फिर शुरू करें” दबाएँ।',
+  'progress.checkFailed': 'नई फ़ोटो नहीं जाँच सके। कृपया फिर से कोशिश करें।',
 
   'time.never': 'कभी नहीं',
   'time.justNow': 'अभी-अभी',
@@ -670,6 +694,8 @@ export const hi: Record<StringKey, string> = {
   'papers.folderAdded': '“{name}” जुड़ गया। कागज़ ढूँढ रहे हैं।',
   'papers.pdfsAdded': '{n} PDF जुड़ गईं',
   'papers.onePdfAdded': '1 PDF जुड़ गई',
+  'papers.sharedOne': 'PDF जुड़ गई। Pinpointer इसे अभी पढ़ रहा है।',
+  'papers.sharedMany': '{n} PDF जुड़ गईं। Pinpointer इन्हें अभी पढ़ रहा है।',
   'papers.more': '{title} के लिए और विकल्प',
   'papers.open': 'खोलें',
   'papers.openFailed': 'यह कागज़ खुल नहीं सका।',
@@ -716,6 +742,8 @@ export const hi: Record<StringKey, string> = {
   'scan.pickAnother': 'दूसरी फ़ोटो चुनें',
   'scan.errorTitle': 'यह फ़ोटो पढ़ी नहीं जा सकी',
   'scan.errorBody': 'फिर से कोशिश करें, या दूसरी फ़ोटो चुनें।',
+  'scan.cameraFailed': 'कैमरा नहीं खुल सका। आप फ़ोटो चुन सकते हैं।',
+  'scan.pickFailed': 'आपकी फ़ोटो नहीं खुल सकीं। कृपया फिर से कोशिश करें।',
   'scan.readyTitle': 'ढूँढने के लिए तैयार',
   'scan.readyBody': 'अब आप इस फ़ोटो में लिखे शब्द खोज सकते हैं।',
 
@@ -781,6 +809,19 @@ export const hi: Record<StringKey, string> = {
   'perm.micBody': 'बोलकर खोजने के लिए माइक्रोफ़ोन की अनुमति दें।',
   'perm.keepChoice': 'मेरी पसंद रखें',
   'perm.limitedSettingsBody': 'सेटिंग्स में “अनुमतियाँ” दबाएँ, फिर “फ़ोटो और वीडियो”, फिर “सभी की अनुमति दें”।',
+  'perm.limitedAlertBody': 'Pinpointer सिर्फ़ आपकी चुनी हुई फ़ोटो में खोज सकता है। सारी फ़ोटो में खोजने के लिए:',
+  'perm.photosOffBody': 'आपकी फ़ोटो ढूँढने के लिए Pinpointer को उन्हें देखना होगा। आपकी फ़ोटो कभी इस फ़ोन से बाहर नहीं जातीं।',
+  'perm.filesOffTitle': 'Pinpointer के लिए फ़ाइलें बंद हैं',
+  'perm.filesOffBody': 'आपकी PDF ढूँढने के लिए Pinpointer को फ़ाइलें पढ़नी होंगी। आपकी फ़ाइलें कभी इस फ़ोन से बाहर नहीं जातीं।',
+  'perm.pdfsPickTitle': 'Pinpointer को अपनी PDF दिखाएँ',
+  'perm.pdfsPickBody': 'अपनी PDF वाला फ़ोल्डर चुनें, या एक-एक करके PDF चुनें। ये कभी इस फ़ोन से बाहर नहीं जातीं।',
+  'perm.pdfsAllBody': 'Pinpointer इस फ़ोन की PDF में खोजता है, जैसे डाउनलोड में। ये कभी फ़ोन से बाहर नहीं जातीं।',
+  'perm.pdfsOrFolder': 'या सिर्फ़ एक फ़ोल्डर चुनने के लिए “{button}” दबाएँ।',
+  'perm.micTitle': 'माइक्रोफ़ोन बंद है',
+  'perm.micSettingsBody': 'बोलकर खोजने के लिए सेटिंग्स में Pinpointer का माइक्रोफ़ोन चालू करें।',
+
+  'voice.errorTitle': 'बोलकर खोज शुरू नहीं हुई',
+  'voice.errorBody': 'फिर से कोशिश करें, या जो चाहिए वह लिखें।',
 
   'settings.title': 'सेटिंग्स',
   'settings.language': 'भाषा',
@@ -854,17 +895,33 @@ export const translate = (lang: Language, key: StringKey, params?: StringParams)
 export const languageFromLocale = (locale: string | undefined | null): Language =>
   locale && locale.toLowerCase().startsWith('hi') ? 'hi' : 'en';
 
+const HALF_DAY_SECS = 12 * 3600;
+
+const startOfDay = (ts: number): number => {
+  const d = new Date(ts);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+};
+
 /**
  * "2 hours ago" style text for a timestamp, in `lang`.
  * `now` is injectable for tests.
+ *
+ * Days are counted on the calendar, the way people say them: a photo from
+ * yesterday evening is "yesterday" this afternoon, and one from the evening
+ * before that is "2 days ago", never "yesterday". Only the last few hours
+ * across midnight still read as hours.
  */
 export const relativeTime = (lang: Language, timestamp: number | null | undefined, now: number = Date.now()): string => {
   if (!timestamp) return translate(lang, 'time.never');
   const secs = Math.max(0, Math.floor((now - timestamp) / 1000));
   if (secs < 60) return translate(lang, 'time.justNow');
   if (secs < 3600) return translate(lang, 'time.minutesAgo', { n: Math.floor(secs / 60) });
-  if (secs < 7200) return translate(lang, 'time.oneHourAgo');
-  if (secs < 86400) return translate(lang, 'time.hoursAgo', { n: Math.floor(secs / 3600) });
-  const days = Math.floor(secs / 86400);
+  const days = Math.round((startOfDay(now) - startOfDay(timestamp)) / 86_400_000);
+  if (days <= 0 || secs < HALF_DAY_SECS) {
+    return secs < 7200
+      ? translate(lang, 'time.oneHourAgo')
+      : translate(lang, 'time.hoursAgo', { n: Math.floor(secs / 3600) });
+  }
   return days === 1 ? translate(lang, 'time.yesterday') : translate(lang, 'time.daysAgo', { n: days });
 };
