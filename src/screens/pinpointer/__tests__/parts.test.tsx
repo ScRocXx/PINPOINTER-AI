@@ -152,6 +152,8 @@ describe('ListeningPanel', () => {
     expect(screen.getByText('It stops by itself when you finish speaking.')).toBeTruthy();
     expect(announce).toHaveBeenCalledWith('Listening… tap to stop');
     expect(screen.getAllByTestId('listening-panel-ring')).toHaveLength(3);
+    // Words to say, so nobody is stuck in front of a silent mic.
+    expect(screen.getByTestId('listening-panel-examples')).toHaveTextContent(/You can say.*Aadhaar.*bijli bill.*dawai/);
 
     // The level comes from the phone's microphone, not from a timer.
     expect(handlers.onSpeechVolume).toHaveLength(1);
@@ -172,6 +174,7 @@ describe('ListeningPanel', () => {
     expect(screen.getByTestId('listening-panel-title')).toHaveTextContent('Understanding…');
     expect(screen.getByText('Turning your words into a search.')).toBeTruthy();
     expect(screen.getByTestId('listening-panel-stop')).toBeDisabled();
+    expect(screen.queryByTestId('listening-panel-examples')).toBeNull();
     expect(handlers.onSpeechVolume ?? []).toHaveLength(0);
   });
 });

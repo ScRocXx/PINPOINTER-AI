@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { AccessibilityInfo, Animated, Easing, StyleSheet, View } from 'react-native';
-import { AppText, BeamGradient, Icon, LockOnCorners, PressableScale } from '../../components/ui';
+import { AppText, BeamGradient, Icon, LockOnCorners, PressableScale, Tag } from '../../components/ui';
 import { useStrings } from '../../i18n';
 import { Colors, Elevation, GUTTER, Radius, Space } from '../../theme';
 import { useReducedMotion } from '../../hooks/useReducedMotion';
@@ -16,12 +16,19 @@ export interface ListeningPanelProps {
 }
 
 const ORB = 104;
-/** How far each ring grows at full voice. Quiet rooms barely move them. */
+/**
+ * Each ring rests a little outside the mic (a soft halo, so the mic never
+ * looks bare or switched off) and grows from there with the voice. Quiet
+ * rooms barely move them.
+ */
 const RINGS = [
-  { reach: 0.45, opacity: 0.22 },
-  { reach: 0.85, opacity: 0.13 },
-  { reach: 1.3, opacity: 0.07 },
+  { rest: 1.2, reach: 0.4, opacity: 0.22 },
+  { rest: 1.45, reach: 0.65, opacity: 0.13 },
+  { rest: 1.75, reach: 0.9, opacity: 0.07 },
 ];
+
+/** Things to say, so nobody has to think of the first words. */
+const EXAMPLES = ['search.suggestId', 'search.suggestBill', 'search.suggestMedicine'] as const;
 
 /**
  * The real microphone level, as an Animated value (0..1) that never touches
@@ -87,7 +94,7 @@ export const ListeningPanel: React.FC<ListeningPanelProps> = ({ listening, under
               styles.ring,
               {
                 opacity: ring.opacity,
-                transform: [{ scale: level.interpolate({ inputRange: [0, 1], outputRange: [1, 1 + ring.reach] }) }],
+                transform: [{ scale: level.interpolate({ inputRange: [0, 1], outputRange: [ring.rest, ring.rest + ring.reach] }) }],
               },
             ]}
           >
@@ -112,9 +119,21 @@ export const ListeningPanel: React.FC<ListeningPanelProps> = ({ listening, under
         {hint}
       </AppText>
       {listening ? (
-        <AppText variant="small" color="textMuted" align="center">
-          {t('search.stopsByItself')}
-        </AppText>
+        <>
+          <AppText variant="small" color="textMuted" align="center">
+            {t('search.stopsByItself')}
+          </AppText>
+          <View style={styles.examples} testID={`${testID}-examples`}>
+            <AppText variant="small" color="textSecondary">
+              {t('search.youCanSay')}
+            </AppText>
+            <View style={styles.exampleRow}>
+              {EXAMPLES.map(key => (
+                <Tag key={key} label={`“${t(key)}”`} tone="found" />
+              ))}
+            </View>
+          </View>
+        </>
       ) : null}
     </View>
   );
@@ -153,4 +172,6 @@ const styles = StyleSheet.create({
     ...Elevation.glow,
   },
   corners: { position: 'absolute', width: ORB, height: ORB },
+  examples: { alignItems: 'center', gap: Space.xs, marginTop: Space.lg },
+  exampleRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: Space.xs },
 });
