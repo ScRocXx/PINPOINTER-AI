@@ -7,7 +7,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ModelServiceProvider } from './services/ModelService';
 import { PinpointerProvider } from './hooks/PinpointerContext';
-import { AppColors, Colors, GUTTER, Space } from './theme';
+import { Colors, GUTTER, Space } from './theme';
 import {
   PinpointerScreen,
   SmartClipboardScreen,
@@ -93,7 +93,8 @@ const App: React.FC = () => {
       <ToastProvider>
       <ModelServiceProvider>
         <PinpointerProvider>
-        <StatusBar barStyle="light-content" backgroundColor={AppColors.primaryDark} />
+        {/* The light canvas from the first frame; each screen then sets its own. */}
+        <StatusBar barStyle="dark-content" backgroundColor={Colors.canvas} />
         {firstRun === 'checking' ? (
           // A blank canvas for the few milliseconds the flag takes to read.
           <View style={styles.checking} testID="first-run-checking" />
@@ -103,14 +104,10 @@ const App: React.FC = () => {
             // A new install starts with the welcome; otherwise the tabs (Home first)
             initialRouteName={firstRun === 'show' ? 'FirstRun' : 'Main'}
             screenOptions={{
-              headerStyle: {
-                backgroundColor: AppColors.primaryDark,
-                elevation: 0,
-                shadowOpacity: 0,
-              },
-              headerTintColor: AppColors.textPrimary,
-              headerTitleStyle: { fontWeight: '700', fontSize: 18 },
-              cardStyle: { backgroundColor: AppColors.primaryDark },
+              // Every screen draws its own header.
+              headerShown: false,
+              // The canvas behind a screen that is sliding in: no dark flash.
+              cardStyle: { backgroundColor: Colors.canvas },
               ...TransitionPresets.SlideFromRightIOS,
             }}
           >
@@ -118,15 +115,15 @@ const App: React.FC = () => {
             <Stack.Screen
               name="FirstRun"
               component={FirstRunScreen}
-              options={{ headerShown: false, gestureEnabled: false, cardStyle: { backgroundColor: Colors.canvas } }}
+              options={{ gestureEnabled: false }}
             />
 
             {/* Home, Photos, Papers, Settings */}
-            <Stack.Screen name="Main" component={MainTabs} options={{ headerShown: false }} />
+            <Stack.Screen name="Main" component={MainTabs} />
 
             {/* Opened on top of the tabs */}
-            <Stack.Screen name="SmartClipboard" component={SmartClipboardScreen} options={{ headerShown: false }} />
-            <Stack.Screen name="PdfFolders" component={PdfFoldersScreen} options={{ headerShown: false }} />
+            <Stack.Screen name="SmartClipboard" component={SmartClipboardScreen} />
+            <Stack.Screen name="PdfFolders" component={PdfFoldersScreen} />
           </Stack.Navigator>
         </NavigationContainer>
         )}

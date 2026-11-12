@@ -50,6 +50,8 @@ import { RecentSearches } from '../../../src/screens/pinpointer/RecentSearches';
 import { ListeningPanel } from '../../../src/screens/pinpointer/ListeningPanel';
 import { NothingFound } from '../../../src/screens/pinpointer/NothingFound';
 import { alsoSearchedAs } from '../../../src/utils/MatchTerms';
+import { HomeView, HomeViewProps } from '../../../src/screens/pinpointer/HomeView';
+import { PhotoViewer } from '../../../src/components/PhotoViewer';
 
 const TABS = (t: ReturnType<typeof useStrings>['t']) => [
   { key: 'home', label: t('tab.home'), icon: 'home' as const },
@@ -512,6 +514,57 @@ const searchNothingIndexing = () => (
   </SearchFrame>
 );
 
+// ─── Home and the photo viewer ───────────────────────────────────────────────
+const nothing = () => {};
+const homeProps = (over: Partial<HomeViewProps> = {}): HomeViewProps => ({
+  onOpenSearch: nothing,
+  onVoicePress: nothing,
+  listening: false,
+  understanding: false,
+  photos: { running: false, paused: false, quick: false, processed: 0, checked: 3400, total: 3400, lastChecked: Date.now() - 2 * 3600 * 1000 },
+  papers: { running: false, done: 0, total: 0, lastChecked: Date.now() - 26 * 3600 * 1000 },
+  onCheck: nothing,
+  onPause: nothing,
+  onResume: nothing,
+  collections: {
+    id: { count: 12, capped: false, photos: [fakePhoto(0), fakePhoto(1), fakePhoto(2)] },
+    bill: { count: 48, capped: false, photos: [fakePhoto(3), fakePhoto(4)] },
+    medicine: { count: 7, capped: false, photos: [fakePhoto(5)] },
+    bank: { count: 0, capped: false, photos: [] },
+    screenshot: { count: null, capped: false, photos: [fakePhoto(6), fakePhoto(7), fakePhoto(8)] },
+    family: { count: null, capped: false, photos: [fakePhoto(9), fakePhoto(10), fakePhoto(11)] },
+  },
+  onOpenCollection: nothing,
+  pinned: [
+    { uri: fakePhoto(0), kind: 'IMAGE', title: 'Aadhaar card', pinnedAt: 1 },
+    { uri: 'file:///bill.pdf', kind: 'DOCUMENT', title: 'Electricity bill October', pinnedAt: 2 },
+    { uri: fakePhoto(4), kind: 'IMAGE', pinnedAt: 3 },
+  ],
+  onOpenPinned: nothing,
+  recent: [fakePhoto(2), fakePhoto(5), fakePhoto(7), fakePhoto(9), fakePhoto(11)],
+  onOpenPhoto: nothing,
+  now: new Date(2026, 10, 12, 9, 0),
+  ...over,
+});
+const home = () => <WithTabs active="home"><HomeView {...homeProps()} /></WithTabs>;
+const homeRunning = () => (
+  <WithTabs active="home">
+    <HomeView
+      {...homeProps({
+        photos: { running: true, paused: false, quick: false, processed: 40, checked: 1240, total: 3400, lastChecked: null },
+        pinned: [],
+        recent: [],
+      })}
+    />
+  </WithTabs>
+);
+const VIEWER_ITEMS = [
+  { uri: fakePhoto(0), takenAt: Date.now() - 26 * 3600 * 1000, text: 'Government of India\nAadhaar\nName: Sunita Devi\nXXXX XXXX 4821\nDOB: 12/03/1961' },
+  { uri: fakePhoto(1), takenAt: Date.now() - 50 * 3600 * 1000, text: '' },
+];
+const viewer = () => <PhotoViewer items={VIEWER_ITEMS} index={0} onClose={nothing} onReadText={nothing} highlightTerms={['Aadhaar']} />;
+const viewerNoText = () => <PhotoViewer items={VIEWER_ITEMS} index={1} onClose={nothing} onReadText={nothing} />;
+
 export const STORIES: Record<string, { title: string; lang: 'en' | 'hi'; render: () => React.ReactElement }> = {
   kit: { title: 'UI kit (English)', lang: 'en', render: () => <WithTabs active="home"><Kit /></WithTabs> },
   'kit-hi': { title: 'UI kit (Hindi)', lang: 'hi', render: () => <WithTabs active="home"><Kit /></WithTabs> },
@@ -533,6 +586,12 @@ export const STORIES: Record<string, { title: string; lang: 'en' | 'hi'; render:
   'ready-done': { title: 'First run: every photo ready', lang: 'en', render: readyDone },
   'ready-off': { title: 'First run: nothing allowed yet', lang: 'en', render: readyOff },
   'tab-banner': { title: 'Only some photos: banner above the tabs', lang: 'en', render: tabBanner },
+  home: { title: 'Home', lang: 'en', render: home },
+  'home-hi': { title: 'Home (Hindi)', lang: 'hi', render: home },
+  'home-running': { title: 'Home: getting photos ready', lang: 'en', render: homeRunning },
+  viewer: { title: 'Photo viewer', lang: 'en', render: viewer },
+  'viewer-hi': { title: 'Photo viewer (Hindi)', lang: 'hi', render: viewer },
+  'viewer-no-text': { title: 'Photo viewer: no words', lang: 'en', render: viewerNoText },
   gallery: { title: 'Photos', lang: 'en', render: () => <WithTabs active="photos"><GalleryScreen /></WithTabs> },
   'gallery-hi': { title: 'Photos (Hindi)', lang: 'hi', render: () => <WithTabs active="photos"><GalleryScreen /></WithTabs> },
   papers: { title: 'Papers', lang: 'en', render: () => <WithTabs active="papers"><DocumentVaultScreen /></WithTabs> },

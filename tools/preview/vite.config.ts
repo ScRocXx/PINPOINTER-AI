@@ -12,6 +12,8 @@ const shim = (name: string) => path.resolve(__dirname, 'src/shims', name);
 const APP_SHIMS: Record<string, string> = {
   'src/database': 'database.ts',
   'src/hooks/PinpointerContext': 'PinpointerContext.tsx',
+  'src/hooks/useIndexingProgress': 'useIndexingProgress.ts',
+  'src/hooks/useStorageAccess': 'useStorageAccess.ts',
   'src/utils/StoragePermissions': 'StoragePermissions.ts',
   'src/utils/PdfImport': 'PdfImport.ts',
   'src/utils/MissingFiles': 'MissingFiles.ts',

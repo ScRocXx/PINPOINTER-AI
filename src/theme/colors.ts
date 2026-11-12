@@ -5,9 +5,6 @@
  * and violet used only where something is being found (see `Beam`). Every text
  * pair below passes WCAG 4.5:1; `textMuted` is the lightest text allowed.
  * The design concept lives at https://claude.ai/artifact/5J9fnr87FASsXKzmC6j82E
- *
- * `AppColors` is the old dark "deep space" palette. It stays only until every
- * screen has moved to `Colors`; don't use it in new code.
  */
 
 /** Raw swatches. Screens use the semantic `Colors` names, not these. */
@@ -53,6 +50,7 @@ export const Colors = {
   surface: Palette.white, // cards, sheets, the search field
   sunken: Palette.ink100, // pressed rows, empty thumbnails, tonal buttons
   night: Palette.night, // photo viewer background
+  nightGlow: '#221A45', // a violet light at the top of the viewer's stage (never under text)
   scrim: 'rgba(14,12,20,0.56)',
 
   // Text and icons
@@ -135,32 +133,3 @@ export const Tints = {
 } as const;
 
 export type TintName = keyof typeof Tints;
-
-/**
- * Legacy dark palette ("deep space"). Only the screens that haven't been
- * restyled yet use it. Delete it once the last one moves to `Colors`.
- * @deprecated Use `Colors`.
- */
-export const AppColors = {
-  primaryDark: '#0A0E1A',
-  primaryMid: '#141B2D',
-  surfaceCard: '#1C2438',
-  surfaceElevated: '#242F4A',
-
-  accentCyan: '#00D9FF',
-  accentViolet: '#8B5CF6',
-  accentPink: '#EC4899',
-  accentGreen: '#10B981',
-  accentOrange: '#F59E0B',
-
-  textPrimary: '#F1F5F9',
-  textSecondary: '#94A3B8',
-  textMuted: '#64748B',
-
-  success: '#22C55E',
-  warning: '#F59E0B',
-  error: '#EF4444',
-  info: '#3B82F6',
-} as const;
-
-export type AppColorsType = typeof AppColors;

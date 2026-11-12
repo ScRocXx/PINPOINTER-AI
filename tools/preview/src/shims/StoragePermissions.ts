@@ -10,3 +10,5 @@ export const photoSettingsWording = (): { list: 'photos' | 'files'; choice: 'all
   list: 'photos',
   choice: 'allowAll',
 });
+export const allFilesAccessApplies = () => true;
+export const ensureDocumentAccess = async () => false;

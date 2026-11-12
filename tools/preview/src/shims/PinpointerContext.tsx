@@ -2,7 +2,7 @@
 const noop = async () => {};
 const state = {
   syncCount: 3400,
-  totalImages: 3400,
+  setIsSearching: () => {},
   isSyncing: false,
   isPaused: false,
   handlePauseSync: noop,
