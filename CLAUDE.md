@@ -13,14 +13,15 @@ Phase 1 covers photos and PDFs. Phase 2 (later) is video search for creators.
 ## Commands
 
 ```bash
-npm install                 # postinstall runs download-models.js (sherpa-onnx AAR + Whisper STT; needs network to GitHub)
+npm install                 # postinstall runs download-models.js (sherpa-onnx AAR + the three Whisper files the app loads; needs network to GitHub)
 npm start                   # Metro
 npm run android             # build + install (needs Android SDK, a device or emulator)
 npx tsc --noEmit            # type check (must be clean)
 npm run lint                # eslint (must be clean)
-npx jest                    # 70 suites / ~1840 tests (must all pass). Slow on the D: drive; use --silent (--runInBand if workers run out of memory)
+npx jest                    # 73 suites / ~1870 tests (must all pass). Slow on the D: drive; use --silent (--runInBand if workers run out of memory)
 cd android && ./gradlew assembleDebug    # native compile check (JDK 17 from JAVA_HOME)
-cd android && ./gradlew assembleRelease  # release APK; signed with your keystore if configured (see below), else the debug key
+cd android && ./gradlew assembleRelease  # release APK for phones (arm64-v8a + armeabi-v7a); signed with your keystore if configured (see below), else the debug key
+cd android && ./gradlew assembleRelease -PpinpointerAbis=arm64-v8a,armeabi-v7a,x86_64   # a release build that also runs on an emulator
 adb shell cmd jobscheduler run -f com.pinpointer.app 4711   # force the charging-time indexing job
 cd tools/preview && npm install && npm run dev   # browser preview of the UI kit and screens (react-native-web), `npm run shots -- out` for phone screenshots (stories in `tools/preview/src/stories.tsx`)
 ```
@@ -31,6 +32,7 @@ cd tools/preview && npm install && npm run dev   # browser preview of the UI kit
 - `@op-engineering/op-sqlite` is pinned to exactly `14.0.4`. Versions before it (including 11.4.9) declare a synchronous `@ReactMethod` that returns nothing; React Native 0.83 refuses to load such a module, and the app crashed at startup. `__tests__/nativeModules.test.js` checks every native dependency for this.
 - The JDK is not set in `android/gradle.properties`: Gradle uses `JAVA_HOME` (JDK 17). If you need a fixed path on your machine, put `org.gradle.java.home=...` in your own `~/.gradle/gradle.properties`.
 - Release signing comes from outside the repo: `PINPOINTER_RELEASE_STORE_FILE`, `PINPOINTER_RELEASE_STORE_PASSWORD`, `PINPOINTER_RELEASE_KEY_ALIAS`, `PINPOINTER_RELEASE_KEY_PASSWORD`, as Gradle properties (`~/.gradle/gradle.properties` or `-P`) or environment variables. Without them `assembleRelease` signs with the debug key.
+- APK size: everything in `android/app/src/main/assets/models/` ships to every phone. `download-models.js` keeps only the Whisper files `SherpaOnnxModule.kt` loads (`WHISPER_FILES`; a test keeps the two in step) and deletes the rest of the archive. Release builds package ARM libraries only; debug builds keep x86/x86_64 for emulators. `slimSherpaAar` also drops sherpa-onnx's C/C++ API libraries, which the app never loads.
 - Done means: tsc clean, lint clean, all Jest tests pass, and for native changes, `assembleDebug` builds.
 
 ## Architecture
@@ -77,7 +79,7 @@ cd tools/preview && npm install && npm run dev   # browser preview of the UI kit
 - `ModelDownloadSheet` ("Voice and photo search"): whether voice search (Whisper) and photo search (CLIP, `areClipModelsAvailable()`) work right now, plus the one fix. Opened from Settings → Search.
 - Views and containers: screens that need data keep the layout in a plain view (`SettingsView`, `ReadyView`, `PhotoAccessBannerView`, `ModelSheetView`, the first-run steps) with its own file, so `tools/preview` can show it without native modules.
 - Screens: `PinpointerScreen` (home/search: state and wiring only; its parts are in `src/screens/pinpointer/`: `HomeView`, `SearchOverlay`, `ResultItem`, `SearchBar`, `PhotoPreviewModal`, sharing the old dark `styles.ts` until restyled), `HomeScreen` (drawer), `gallery`, `DocumentVaultScreen`, `SmartClipboardScreen`, `SettingsScreen` (language, what Pinpointer can see, voice and photo search, privacy, version), `FirstRunScreen`. Point & Speak and Speech-to-Text were removed.
-- Voice: sherpa-onnx Whisper base.en STT (`SherpaOnnxModule`, `useVoiceRecording`). TTS is off.
+- Voice: sherpa-onnx Whisper base.en STT (`SherpaOnnxModule`, `useVoiceRecording`). TTS is off. The model (about 160 MB) is **not** loaded at app start: `src/services/SpeechModel.ts` loads it on the first tap on the mic (`ensureSpeechModel()`, one load at a time; Home says "Getting voice search ready…" meanwhile), and only for people who have used voice search before does it load shortly after start (`warmUpForVoiceUsers`). `ModelService` just exposes that state to Settings and the helper sheet (`voice`: not loaded yet still reads as ready).
 - Entry: `src/App.tsx` (GestureHandlerRootView → SafeAreaProvider → LanguageProvider → ToastProvider → ModelServiceProvider → PinpointerProvider; `setupDatabase()` and `scheduleBackgroundIndexing()` on mount; the first-run gate picks the first route). `index.js` also registers the headless task.
 
 ### Design system (`src/theme/`, `src/components/ui/`, `src/i18n/`)
