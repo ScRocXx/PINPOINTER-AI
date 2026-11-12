@@ -7,7 +7,6 @@
  *   the query to the front (newest first); cap MAX_HISTORY = 30
  * - deleteSearchItem: case-insensitive removal, but does NOT trim the argument
  * - clearSearchHistory: removes the key entirely
- * - formatSearchTime: 'just now' | 'Nm ago' | 'Nh ago' | 'yesterday' | 'Nd ago'
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -16,7 +15,6 @@ import {
     SearchHistoryItem,
     clearSearchHistory,
     deleteSearchItem,
-    formatSearchTime,
     loadSearchHistory,
     saveSearch,
 } from '../SearchHistory';
@@ -127,25 +125,25 @@ describe('saveSearch', () => {
 
     it('enforces the 30-item cap by evicting the oldest entries', async () => {
         for (let i = 0; i < 35; i++) {
-            await saveSearch(`query-${i}`, 1);
+            await saveSearch(`query-${i}.`, 1);
         }
         const history = await loadSearchHistory();
         expect(history).toHaveLength(30);
-        expect(history[0].query).toBe('query-34'); // newest
-        expect(history[29].query).toBe('query-5'); // oldest surviving
+        expect(history[0].query).toBe('query-34.'); // newest
+        expect(history[29].query).toBe('query-5.'); // oldest surviving
         const queries = history.map(h => h.query);
-        expect(queries).not.toContain('query-0');
-        expect(queries).not.toContain('query-4');
+        expect(queries).not.toContain('query-0.');
+        expect(queries).not.toContain('query-4.');
     });
 
     it('does not grow past the cap when re-searching an existing query', async () => {
         for (let i = 0; i < 30; i++) {
-            await saveSearch(`query-${i}`, 1);
+            await saveSearch(`query-${i}.`, 1);
         }
-        await saveSearch('query-0', 1); // duplicate -> moves to front
+        await saveSearch('query-0.', 1); // duplicate -> moves to front
         const history = await loadSearchHistory();
         expect(history).toHaveLength(30);
-        expect(history[0].query).toBe('query-0');
+        expect(history[0].query).toBe('query-0.');
     });
 
     it('recovers from corrupted storage and writes valid JSON afterwards', async () => {
@@ -212,30 +210,29 @@ describe('clearSearchHistory', () => {
     });
 });
 
-describe('formatSearchTime', () => {
-    it('returns "just now" for timestamps under a minute old', () => {
-        expect(formatSearchTime(Date.now())).toBe('just now');
-        expect(formatSearchTime(Date.now() - 30 * 1000)).toBe('just now');
+describe('searches typed slowly', () => {
+    it('keeps the search the person reached, not each pause on the way', async () => {
+        await saveSearch('aad', 0);
+        await saveSearch('aadha', 2);
+        await saveSearch('aadhaar', 5);
+        const history = await loadSearchHistory();
+        expect(history.map(h => h.query)).toEqual(['aadhaar']);
+        expect(history[0].resultCount).toBe(5);
     });
 
-    it('formats minutes as "Nm ago"', () => {
-        expect(formatSearchTime(Date.now() - 5 * 60 * 1000)).toBe('5m ago');
-        expect(formatSearchTime(Date.now() - 59 * 60 * 1000)).toBe('59m ago');
+    it('keeps an older, shorter search: that one was meant', async () => {
+        const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(1_000_000);
+        await saveSearch('bill', 3);
+        nowSpy.mockReturnValue(1_000_000 + 10 * 60 * 1000);
+        await saveSearch('bill october', 1);
+        nowSpy.mockRestore();
+        expect((await loadSearchHistory()).map(h => h.query)).toEqual(['bill october', 'bill']);
     });
 
-    it('formats hours as "Nh ago"', () => {
-        expect(formatSearchTime(Date.now() - 60 * 60 * 1000)).toBe('1h ago');
-        expect(formatSearchTime(Date.now() - 3 * 60 * 60 * 1000)).toBe('3h ago');
-        expect(formatSearchTime(Date.now() - 23 * 60 * 60 * 1000)).toBe('23h ago');
-    });
-
-    it('returns "yesterday" for timestamps 24h old', () => {
-        expect(formatSearchTime(Date.now() - 24 * 60 * 60 * 1000)).toBe('yesterday');
-    });
-
-    it('formats 2+ days as "Nd ago"', () => {
-        expect(formatSearchTime(Date.now() - 2 * 24 * 60 * 60 * 1000)).toBe('2d ago');
-        expect(formatSearchTime(Date.now() - 10 * 24 * 60 * 60 * 1000)).toBe('10d ago');
+    it('keeps other searches made in the same minute', async () => {
+        await saveSearch('pan', 1);
+        await saveSearch('ration card', 2);
+        expect((await loadSearchHistory()).map(h => h.query)).toEqual(['ration card', 'pan']);
     });
 });
 

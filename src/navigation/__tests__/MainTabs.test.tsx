@@ -53,8 +53,14 @@ const Scan = () => <Text>scan page</Text>;
 
 let mockBanner: ((routeName: string) => React.ReactNode) | undefined;
 
+let mockListening = false;
+
 const MainTabs = () => (
-  <Tab.Navigator onScanPress={navigation => navigation.navigate('SmartClipboard')} banner={mockBanner}>
+  <Tab.Navigator
+    onMicPress={navigation => navigation.navigate('SmartClipboard')}
+    listening={mockListening}
+    banner={mockBanner}
+  >
     <Tab.Screen name="Pinpointer" component={Home} options={{ tabLabelKey: 'tab.home', tabIcon: 'home' }} />
     <Tab.Screen name="Gallery" component={Photos} options={{ tabLabelKey: 'tab.photos', tabIcon: 'photos' }} />
     <Tab.Screen name="DocumentVault" component={Papers} options={{ tabLabelKey: 'tab.papers', tabIcon: 'papers' }} />
@@ -119,10 +125,19 @@ describe('MainTabs', () => {
     expect(screen.getByText('photos page focused')).toBeTruthy();
   });
 
-  it('the Scan button opens the scan screen on the stack', async () => {
+  it('the middle button is the mic, and is handed the navigation', async () => {
     await renderApp();
-    await fireEvent.press(screen.getByTestId('tab-bar-scan'));
+    expect(screen.getByText('Speak')).toBeTruthy();
+    await fireEvent.press(screen.getByRole('button', { name: 'Search by voice' }));
     expect(await screen.findByText('scan page')).toBeTruthy();
+  });
+
+  it('while listening, the middle button says Stop', async () => {
+    mockListening = true;
+    await renderApp();
+    expect(screen.getByText('Stop')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Stop listening' })).toBeTruthy();
+    mockListening = false;
   });
 
   it('a screen can hide the bar', async () => {

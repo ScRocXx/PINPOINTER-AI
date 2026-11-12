@@ -4,8 +4,8 @@
  * - CameraRoll comes from the repo's root mock; each test says which photos
  *   the "phone" has. Timestamps are relative to the real clock, so the day
  *   headings stay right whenever the suite runs.
- * - Photo access, the shared Pinpointer state, recent photos and the index
- *   lookup (for the viewer) are mocked.
+ * - Photo access, the shared Pinpointer state, what the indexing queue is
+ *   doing, recent photos and the index lookup (for the viewer) are mocked.
  * - '@react-navigation/native' is mocked wholesale; Screen and
  *   useScreenFocus fall back to "focused" without a navigator.
  */
@@ -16,6 +16,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation } from '@react-navigation/native';
 import { GalleryScreen, PAGE_SIZE } from '../gallery';
 import { usePinpointerShared } from '../../hooks/PinpointerContext';
+import { useIndexingProgress } from '../../hooks/useIndexingProgress';
+import type { IndexingProgress } from '../../hooks/useIndexingProgress';
+import { __forgetBlockedPhotos } from '../../hooks/useStorageAccess';
 import { addRecentPhoto } from '../../utils/RecentPhotos';
 import { ensurePhotoAccess, getPhotoAccess, openAppSettingsAndWait } from '../../utils/StoragePermissions';
 import { pinItem, resetPinnedCacheForTests } from '../../utils/PinnedItems';
@@ -23,6 +26,7 @@ import { addDays, startOfDay } from '../../utils/PhotoDates';
 
 jest.mock('@react-navigation/native', () => ({ useNavigation: jest.fn() }));
 jest.mock('../../hooks/PinpointerContext', () => ({ usePinpointerShared: jest.fn() }));
+jest.mock('../../hooks/useIndexingProgress', () => ({ useIndexingProgress: jest.fn() }));
 jest.mock('../../utils/RecentPhotos', () => ({ addRecentPhoto: jest.fn(async () => {}) }));
 jest.mock('../../database', () => ({ getDocumentByPath: jest.fn(() => null) }));
 jest.mock('../../utils/StoragePermissions', () => ({
@@ -34,12 +38,16 @@ jest.mock('../../utils/StoragePermissions', () => ({
 const getPhotos = CameraRoll.getPhotos as jest.Mock;
 const navigate = jest.fn();
 const shared = {
-  syncCount: 0,
-  isSyncing: false,
   isPaused: false,
   handlePauseSync: jest.fn(),
   handleResumeSync: jest.fn(),
+  setIsSearching: jest.fn(),
 };
+let progress: IndexingProgress;
+const idleProgress = (): IndexingProgress => ({
+  photos: { done: 0, total: null, running: false, queued: false, quick: false },
+  papers: { done: 0, total: null, running: false, queued: false },
+});
 
 const NOW = Date.now();
 const TODAY = startOfDay(NOW);
@@ -93,9 +101,13 @@ beforeEach(() => {
   (openAppSettingsAndWait as jest.Mock).mockResolvedValue('full');
   (useNavigation as jest.Mock).mockReturnValue({ navigate });
   navigate.mockClear();
-  Object.assign(shared, { syncCount: 0, isSyncing: false, isPaused: false });
+  Object.assign(shared, { isPaused: false });
   shared.handlePauseSync.mockClear();
   shared.handleResumeSync.mockClear();
+  shared.setIsSearching.mockClear();
+  progress = idleProgress();
+  (useIndexingProgress as jest.Mock).mockImplementation(() => progress);
+  __forgetBlockedPhotos();
   (usePinpointerShared as jest.Mock).mockReturnValue(shared);
   (addRecentPhoto as jest.Mock).mockClear();
   resetPinnedCacheForTests();
@@ -247,19 +259,49 @@ describe('GalleryScreen', () => {
     await waitFor(() => expect(uris()).toHaveLength(4));
   });
 
-  it('search opens Home search', async () => {
+  it('the search button opens search itself, on Home', async () => {
     await renderGallery();
     await fireEvent.press(screen.getByRole('button', { name: 'Search your photos' }));
+    expect(shared.setIsSearching).toHaveBeenCalledWith(true);
     expect(navigate).toHaveBeenCalledWith('Pinpointer');
   });
 
   it('shows photo progress while photos are being read, with pause', async () => {
-    Object.assign(shared, { syncCount: 1240, isSyncing: true });
+    progress.photos = { done: 1240, total: 2400, running: true, queued: false, quick: false };
     await renderGallery();
-    expect(screen.getAllByText('1,240 photos ready to search').length).toBeGreaterThan(0);
+    // The heading says how many can be searched; the card says how far along.
+    expect(screen.getByText('1,240 photos ready to search')).toBeTruthy();
     expect(screen.getByText('Getting your photos ready')).toBeTruthy();
+    expect(screen.getByText('1,240 of 2,400')).toBeTruthy();
     await fireEvent.press(screen.getByText('Pause'));
     expect(shared.handlePauseSync).toHaveBeenCalled();
+  });
+
+  it('counts every photo that is ready, not just the last check', async () => {
+    // A quick check of 50 photos just ended; 2,400 were ready long before.
+    progress.photos = { done: 2400, total: 2400, running: false, queued: false, quick: false };
+    await renderGallery();
+    expect(screen.getByText('2,400 photos ready to search')).toBeTruthy();
+    expect(screen.queryByTestId('gallery-progress')).toBeNull();
+  });
+
+  it('a paused check offers Resume', async () => {
+    shared.isPaused = true;
+    progress.photos = { done: 300, total: 2400, running: false, queued: false, quick: false };
+    await renderGallery();
+    await fireEvent.press(screen.getByText('Resume'));
+    expect(shared.handleResumeSync).toHaveBeenCalled();
+  });
+
+  it('loads the grid again when "some photos" becomes "all photos"', async () => {
+    (getPhotoAccess as jest.Mock).mockResolvedValue('limited');
+    getPhotos.mockResolvedValue(page([PHONE[0]]));
+    await renderGallery();
+    expect(uris()).toEqual(['today']);
+    (getPhotoAccess as jest.Mock).mockResolvedValue('full');
+    getPhotos.mockResolvedValue(page(PHONE));
+    await fireEvent.press(screen.getByText('Allow all photos'));
+    await waitFor(() => expect(uris()).toHaveLength(4));
   });
 
   it('labels each photo with when it was taken', async () => {

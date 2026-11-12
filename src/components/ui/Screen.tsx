@@ -1,5 +1,6 @@
 import React from 'react';
 import { StatusBar, StyleProp, StyleSheet, View, ViewStyle } from 'react-native';
+import LinearGradient from 'react-native-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors } from '../../theme';
 import { useScreenFocus } from '../../hooks/useScreenFocus';
@@ -14,6 +15,8 @@ export interface ScreenProps {
   padTop?: boolean;
   /** Pad for the gesture bar. Off by default: the tab bar already does. */
   padBottom?: boolean;
+  /** A soft violet light behind the header, fading into the canvas. */
+  wash?: boolean;
   style?: StyleProp<ViewStyle>;
   testID?: string;
 }
@@ -34,6 +37,7 @@ export const Screen: React.FC<ScreenProps> = ({
   tone = 'canvas',
   padTop = true,
   padBottom = false,
+  wash = false,
   style,
   testID,
 }) => {
@@ -52,6 +56,14 @@ export const Screen: React.FC<ScreenProps> = ({
       ]}
       testID={testID}
     >
+      {wash && tone === 'canvas' ? (
+        <LinearGradient
+          pointerEvents="none"
+          colors={[Colors.primarySoft, Colors.canvas]}
+          style={styles.wash}
+          testID={testID ? `${testID}-wash` : undefined}
+        />
+      ) : null}
       {focused ? (
         <StatusBar
           barStyle={tone === 'night' ? 'light-content' : 'dark-content'}
@@ -66,4 +78,5 @@ export const Screen: React.FC<ScreenProps> = ({
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
+  wash: { position: 'absolute', top: 0, left: 0, right: 0, height: 240 },
 });

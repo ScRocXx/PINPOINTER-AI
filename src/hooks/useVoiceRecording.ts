@@ -4,10 +4,12 @@ import {
     Platform,
     Vibration,
     Alert,
+    Linking,
     NativeModules,
     NativeEventEmitter,
 } from 'react-native';
 import { AppLogger } from '../utils/AppLogger';
+import { tNow } from '../i18n/current';
 import { createSilenceDetector, subscribeMicLevel } from '../utils/MicLevel';
 
 const { SherpaOnnxModule } = NativeModules;
@@ -155,8 +157,21 @@ export const useVoiceRecording = (onTranscription: (text: string) => void) => {
                 const granted = await PermissionsAndroid.request(
                     PermissionsAndroid.PERMISSIONS.RECORD_AUDIO
                 );
+                if (granted === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN) {
+                    // Android won't show its dialog any more: Settings is the only way.
+                    Alert.alert(tNow('perm.micTitle'), tNow('perm.micSettingsBody'), [
+                        { text: tNow('common.notNow'), style: 'cancel' },
+                        {
+                            text: tNow('perm.openSettings'),
+                            onPress: () => {
+                                Linking.openSettings().catch(e => AppLogger.warn('VoiceRecording', 'Could not open Settings', e));
+                            },
+                        },
+                    ]);
+                    return;
+                }
                 if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
-                    Alert.alert('Permission Denied', 'Microphone permission is required for voice search.');
+                    Alert.alert(tNow('perm.micTitle'), tNow('perm.micBody'));
                     return;
                 }
             }
@@ -165,7 +180,7 @@ export const useVoiceRecording = (onTranscription: (text: string) => void) => {
         } catch (error) {
             AppLogger.error('VoiceRecording', 'Start failed', error);
             Vibration.vibrate([0, 30, 50, 30]);
-            Alert.alert('Voice Error', 'Could not start voice recognition. Please try again.');
+            Alert.alert(tNow('voice.errorTitle'), tNow('voice.errorBody'));
         }
     }, []);
 

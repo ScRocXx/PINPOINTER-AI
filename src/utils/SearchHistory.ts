@@ -3,6 +3,8 @@ import { AppLogger } from './AppLogger';
 
 const HISTORY_KEY = 'search_history';
 const MAX_HISTORY = 30;
+/** A shorter search saved this recently was the same search, still being typed. */
+const TYPING_WINDOW_MS = 2 * 60 * 1000;
 
 /** One saved search-history entry. */
 export interface SearchHistoryItem {
@@ -27,12 +29,18 @@ export const saveSearch = async (query: string, resultCount: number): Promise<vo
     if (!query.trim()) return;
     try {
         const existing = await loadSearchHistory();
-        // Remove any previous entry for same query (move to top)
-        const filtered = existing.filter(
-            h => h.query.toLowerCase() !== query.trim().toLowerCase()
-        );
+        const next = query.trim().toLowerCase();
+        const now = Date.now();
+        const filtered = existing.filter((h) => {
+            const old = h.query.toLowerCase();
+            // The same search again moves to the top.
+            if (old === next) return false;
+            // A slow typist pauses mid-word: "aad", then "aadha", then
+            // "aadhaar". Keep the search they reached, not each step.
+            return !(next.startsWith(old) && now - h.timestamp < TYPING_WINDOW_MS);
+        });
         const updated: SearchHistoryItem[] = [
-            { query: query.trim(), timestamp: Date.now(), resultCount },
+            { query: query.trim(), timestamp: now, resultCount },
             ...filtered,
         ].slice(0, MAX_HISTORY);
         await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(updated));
@@ -61,17 +69,4 @@ export const clearSearchHistory = async (): Promise<void> => {
     } catch (e) {
         AppLogger.error('SearchHistory', 'Failed to clear history', e);
     }
-};
-
-/** Format timestamp as human-readable (e.g. "2h ago", "Yesterday") */
-export const formatSearchTime = (timestamp: number): string => {
-    const diff = Date.now() - timestamp;
-    const mins = Math.floor(diff / 60000);
-    if (mins < 1) return 'just now';
-    if (mins < 60) return `${mins}m ago`;
-    const hours = Math.floor(mins / 60);
-    if (hours < 24) return `${hours}h ago`;
-    const days = Math.floor(hours / 24);
-    if (days === 1) return 'yesterday';
-    return `${days}d ago`;
 };

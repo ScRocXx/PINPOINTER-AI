@@ -205,7 +205,7 @@ export const DocumentVaultScreen: React.FC = () => {
   ) : null;
 
   return (
-    <Screen testID="papers-screen">
+    <Screen wash testID="papers-screen">
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" testID="papers-scroll">
         <ScreenHeader
           title={t('papers.title')}

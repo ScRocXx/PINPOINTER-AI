@@ -1,27 +1,37 @@
-import { useState, useCallback } from 'react';
-import { Alert } from 'react-native';
+import { useState, useCallback, useEffect } from 'react';
 import { loadSavedCursor } from '../utils/GallerySync';
 import { IndexingService } from '../services/IndexingService';
 import { getIndexedCount } from '../database';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AppLogger } from '../utils/AppLogger';
 import { ensurePhotoAccess } from '../utils/StoragePermissions';
+import { getLastChecked, subscribeLastChecked } from '../utils/LastChecked';
+import { useToast } from '../components/ui/Toast';
+import { tNow } from '../i18n/current';
 
 /** Wait after app start before backfilling, so startup stays smooth. */
 const BACKFILL_STARTUP_DELAY_MS = 5000;
 
 /**
- * useGallerySync — the UI side of gallery sync: permission, progress, pause,
- * resume and alerts. The sync loops themselves run in IndexingService, which
- * queues them so only one runs at a time.
+ * useGallerySync — the UI side of gallery sync: permission, pause, resume
+ * and a short note when a check ends. The sync loops themselves run in
+ * IndexingService, which queues them so only one runs at a time.
+ *
+ * `isSyncing` and `syncCount` only know about checks started here. Screens
+ * that show progress use `useIndexingProgress`, which sees every check
+ * (the first run's and the charging-time job's too).
  */
 export const useGallerySync = () => {
+    const toast = useToast();
     const [isSyncing, setIsSyncing] = useState(false);
     const [isPaused, setIsPaused] = useState(false);
     const [isDeepSync, setIsDeepSync] = useState(false);
     const [syncCount, setSyncCount] = useState(0);
-    const [totalImages] = useState(0);
     const [lastSyncTime, setLastSyncTime] = useState<number | null>(null);
+
+    // The service stamps every finished check, whoever started it.
+    useEffect(() => subscribeLastChecked((kind, at) => {
+        if (kind === 'photos') setLastSyncTime(at);
+    }), []);
 
     // Give already-indexed photos that lack a CLIP embedding one, in the
     // background. Safe to call repeatedly: the service runs one at a time.
@@ -42,8 +52,8 @@ export const useGallerySync = () => {
                 setTimeout(startBackfill, BACKFILL_STARTUP_DELAY_MS);
             }
 
-            const timeStr = await AsyncStorage.getItem('gallery_last_sync_time');
-            if (timeStr) setLastSyncTime(parseInt(timeStr, 10));
+            const at = await getLastChecked('photos');
+            if (at) setLastSyncTime(prev => prev ?? at);
         } catch (e) {
             AppLogger.warn('GallerySync', 'Failed to load persisted state', e);
         }
@@ -62,7 +72,7 @@ export const useGallerySync = () => {
             setIsSyncing(true);
             setIsPaused(false);
 
-            const { processed, wasCancelled } = await IndexingService.deepGallerySync(
+            const { wasCancelled } = await IndexingService.deepGallerySync(
                 (currentCount) => setSyncCount(currentCount),
                 fromCursor,
             );
@@ -72,19 +82,17 @@ export const useGallerySync = () => {
                 setIsPaused(true);
             } else {
                 setIsPaused(false);
-                const now = Date.now();
-                setLastSyncTime(now);
-                await AsyncStorage.setItem('gallery_last_sync_time', now.toString());
-                Alert.alert('Gallery Indexed', `Done! ${processed} photos indexed for AI search.`);
+                // A short note, not a pop-up: this can end minutes later, on any screen.
+                toast.show(tNow('progress.photosDone'), { icon: 'check' });
                 startBackfill();
             }
         } catch (error) {
             AppLogger.error('GallerySync', 'Deep sync failed', error);
             setIsSyncing(false);
             setIsPaused(true); // treat error as pause — cursor was saved
-            Alert.alert('Sync Paused', 'Progress saved. Tap Resume to continue.');
+            toast.show(tNow('progress.stopped'), { icon: 'alert', duration: 5000 });
         }
-    }, [startBackfill]);
+    }, [startBackfill, toast]);
 
     const handleQuickSync = useCallback(async () => {
         try {
@@ -100,16 +108,13 @@ export const useGallerySync = () => {
             setIsSyncing(false);
             // Paused: not a finished sync, and no backfill behind the user's back.
             if (wasCancelled) return;
-            const now = Date.now();
-            setLastSyncTime(now);
-            await AsyncStorage.setItem('gallery_last_sync_time', now.toString());
             startBackfill();
         } catch (e) {
             AppLogger.error('GallerySync', 'Quick sync failed', e);
             setIsSyncing(false);
-            Alert.alert('Sync Error', 'Quick sync failed. Please try again.');
+            toast.show(tNow('progress.checkFailed'), { icon: 'alert', duration: 5000 });
         }
-    }, [startBackfill]);
+    }, [startBackfill, toast]);
 
     const handleDeepSync = useCallback(() => {
         setIsDeepSync(true);
@@ -126,7 +131,7 @@ export const useGallerySync = () => {
     }, [runSync]);
 
     return {
-        isSyncing, isPaused, isDeepSync, syncCount, totalImages, lastSyncTime,
+        isSyncing, isPaused, isDeepSync, syncCount, lastSyncTime,
         handleQuickSync, handleDeepSync, handlePauseSync, handleResumeSync,
         loadPersistedCount,
     };

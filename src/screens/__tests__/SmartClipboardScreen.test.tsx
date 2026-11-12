@@ -204,6 +204,17 @@ describe('SmartClipboardScreen', () => {
     expect(screen.getByTestId('scan-start')).toBeTruthy();
   });
 
+  it('says so when the camera cannot open, instead of doing nothing', async () => {
+    const said = jest.spyOn(AccessibilityInfo, 'announceForAccessibility').mockImplementation(() => {});
+    camera.mockResolvedValueOnce({ errorCode: 'camera_unavailable' });
+    await render(<SmartClipboardScreen />);
+    await fireEvent.press(screen.getByTestId('scan-camera'));
+    await waitFor(() => expect(said).toHaveBeenCalledWith('The camera could not open. You can pick a photo instead.'));
+    expect(analyze).not.toHaveBeenCalled();
+    expect(screen.getByTestId('scan-start')).toBeTruthy();
+    said.mockRestore();
+  });
+
   it('reads a photo it was opened with, once, after the screen slides in', async () => {
     params = { scanUri: 'content://media/42' };
     analyze.mockResolvedValue(vision({ raw_text: 'Ticket' }));

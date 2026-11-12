@@ -9,6 +9,7 @@ import {
   relativeTime,
   translate,
 } from './strings';
+import { setCurrentLanguage } from './current';
 import { AppLogger } from '../utils/AppLogger';
 
 export const LANGUAGE_STORAGE_KEY = 'pinpointer.language';
@@ -51,7 +52,16 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode; initialLang
   children,
   initialLanguage,
 }) => {
-  const [lang, setLangState] = useState<Language>(initialLanguage ?? deviceLanguage());
+  const [lang, setLangState] = useState<Language>(() => {
+    const first = initialLanguage ?? deviceLanguage();
+    setCurrentLanguage(first);
+    return first;
+  });
+
+  // Pop-ups and other code outside React read the language from here.
+  useEffect(() => {
+    setCurrentLanguage(lang);
+  }, [lang]);
 
   useEffect(() => {
     if (initialLanguage) return;
@@ -67,6 +77,7 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode; initialLang
   }, [initialLanguage]);
 
   const setLang = useCallback((next: Language) => {
+    setCurrentLanguage(next);
     setLangState(next);
     AsyncStorage.setItem(LANGUAGE_STORAGE_KEY, next).catch(e =>
       AppLogger.warn('Language', 'Could not save the language', e),

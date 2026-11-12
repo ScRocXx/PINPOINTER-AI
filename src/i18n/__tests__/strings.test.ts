@@ -93,4 +93,19 @@ describe('relativeTime', () => {
   it('speaks Hindi too', () => {
     expect(relativeTime('hi', now - 300_000, now)).toBe(translate('hi', 'time.minutesAgo', { n: 5 }));
   });
+  it('counts days on the calendar, the way people say them', () => {
+    const at = (d: number, h: number, m = 0) => new Date(2026, 10, d, h, m).getTime();
+    const morning = at(12, 8, 0);
+    // Yesterday noon is "yesterday", not "20 hours ago".
+    expect(relativeTime('en', at(11, 12), morning)).toBe('yesterday');
+    // The evening before yesterday is two days ago, not "yesterday".
+    expect(relativeTime('en', at(10, 23), morning)).toBe('2 days ago');
+    // Earlier today stays in hours.
+    expect(relativeTime('en', at(12, 1), morning)).toBe('7 hours ago');
+    // A few hours back across midnight is still hours.
+    expect(relativeTime('en', at(11, 23), at(12, 1, 30))).toBe('2 hours ago');
+    // Late at night, this morning is hours ago and yesterday morning is yesterday.
+    expect(relativeTime('en', at(12, 6), at(12, 23, 30))).toBe('17 hours ago');
+    expect(relativeTime('en', at(11, 6), at(12, 23, 30))).toBe('yesterday');
+  });
 });

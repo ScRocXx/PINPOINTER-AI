@@ -25,6 +25,9 @@ export interface SearchFieldProps
   /** The mic is listening: the ring stays on and the mic shows "stop". */
   listening?: boolean;
   stopVoiceLabel?: string;
+  /** Show a Scan button (read the words in a photo) where the mic would be. */
+  onScanPress?: () => void;
+  scanLabel?: string;
   /**
    * Show the field as a big button that opens search (Home). Typing happens
    * on the search screen; this keeps Home calm and the keyboard closed.
@@ -52,6 +55,8 @@ export const SearchField = forwardRef<TextInput, SearchFieldProps>(
       voiceLabel,
       listening = false,
       stopVoiceLabel,
+      onScanPress,
+      scanLabel,
       onPressFake,
       active,
       containerStyle,
@@ -76,6 +81,18 @@ export const SearchField = forwardRef<TextInput, SearchFieldProps>(
         iconSize={22}
         onPress={onVoicePress}
         testID={`${testID}-voice`}
+      />
+    ) : onScanPress ? (
+      <IconButton
+        icon="scan"
+        label={scanLabel ?? t('scan.title')}
+        variant="tonal"
+        size={44}
+        iconSize={22}
+        iconColor={Colors.foundInk}
+        style={styles.scan}
+        onPress={onScanPress}
+        testID={`${testID}-scan`}
       />
     ) : null;
 
@@ -151,6 +168,7 @@ export const SearchField = forwardRef<TextInput, SearchFieldProps>(
 SearchField.displayName = 'SearchField';
 
 const styles = StyleSheet.create({
+  scan: { backgroundColor: Colors.foundSoft },
   field: {
     minHeight: Layout.searchFieldHeight,
     borderRadius: Radius.sm,

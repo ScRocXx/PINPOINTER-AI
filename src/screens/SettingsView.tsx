@@ -12,7 +12,7 @@ import {
   Segmented,
 } from '../components/ui';
 import { Language, useStrings } from '../i18n';
-import { Colors, GUTTER, Radius, Space } from '../theme';
+import { Colors, GUTTER, Radius, Space, Tints } from '../theme';
 import type { DocumentAccess, PhotoAccess } from '../utils/StoragePermissions';
 import { version as APP_VERSION } from '../../package.json';
 
@@ -60,7 +60,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     voice === 'ready' ? t('settings.helpersReady') : voice === 'loading' ? t('settings.helpersLoading') : t('settings.helpersOff');
 
   return (
-    <Screen testID="settings-screen">
+    <Screen wash testID="settings-screen">
       <ScrollView contentContainerStyle={styles.content}>
         <ScreenHeader title={t('settings.title')} />
 
@@ -82,6 +82,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         <Card flush style={styles.gutter}>
           <ListRow
             icon="photos"
+            iconTint={Tints.id}
             title={t('tab.photos')}
             subtitle={photoStatus}
             onPress={onChangePhotos}
@@ -89,6 +90,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           />
           <ListRow
             icon="papers"
+            iconTint={Tints.bill}
             title={t('tab.papers')}
             subtitle={papersStatus}
             onPress={onChangePapers}
@@ -101,6 +103,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         <Card flush style={styles.gutter}>
           <ListRow
             icon="mic"
+            iconTint={Tints.bank}
             title={t('settings.helpers')}
             subtitle={helpersStatus}
             onPress={onOpenHelpers}

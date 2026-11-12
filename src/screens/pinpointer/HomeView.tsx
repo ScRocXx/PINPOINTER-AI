@@ -4,7 +4,9 @@ import LinearGradient from 'react-native-linear-gradient';
 import {
   AppText,
   Button,
+  Card,
   Icon,
+  ListRow,
   PinMark,
   ProgressCard,
   Reveal,
@@ -12,7 +14,7 @@ import {
   SearchField,
 } from '../../components/ui';
 import { StringKey, useStrings } from '../../i18n';
-import { Colors, GUTTER, Radius, Space } from '../../theme';
+import { Colors, GUTTER, Radius, Space, Tints } from '../../theme';
 import type { CollectionId } from '../../utils/Collections';
 import type { PinnedItem } from '../../utils/PinnedItems';
 import type { CollectionTileState } from '../../hooks/useHomeOverview';
@@ -47,11 +49,8 @@ export interface PaperIndexing {
 export interface HomeViewProps {
   /** The big search bar was tapped: open search. */
   onOpenSearch: () => void;
-  /** The mic: start listening, or stop when already listening. */
-  onVoicePress: () => void;
-  listening: boolean;
-  /** Speech is being turned into words. */
-  understanding: boolean;
+  /** Scan, in the search bar: read the words in a photo. (The mic is the tab bar's middle button.) */
+  onScan: () => void;
 
   photos: PhotoIndexing;
   papers: PaperIndexing;
@@ -183,27 +182,33 @@ const HomeStatusArea: React.FC<
       ].filter((l): l is string => !!l);
       return (
         <View style={styles.checked} testID="home-checked">
-          <Icon
-            name={photos.lastChecked ? 'check' : 'clock'}
-            size={22}
-            color={photos.lastChecked ? Colors.success : Colors.textSecondary}
-            strokeWidth={2.25}
-          />
-          <View style={styles.flex}>
-            {lines.map(line => (
-              <AppText key={line} variant="small" color="textSecondary">
-                {line}
-              </AppText>
-            ))}
+          <View style={styles.checkedTop}>
+            <View style={[styles.checkedBadge, photos.lastChecked ? styles.checkedBadgeDone : null]}>
+              <Icon
+                name={photos.lastChecked ? 'check' : 'clock'}
+                size={22}
+                color={photos.lastChecked ? Colors.success : Colors.textSecondary}
+                strokeWidth={2.25}
+              />
+            </View>
+            <View style={styles.flex}>
+              {lines.map(line => (
+                <AppText key={line} variant="small" color="textSecondary">
+                  {line}
+                </AppText>
+              ))}
+            </View>
           </View>
-          <Button
-            label={photos.lastChecked ? t('progress.checkAgain') : t('home.checkNow')}
-            onPress={() => onCheck(false)}
-            variant="ghost"
-            size="compact"
-            icon="refresh"
-            testID="home-check"
-          />
+          <View style={styles.checkedAction}>
+            <Button
+              label={photos.lastChecked ? t('progress.checkAgain') : t('home.checkNow')}
+              onPress={() => onCheck(false)}
+              variant="ghost"
+              size="compact"
+              icon="refresh"
+              testID="home-check"
+            />
+          </View>
         </View>
       );
     }
@@ -218,9 +223,7 @@ const HomeStatusArea: React.FC<
  */
 export const HomeView: React.FC<HomeViewProps> = ({
   onOpenSearch,
-  onVoicePress,
-  listening,
-  understanding,
+  onScan,
   photos,
   papers,
   onCheck,
@@ -236,11 +239,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
 }) => {
   const { t } = useStrings();
   const hour = (now ?? new Date()).getHours();
-  const placeholder = listening
-    ? t('search.listening')
-    : understanding
-      ? t('search.understanding')
-      : t('home.searchHint');
+  const placeholder = t('home.searchHint');
 
   const rows: CollectionId[][] = [];
   for (let i = 0; i < TILE_ORDER.length; i += 2) rows.push(TILE_ORDER.slice(i, i + 2));
@@ -285,15 +284,20 @@ export const HomeView: React.FC<HomeViewProps> = ({
           <AppText variant="display">{t('home.title')}</AppText>
         </Reveal>
 
-        <Reveal index={2} style={styles.gutter}>
+        <Reveal index={2} style={styles.search}>
           <SearchField
             placeholder={placeholder}
             onPressFake={onOpenSearch}
-            onVoicePress={understanding ? () => {} : onVoicePress}
-            listening={listening}
-            active={listening || understanding}
+            onScanPress={onScan}
             testID="home-search"
           />
+          {/* Speaking is the quickest way in: point at the mic in the bar below. */}
+          <View style={styles.speakHint} testID="home-speak-hint">
+            <Icon name="mic" size={18} color={Colors.primary} strokeWidth={2.25} />
+            <AppText variant="small" color="textSecondary" style={styles.flex}>
+              {t('home.speakHint')}
+            </AppText>
+          </View>
         </Reveal>
 
         <Reveal index={3} style={styles.gutter}>
@@ -328,6 +332,18 @@ export const HomeView: React.FC<HomeViewProps> = ({
           </View>
         </View>
 
+        <Card flush style={styles.scanRow}>
+          <ListRow
+            icon="scan"
+            iconTint={Tints.bank}
+            title={t('scan.title')}
+            subtitle={t('home.scanBody')}
+            onPress={onScan}
+            last
+            testID="home-scan"
+          />
+        </Card>
+
         <View style={styles.section}>
           <ImportantShelf items={pinned} onOpen={onOpenPinned} />
         </View>
@@ -347,6 +363,9 @@ const styles = StyleSheet.create({
   wash: { position: 'absolute', top: 0, left: 0, right: 0, height: 360 },
   page: { paddingTop: Space.sm, paddingBottom: Space.huge, gap: Space.xl },
   gutter: { paddingHorizontal: GUTTER },
+  search: { paddingHorizontal: GUTTER, gap: Space.sm },
+  speakHint: { flexDirection: 'row', alignItems: 'center', gap: Space.xs, paddingLeft: Space.xs },
+  scanRow: { marginHorizontal: GUTTER },
   header: {
     paddingHorizontal: GUTTER,
     minHeight: 48,
@@ -366,12 +385,28 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.surface,
   },
   hello: { paddingHorizontal: GUTTER, gap: Space.xxs },
+  // A small card: when things were checked, then the button on its own line,
+  // so the words never squeeze into a narrow column beside it.
   checked: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Space.md,
-    paddingLeft: Space.xs,
+    paddingTop: Space.md,
+    paddingHorizontal: Space.md,
+    paddingBottom: Space.xs,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: Colors.line,
+    backgroundColor: Colors.surface,
   },
+  checkedAction: { alignSelf: 'flex-end' },
+  checkedTop: { flexDirection: 'row', alignItems: 'center', gap: Space.md, alignSelf: 'stretch' },
+  checkedBadge: {
+    width: 40,
+    height: 40,
+    borderRadius: Radius.pill,
+    backgroundColor: Colors.sunken,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkedBadgeDone: { backgroundColor: Colors.successSoft },
   section: { gap: 0 },
   sectionTitle: { paddingHorizontal: GUTTER, marginBottom: Space.md },
   grid: { paddingHorizontal: GUTTER, gap: Space.md },

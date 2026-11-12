@@ -21,6 +21,8 @@ import {
     requestPhotoAccess,
 } from '../StoragePermissions';
 
+import { setCurrentLanguage } from '../../i18n/current';
+
 jest.mock('../AppLogger', () => ({
     AppLogger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
 }));
@@ -79,6 +81,7 @@ beforeEach(() => {
 afterEach(() => {
     jest.restoreAllMocks();
     setPlatform('ios', undefined);
+    setCurrentLanguage('en');
 });
 
 describe('photo access state', () => {
@@ -137,6 +140,33 @@ describe('ensurePhotoAccess', () => {
         expect(alertSpy).not.toHaveBeenCalled();
     });
 
+    it('speaks Hindi when the app is in Hindi', async () => {
+        setCurrentLanguage('hi');
+        requestResults[P.READ_MEDIA_IMAGES] = R.NEVER_ASK_AGAIN;
+        const result = ensurePhotoAccess();
+        await flush();
+        const [title, body, buttons] = alertSpy.mock.calls[0] as [string, string, Array<{ text: string }>];
+        expect(title).toBe('Pinpointer के लिए फ़ोटो बंद हैं');
+        expect(body).toContain('1. “सेटिंग्स खोलें” दबाएँ');
+        expect(body.replace(/Pinpointer/g, '')).not.toMatch(/[A-Za-z]{3,}/);
+        expect(buttons.map((b) => b.text)).toEqual(['अभी नहीं', 'सेटिंग्स खोलें']);
+        press('अभी नहीं');
+        expect(await result).toBe(false);
+    });
+
+    it('names the Settings rows this Android version really has', async () => {
+        setPlatform('android', 32);
+        requestResults[P.READ_EXTERNAL_STORAGE] = R.NEVER_ASK_AGAIN;
+        const result = ensurePhotoAccess();
+        await flush();
+        const body = alertSpy.mock.calls[0][1] as string;
+        expect(body).toContain('“Files and media”');
+        expect(body).toContain('Choose “Allow”');
+        expect(body).not.toContain('Allow all');
+        press('Not now');
+        expect(await result).toBe(false);
+    });
+
     it('returns false without an extra alert when the user just tapped "Don\'t allow"', async () => {
         expect(await ensurePhotoAccess()).toBe(false);
         expect(alertSpy).not.toHaveBeenCalled();
@@ -146,7 +176,7 @@ describe('ensurePhotoAccess', () => {
         granted.add(P.READ_MEDIA_VISUAL_USER_SELECTED);
         const result = ensurePhotoAccess();
         await flush();
-        expect(alertSpy).toHaveBeenCalledWith('Only some photos allowed', expect.stringContaining('Allow all'), expect.any(Array), expect.anything());
+        expect(alertSpy).toHaveBeenCalledWith('Pinpointer can see only some photos', expect.stringContaining('Allow all'), expect.any(Array), expect.anything());
         press('Keep my choice');
         expect(await result).toBe(true);
         expect(Linking.openSettings).not.toHaveBeenCalled();
@@ -181,7 +211,7 @@ describe('ensurePhotoAccess', () => {
         requestResults[P.READ_MEDIA_IMAGES] = R.NEVER_ASK_AGAIN;
         const result = ensurePhotoAccess();
         await flush();
-        expect(alertSpy).toHaveBeenCalledWith('Photos permission is off', expect.stringContaining('Open Settings'), expect.any(Array), expect.anything());
+        expect(alertSpy).toHaveBeenCalledWith('Photos are turned off for Pinpointer', expect.stringContaining('Open Settings'), expect.any(Array), expect.anything());
         press('Open Settings');
         await flush();
         granted.add(P.READ_MEDIA_IMAGES);
@@ -253,7 +283,7 @@ describe('document access', () => {
     it('opens the All Files Access screen and resolves with the state after the user is back', async () => {
         const result = ensureDocumentAccess();
         await flush();
-        expect(alertSpy).toHaveBeenCalledWith('Allow Pinpointer to find your PDFs', expect.any(String), expect.any(Array), expect.anything());
+        expect(alertSpy).toHaveBeenCalledWith('Let Pinpointer find your PDFs', expect.any(String), expect.any(Array), expect.anything());
         press('Open Settings');
         await flush();
         expect(StorageModule.openAllFilesAccessSettings).toHaveBeenCalledTimes(1);
@@ -276,7 +306,7 @@ describe('document access', () => {
         requestResults[P.READ_EXTERNAL_STORAGE] = R.NEVER_ASK_AGAIN;
         const result = ensureDocumentAccess();
         await flush();
-        expect(alertSpy).toHaveBeenCalledWith('Files permission is off', expect.any(String), expect.any(Array), expect.anything());
+        expect(alertSpy).toHaveBeenCalledWith('Files are turned off for Pinpointer', expect.any(String), expect.any(Array), expect.anything());
         press('Open Settings');
         await flush();
         granted.add(P.READ_EXTERNAL_STORAGE);

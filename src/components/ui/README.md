@@ -15,7 +15,7 @@ import { useStrings } from '../i18n';
 Light and high-contrast: canvas `#F6F5FA`, white cards, ink text. Violet
 (`Colors.primary`) is for buttons, links and the active tab. Pinpointer's
 signature is **the beam**, a cyan → blue → violet gradient, and it appears only
-on things that *find*: the search ring, the mic, the Scan button, progress
+on things that *find*: the search ring, the mic (the tab bar's middle button), the main Scan action, progress
 fills and the active-tab mark. Never put words on the beam. The second motif
 is the **lock-on corners**, four brackets that close in on what was found.
 Cyan (`Colors.found`) marks matches, marigold (`Colors.important`) marks
@@ -33,7 +33,7 @@ Cyan (`Colors.found`) marks matches, marigold (`Colors.important`) marks
    Icon-only buttons need a `label`.
 4. **Colour**: semantic names from `Colors` only. Every text colour pair
    passes 4.5:1 and `src/theme/__tests__/theme.test.ts` checks it; add any
-   new pair there. `AppColors` is the old dark palette: don't use it.
+   new pair there.
 5. **Motion**: tokens from `motion.ts` (`Duration`, `Ease`, `Spring`),
    `useNativeDriver: true`, and respect `useReducedMotion()`. No decorative
    loops; loops only while work runs (listening, searching).
@@ -97,7 +97,7 @@ screenshots (`npm run dev`, `npm run shots`). See its README.
 
 The app is a stack (`Main`, `SmartClipboard`, `Home`) whose `Main` route holds
 four tabs: `Pinpointer` (Home), `Gallery` (Photos), `DocumentVault` (Papers),
-`Settings`, with Scan in the middle of the bar. Screens type navigation with
+`Settings`, with the mic (Speak) in the middle of the bar. Screens type navigation with
 `RootStackParamList` (every route by name). Hide the bar with
 `navigation.setOptions({ tabBarHidden: true })`.
 

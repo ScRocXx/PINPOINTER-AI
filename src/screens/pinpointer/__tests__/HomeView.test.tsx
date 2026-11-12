@@ -36,9 +36,7 @@ const tiles = (over: Partial<Record<CollectionId, CollectionTileState>> = {}): R
 
 const props = (over: Partial<HomeViewProps> = {}): HomeViewProps => ({
   onOpenSearch: jest.fn(),
-  onVoicePress: jest.fn(),
-  listening: false,
-  understanding: false,
+  onScan: jest.fn(),
   photos: idle,
   papers: noPapers,
   onCheck: jest.fn(),
@@ -120,13 +118,24 @@ describe('HomeView', () => {
     expect(screen.getByLabelText('Works without internet. Nothing leaves your phone.')).toBeTruthy();
   });
 
-  test('the search bar opens search and the mic starts voice search', async () => {
+  test('the search bar opens search and its Scan button opens Scan', async () => {
     const p = props();
     await renderHome(p);
     await fireEvent.press(screen.getByTestId('home-search-open'));
     expect(p.onOpenSearch).toHaveBeenCalled();
-    await fireEvent.press(screen.getByLabelText('Search by voice'));
-    expect(p.onVoicePress).toHaveBeenCalled();
+    await fireEvent.press(screen.getByLabelText('Read text from a photo'));
+    expect(p.onScan).toHaveBeenCalled();
+    // The mic lives on the tab bar's middle button, not here.
+    expect(screen.queryByLabelText('Search by voice')).toBeNull();
+  });
+
+  test('points at the Speak button, and names Scan in a row of its own', async () => {
+    const p = props();
+    await renderHome(p);
+    expect(screen.getByTestId('home-speak-hint')).toHaveTextContent('Or press Speak below and just say it');
+    await fireEvent.press(screen.getByTestId('home-scan'));
+    expect(p.onScan).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('A bill, a letter or a medicine strip')).toBeTruthy();
   });
 
   test('six Find quickly tiles, in two columns', async () => {
@@ -202,12 +211,6 @@ describe('HomeView', () => {
     );
     await fireEvent.press(screen.getByLabelText('Photo, 1 of 1'));
     expect(p.onOpenPhoto).toHaveBeenCalledWith('content://9');
-  });
-
-  test('while listening, the bar says so and the beam ring is on', async () => {
-    await renderHome(props({ listening: true }));
-    expect(screen.getByLabelText('Listening… tap to stop')).toBeTruthy();
-    expect(screen.getByLabelText('Stop listening')).toBeTruthy();
   });
 
   test('reads in Hindi', async () => {

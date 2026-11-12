@@ -12,7 +12,7 @@
  * StorageModule come from the preset / jest.setup.js stubs.
  * Platform.OS is forced to 'android' except in the iOS-specific tests.
  */
-import { Alert, AppState, DeviceEventEmitter, Linking, NativeModules, Platform } from 'react-native';
+import { AccessibilityInfo, Alert, AppState, DeviceEventEmitter, Linking, NativeModules, Platform } from 'react-native';
 import RNFS from 'react-native-fs';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { act, renderHook } from '@testing-library/react-native';
@@ -68,6 +68,8 @@ const DOWNLOAD = RNFS.DownloadDirectoryPath; // '/mock/DownloadDirectoryPath'
 const DOCS_DIR = `${RNFS.ExternalStorageDirectoryPath}/Documents`;
 
 const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+// Without a ToastProvider a toast is only read aloud.
+const saidSpy = jest.spyOn(AccessibilityInfo, 'announceForAccessibility').mockImplementation(() => {});
 const consoleErrorSpy = jest
   .spyOn(console, 'error')
   .mockImplementation(() => {});
@@ -127,11 +129,7 @@ describe('mount & persisted state', () => {
     const { result } = await renderHook(() => useDocumentSync());
     await act(async () => {});
     expect(result.current.lastDocSyncTime).toBeNull();
-    expect(AppLogger.error).toHaveBeenCalledWith(
-      'DocumentSync',
-      'Failed to load persisted time',
-      expect.any(Error),
-    );
+    expect(AppLogger.warn).toHaveBeenCalledWith('LastChecked', 'Could not read the time', expect.any(Error));
   });
 
   test('loadPersistedState can be re-invoked to refresh the timestamp', async () => {
@@ -273,6 +271,9 @@ describe('handleDocumentSync — android happy path', () => {
 
   test('persists last-sync time when the run completes', async () => {
     const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(1700000000000);
+    (RNFS.readDir as jest.Mock).mockImplementation(async (p: string) =>
+      p === DOWNLOAD ? asItems([pdfFile('a.pdf', `${DOWNLOAD}/a.pdf`)]) : asItems([]),
+    );
     try {
       const { result } = await renderHook(() => useDocumentSync());
       await act(async () => {
@@ -516,21 +517,35 @@ describe('handleDocumentSync — empty scan & permission flow', () => {
     expect(result.current.isSyncingDocs).toBe(false);
   });
 
-  test('last-sync time is persisted when the scan finds nothing', async () => {
-    const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(1700000000001);
-    try {
-      const { result } = await renderHook(() => useDocumentSync());
-      await act(async () => {
-        await result.current.handleDocumentSync();
-      });
-      expect(result.current.lastDocSyncTime).toBe(1700000000001);
-      expect(AsyncStorage.setItem).toHaveBeenCalledWith(
-        'doc_last_sync_time',
-        '1700000000001',
-      );
-    } finally {
-      nowSpy.mockRestore();
-    }
+  test('finding no PDFs at all is not "papers checked": there is nothing to say yet', async () => {
+    const { result } = await renderHook(() => useDocumentSync());
+    await act(async () => {
+      await result.current.handleDocumentSync();
+    });
+    expect(result.current.lastDocSyncTime).toBeNull();
+    expect(AsyncStorage.setItem).not.toHaveBeenCalledWith('doc_last_sync_time', expect.anything());
+  });
+
+  test('a quiet check never asks for PDF access', async () => {
+    (StorageModule.hasAllFilesAccess as jest.Mock).mockResolvedValue(false);
+    const { result } = await renderHook(() => useDocumentSync());
+    await act(async () => {
+      // Home's "Check again": the person asked about photos, not PDFs.
+      await result.current.handleDocumentSync(50, false, false);
+    });
+    expect(alertSpy).not.toHaveBeenCalled();
+    expect(result.current.isSyncingDocs).toBe(false);
+  });
+
+  test('follows the time of a check started somewhere else (the first run)', async () => {
+    (RNFS.readDir as jest.Mock).mockImplementation(async (p: string) =>
+      p === DOWNLOAD ? asItems([pdfFile('a.pdf', `${DOWNLOAD}/a.pdf`)]) : asItems([]),
+    );
+    const { result } = await renderHook(() => useDocumentSync());
+    await act(async () => {
+      await IndexingService.documentSync();
+    });
+    expect(result.current.lastDocSyncTime).toEqual(expect.any(Number));
   });
 
   test('without All Files Access it explains the steps and does not scan', async () => {
@@ -544,7 +559,7 @@ describe('handleDocumentSync — empty scan & permission flow', () => {
     });
 
     expect(alertSpy).toHaveBeenCalledWith(
-      'Allow Pinpointer to find your PDFs',
+      'Let Pinpointer find your PDFs',
       expect.stringContaining('Allow access to manage all files'),
       expect.any(Array),
       expect.anything(),
@@ -835,8 +850,9 @@ describe('PDFs from picked folders and Share', () => {
       await flushAll();
     });
 
-    expect(alertSpy).toHaveBeenCalledWith('PDF added', expect.stringContaining('search'));
-    expect(alertSpy).not.toHaveBeenCalledWith('Allow Pinpointer to find your PDFs', expect.anything(), expect.anything(), expect.anything());
+    // A short note, and no pop-up of any kind.
+    expect(saidSpy).toHaveBeenCalledWith('PDF added. Pinpointer is reading it now.');
+    expect(alertSpy).not.toHaveBeenCalled();
     expect(processPDF).toHaveBeenCalledWith(`file://${IMPORTED}/shared-9f.pdf`);
   });
 });

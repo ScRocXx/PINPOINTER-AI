@@ -19,6 +19,8 @@
 import { Alert, AppState, AppStateStatus, Linking, NativeModules, PermissionsAndroid, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AppLogger } from './AppLogger';
+import { tNow } from '../i18n/current';
+import type { StringKey } from '../i18n/strings';
 import { canRequestAllFilesAccess, isPdfImportAvailable, listPdfFolders, pickPdfFiles, pickPdfFolder } from './PdfImport';
 
 const { StorageModule } = NativeModules;
@@ -86,29 +88,34 @@ export const requestPhotoAccess = async (): Promise<PhotoAccess> => {
 };
 
 /**
- * Resolves on the next time the app returns to the foreground. Used after
- * sending the user to a Settings screen.
+ * Waits for the next time the app returns to the foreground. Used after
+ * sending the user to a Settings screen. `cancel` stops listening when
+ * nothing was opened after all.
  */
-const waitForReturn = (): Promise<void> => new Promise((resolve) => {
+const waitForReturn = (): { back: Promise<void>; cancel: () => void } => {
     let left = false;
+    let done: () => void = () => undefined;
+    const back = new Promise<void>((resolve) => { done = resolve; });
     const sub = AppState.addEventListener('change', (state: AppStateStatus) => {
         if (state !== 'active') {
             left = true;
         } else if (left) {
             sub.remove();
-            resolve();
+            done();
         }
     });
-});
+    return { back, cancel: () => sub.remove() };
+};
 
 /** Runs `open` (which leaves the app) and resolves once the user is back. */
 const openThenWait = async (open: () => unknown): Promise<void> => {
-    const back = waitForReturn();
+    const { back, cancel } = waitForReturn();
     try {
         await open();
     } catch (e) {
         AppLogger.warn('StoragePermissions', 'Could not open Settings', e);
-        return; // nothing was opened, so don't wait for a return that won't come
+        cancel(); // nothing was opened, so don't wait for a return that won't come
+        return;
     }
     await back;
 };
@@ -121,9 +128,10 @@ export const openAppSettingsAndWait = async (): Promise<PhotoAccess> => {
 
 /**
  * Alert with a cancel button and up to two more; resolves with the label of
- * the button tapped, or null for cancel / dismiss.
+ * the button tapped, or null for cancel / dismiss. Callers pass words from
+ * the strings list, in the app's language.
  */
-const choose = (title: string, message: string, options: string[], cancel = 'Not now'): Promise<string | null> =>
+const choose = (title: string, message: string, options: string[], cancel = tNow('common.notNow')): Promise<string | null> =>
     new Promise((resolve) => {
         Alert.alert(title, message, [
             { text: cancel, style: 'cancel', onPress: () => resolve(null) },
@@ -132,8 +140,22 @@ const choose = (title: string, message: string, options: string[], cancel = 'Not
     });
 
 /** Alert with a Cancel and a primary button; resolves true if the primary button was tapped. */
-const ask = async (title: string, message: string, primary: string, cancel = 'Not now'): Promise<boolean> =>
+const ask = async (title: string, message: string, primary: string, cancel?: string): Promise<boolean> =>
     (await choose(title, message, [primary], cancel)) === primary;
+
+/** "Intro.\n\n1. …\n2. …" in the app's language. */
+const withSteps = (intro: string, steps: StringKey[]): string =>
+    `${intro}\n\n${steps.map((key, i) => `${i + 1}. ${tNow(key)}`).join('\n')}`;
+
+/** The Settings steps that turn photos on, in this phone's own words. */
+const photoSettingsSteps = (): StringKey[] => {
+    const wording = photoSettingsWording();
+    return [
+        'onboarding.settingsStep1',
+        wording.list === 'photos' ? 'onboarding.photosStep2' : 'onboarding.photosStep2Files',
+        wording.choice === 'allowAll' ? 'onboarding.photosStep3' : 'onboarding.photosStep3Allow',
+    ];
+};
 
 /**
  * Makes sure Pinpointer can read photos, guiding the user to Settings when
@@ -150,11 +172,10 @@ export const ensurePhotoAccess = async (): Promise<boolean> => {
         const alreadyOk = await AsyncStorage.getItem(LIMITED_OK_KEY).catch(() => null);
         if (alreadyOk) return true;
         const fix = await ask(
-            'Only some photos allowed',
-            'Pinpointer can only search the photos you picked.\n\n' +
-            'To search all your photos:\n1. Tap "Open Settings"\n2. Tap "Permissions", then "Photos and videos"\n3. Choose "Allow all"',
-            'Open Settings',
-            'Keep my choice',
+            tNow('perm.limitedTitle'),
+            withSteps(tNow('perm.limitedAlertBody'), photoSettingsSteps()),
+            tNow('perm.openSettings'),
+            tNow('perm.keepChoice'),
         );
         if (fix) {
             access = await openAppSettingsAndWait();
@@ -166,10 +187,9 @@ export const ensurePhotoAccess = async (): Promise<boolean> => {
 
     if (access === 'blocked') {
         const fix = await ask(
-            'Photos permission is off',
-            'To find your photos, Pinpointer needs permission to see them. Your photos never leave this phone.\n\n' +
-            '1. Tap "Open Settings"\n2. Tap "Permissions", then "Photos and videos"\n3. Choose "Allow all"',
-            'Open Settings',
+            tNow('onboarding.photosBlockedTitle'),
+            withSteps(tNow('perm.photosOffBody'), photoSettingsSteps()),
+            tNow('perm.openSettings'),
         );
         if (!fix) return false;
         access = await openAppSettingsAndWait();
@@ -257,15 +277,22 @@ export const openAllFilesAccessAndWait = async (): Promise<boolean> => {
 export const ensureDocumentAccess = async (): Promise<boolean> => {
     if (await hasDocumentAccess()) return true;
 
+    const SETTINGS = tNow('perm.openSettings');
+    const FOLDER = tNow('papers.chooseFolder');
+    const FILES = tNow('papers.pickPdfs');
+
     if (apiLevel() < ANDROID_11) {
         const result = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE);
         if (result === PermissionsAndroid.RESULTS.GRANTED) return true;
         if (result !== PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN) return false;
         const fix = await ask(
-            'Files permission is off',
-            'To find your PDFs, Pinpointer needs permission to read files. Your files never leave this phone.\n\n' +
-            '1. Tap "Open Settings"\n2. Tap "Permissions", then "Files and media"\n3. Choose "Allow"',
-            'Open Settings',
+            tNow('perm.filesOffTitle'),
+            withSteps(tNow('perm.filesOffBody'), [
+                'onboarding.settingsStep1',
+                'onboarding.photosStep2Files',
+                'onboarding.photosStep3Allow',
+            ]),
+            SETTINGS,
         );
         if (!fix) return false;
         await openThenWait(() => Linking.openSettings());
@@ -276,15 +303,10 @@ export const ensureDocumentAccess = async (): Promise<boolean> => {
     // Folders picked earlier are enough: sync quietly from those.
     if (canPickFolders && (await listPdfFolders()).length > 0) return true;
 
-    const SETTINGS = 'Open Settings';
-    const FOLDER = 'Choose a folder';
-    const FILES = 'Pick PDFs';
-
     if (!(await canRequestAllFilesAccess())) {
         const choice = await choose(
-            'Show Pinpointer your PDFs',
-            'Choose a folder with your PDFs, or pick PDFs one by one. They never leave this phone.\n\n' +
-            'Tip: from any app you can also tap Share, then Pinpointer.',
+            tNow('perm.pdfsPickTitle'),
+            `${tNow('perm.pdfsPickBody')}\n\n${tNow('papers.shareTip')}`,
             [FILES, FOLDER],
         );
         if (choice === FOLDER) return !!(await pickPdfFolder());
@@ -293,10 +315,12 @@ export const ensureDocumentAccess = async (): Promise<boolean> => {
     }
 
     const choice = await choose(
-        'Allow Pinpointer to find your PDFs',
-        'Pinpointer searches the PDFs on this phone (for example in Downloads). They never leave the phone.\n\n' +
-        '1. Tap "Open Settings"\n2. Turn on the switch next to "Allow access to manage all files"\n3. Press Back to return here' +
-        (canPickFolders ? '\n\nOr tap "Choose a folder" to pick just one folder.' : ''),
+        tNow('onboarding.filesTitle'),
+        withSteps(tNow('perm.pdfsAllBody'), [
+            'onboarding.settingsStep1',
+            'onboarding.filesGuide1',
+            'onboarding.filesGuide2',
+        ]) + (canPickFolders ? `\n\n${tNow('perm.pdfsOrFolder', { button: FOLDER })}` : ''),
         canPickFolders ? [FOLDER, SETTINGS] : [SETTINGS],
     );
     if (choice === FOLDER) return !!(await pickPdfFolder());

@@ -4,7 +4,7 @@ import { countCheckedFiles, getCollectionPreview, getSimilarPhotos } from '../da
 import { encodeText } from '../services/EmbeddingService';
 import { AppLogger } from '../utils/AppLogger';
 import { COLLECTIONS, CollectionId, getCollection } from '../utils/Collections';
-import { getRecentPhotos } from '../utils/RecentPhotos';
+import { getRecentPhotos, subscribeRecentPhotos } from '../utils/RecentPhotos';
 
 /** What one "Find quickly" tile shows. */
 export interface CollectionTileState {
@@ -152,6 +152,15 @@ export const useHomeOverview = ({ busy, progressTick = 0 }: HomeOverviewOptions)
       clearTimeout(timer);
     };
   }, [loadAll, mergeTiles]);
+
+  // A photo opened anywhere (search, Photos, here) goes to the front at once.
+  useEffect(
+    () =>
+      subscribeRecentPhotos(photos => {
+        if (alive.current) setRecent(photos.slice(0, RECENT_LIMIT).map(p => p.uri));
+      }),
+    [],
+  );
 
   // While indexing runs: keep the count and the tiles moving, gently.
   useEffect(() => {

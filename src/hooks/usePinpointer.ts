@@ -31,7 +31,7 @@ export const usePinpointer = () => {
     } = useSearch(true); // DB is initialized in App.tsx
 
     const {
-        isSyncing, isPaused, isDeepSync, syncCount, totalImages, lastSyncTime,
+        isSyncing, isPaused, isDeepSync, syncCount, lastSyncTime,
         handleQuickSync, handleDeepSync, handlePauseSync, handleResumeSync,
         loadPersistedCount,
     } = useGallerySync();
@@ -138,7 +138,7 @@ export const usePinpointer = () => {
         startListening, stopListening, cancelListening,
 
         // Sync
-        isSyncing, isPaused, isDeepSync, syncCount, totalImages, lastSyncTime,
+        isSyncing, isPaused, isDeepSync, syncCount, lastSyncTime,
         handleQuickSync, handleDeepSync, handlePauseSync, handleResumeSync,
         isSyncingDocs, docSyncCount, totalDocs, lastDocSyncTime, handleDocumentSync,
 

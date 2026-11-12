@@ -9,7 +9,7 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AppLogger } from '../AppLogger';
-import { RecentPhoto, addRecentPhoto, getRecentPhotos } from '../RecentPhotos';
+import { RecentPhoto, addRecentPhoto, getRecentPhotos, subscribeRecentPhotos } from '../RecentPhotos';
 
 jest.mock('../AppLogger', () => ({
     AppLogger: {
@@ -140,5 +140,29 @@ describe('RecentPhoto shape', () => {
         const [photo]: RecentPhoto[] = await getRecentPhotos();
         expect(typeof photo.uri).toBe('string');
         expect(typeof photo.viewedAt).toBe('number');
+    });
+});
+
+describe('opening photos quickly', () => {
+    it('keeps every view when photos are swiped through one after another', async () => {
+        // Not awaited one by one: the viewer doesn't wait either.
+        await Promise.all([addRecentPhoto('a.jpg'), addRecentPhoto('b.jpg'), addRecentPhoto('c.jpg')]);
+        expect((await getRecentPhotos()).map(p => p.uri)).toEqual(['c.jpg', 'b.jpg', 'a.jpg']);
+    });
+
+    it('tells listeners the new list, and stops after unsubscribe', async () => {
+        const heard = jest.fn();
+        const stop = subscribeRecentPhotos(heard);
+        await addRecentPhoto('a.jpg');
+        expect(heard).toHaveBeenCalledTimes(1);
+        expect(heard.mock.calls[0][0].map((p: RecentPhoto) => p.uri)).toEqual(['a.jpg']);
+        stop();
+        await addRecentPhoto('b.jpg');
+        expect(heard).toHaveBeenCalledTimes(1);
+    });
+
+    it('reads damaged storage as empty', async () => {
+        await AsyncStorage.setItem('recent_viewed_photos', '{"not":"a list"}');
+        expect(await getRecentPhotos()).toEqual([]);
     });
 });

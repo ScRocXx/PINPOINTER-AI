@@ -24,8 +24,15 @@ jest.mock('../../services/EmbeddingService', () => ({
   encodeText: jest.fn(),
 }));
 
+let mockRecentListener: ((photos: Array<{ uri: string; viewedAt: number }>) => void) | null = null;
 jest.mock('../../utils/RecentPhotos', () => ({
   getRecentPhotos: jest.fn(),
+  subscribeRecentPhotos: jest.fn((listener: (photos: Array<{ uri: string; viewedAt: number }>) => void) => {
+    mockRecentListener = listener;
+    return () => {
+      mockRecentListener = null;
+    };
+  }),
 }));
 
 const mockChecked = countCheckedFiles as jest.Mock;
@@ -178,6 +185,21 @@ describe('useHomeOverview', () => {
       await waitFor(() => expect(result.current.recent).toHaveLength(8));
       expect(result.current.recent[0]).toBe('file:///r0.jpg');
       expect(result.current.recent[7]).toBe('file:///r7.jpg');
+    });
+
+    it('puts a photo opened just now at the front, without waiting for a reload', async () => {
+      mockRecent.mockResolvedValue([{ uri: 'file:///old.jpg', viewedAt: 1 }]);
+      const { result, unmount } = await mount();
+      await waitFor(() => expect(result.current.recent).toEqual(['file:///old.jpg']));
+      await act(async () => {
+        mockRecentListener?.([
+          { uri: 'file:///new.jpg', viewedAt: 2 },
+          { uri: 'file:///old.jpg', viewedAt: 1 },
+        ]);
+      });
+      expect(result.current.recent).toEqual(['file:///new.jpg', 'file:///old.jpg']);
+      await unmount();
+      expect(mockRecentListener).toBeNull();
     });
   });
 

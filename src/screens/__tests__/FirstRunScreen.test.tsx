@@ -100,7 +100,7 @@ jest.mock('../../services/IndexingService', () => ({
 }));
 
 const mockProgress: IndexingProgress = {
-  photos: { done: 0, total: null, running: false, queued: false },
+  photos: { done: 0, total: null, running: false, queued: false, quick: false },
   papers: { done: 0, total: null, running: false, queued: false },
 };
 jest.mock('../../hooks/useIndexingProgress', () => ({ useIndexingProgress: () => mockProgress }));
@@ -145,7 +145,7 @@ beforeEach(() => {
     allFilesApplies: true,
     calls: { request: 0, openSettings: 0, allowAll: 0, chooseFolder: 0, pickFiles: 0 },
   });
-  mockProgress.photos = { done: 0, total: null, running: false, queued: false };
+  mockProgress.photos = { done: 0, total: null, running: false, queued: false, quick: false };
   mockProgress.papers = { done: 0, total: null, running: false, queued: false };
   backHandlers = [];
   jest.spyOn(BackHandler, 'addEventListener').mockImplementation(((_: string, fn: () => boolean) => {
@@ -351,7 +351,7 @@ describe('getting ready', () => {
   });
 
   it('shows the count in plain numbers', async () => {
-    mockProgress.photos = { done: 120, total: 2400, running: true, queued: false };
+    mockProgress.photos = { done: 120, total: 2400, running: true, queued: false, quick: false };
     mockProgress.papers = { done: 0, total: null, running: false, queued: true };
     await toReady();
     expect(screen.getByRole('header', { name: en['progress.photosTitle'] })).toBeTruthy();
