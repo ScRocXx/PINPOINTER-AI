@@ -359,6 +359,33 @@ describe('useVoiceRecording — cancelListening', () => {
         await emit('onSpeechEnd');
         expect(result.current.isTranscribing).toBe(true);
     });
+
+    test('cancelling while the words are read drops them, and the next search still works', async () => {
+        const onTranscription = jest.fn();
+        const { result } = await renderHook(() => useVoiceRecording(onTranscription));
+        await emit('onSpeechStart');
+        await act(async () => {
+            await result.current.stopListening();
+        });
+        await emit('onSpeechEnd');
+        expect(result.current.isTranscribing).toBe(true);
+
+        await act(async () => {
+            await result.current.cancelListening();
+        });
+        expect(result.current.isTranscribing).toBe(false);
+        expect(cancelRecognition).not.toHaveBeenCalled();
+        await emit('onSpeechResults', { value: ['bijli bill'] });
+        expect(onTranscription).not.toHaveBeenCalled();
+
+        await emit('onSpeechStart');
+        await act(async () => {
+            await result.current.stopListening();
+        });
+        await emit('onSpeechEnd');
+        await emit('onSpeechResults', { value: ['aadhaar'] });
+        expect(onTranscription).toHaveBeenCalledWith('aadhaar');
+    });
 });
 
 // ---------------------------------------------------------------------------
