@@ -38,6 +38,18 @@ import { PhotoAccessBannerView } from '../../../src/components/PhotoAccessBanner
 import { ModelSheetView } from '../../../src/components/ModelSheetView';
 import type { DocumentAccessApi, PhotoAccessApi } from '../../../src/hooks/useStorageAccess';
 import type { PhotoAccess } from '../../../src/utils/StoragePermissions';
+import { GalleryScreen } from '../../../src/screens/gallery';
+import { DocumentVaultScreen } from '../../../src/screens/DocumentVaultScreen';
+import { PdfFoldersScreen } from '../../../src/screens/PdfFoldersScreen';
+import { SmartClipboardScreen } from '../../../src/screens/SmartClipboardScreen';
+import { setPreviewRouteParams } from './shims/Navigation';
+import { fakePhoto } from './shims/sample';
+import type { DocumentRecord } from '../../../src/database/types';
+import { ResultItem } from '../../../src/screens/pinpointer/ResultItem';
+import { RecentSearches } from '../../../src/screens/pinpointer/RecentSearches';
+import { ListeningPanel } from '../../../src/screens/pinpointer/ListeningPanel';
+import { NothingFound } from '../../../src/screens/pinpointer/NothingFound';
+import { alsoSearchedAs } from '../../../src/utils/MatchTerms';
 
 const TABS = (t: ReturnType<typeof useStrings>['t']) => [
   { key: 'home', label: t('tab.home'), icon: 'home' as const },
@@ -329,6 +341,177 @@ const tabBanner = () => (
   </WithTabs>
 );
 
+/** The Scan screen, opened on a photo so it shows what it read. */
+const Scan: React.FC<{ photo?: string }> = ({ photo }) => {
+  setPreviewRouteParams(photo ? { scanUri: photo } : undefined);
+  return <SmartClipboardScreen />;
+};
+
+
+// ─── Search ─────────────────────────────────────────────────────────────────
+// The search screen's layout (SearchOverlay itself opens files, which needs
+// native modules): back, the field, then results, history, listening or
+// nothing found.
+
+const SEARCH_NOW = Date.now();
+const SEARCH_RESULTS: DocumentRecord[] = [
+  {
+    id: 1,
+    type: 'DOCUMENT',
+    title: 'Electricity bill October',
+    content: 'BSES Rajdhani. Electricity bill for October. Amount due 1,240. Pay by 5 November.',
+    filePath: 'file:///Download/bses_oct.pdf',
+    detection_type: 'TEXT',
+    timestamp: SEARCH_NOW - 3 * 86400000,
+  },
+  {
+    id: 2,
+    type: 'IMAGE',
+    content: 'बिजली बिल भुगतान रसीद राशि 1240 रुपये',
+    filePath: 'file:///photos/receipt.jpg',
+    detection_type: 'TEXT',
+    timestamp: SEARCH_NOW - 86400000,
+  },
+  {
+    id: 3,
+    type: 'IMAGE',
+    content: 'Paid at the counter. Bill no 44812, electricity board.',
+    filePath: 'file:///photos/counter.jpg',
+    detection_type: 'TEXT',
+    timestamp: SEARCH_NOW - 7 * 86400000,
+  },
+  {
+    id: 4,
+    type: 'IMAGE',
+    content: 'Paper, Document, Text',
+    filePath: 'file:///photos/paper.jpg',
+    detection_type: 'OBJECT',
+    timestamp: SEARCH_NOW - 9 * 86400000,
+  },
+];
+
+const SearchFrame: React.FC<{ query?: string; listening?: boolean; children: React.ReactNode }> = ({
+  query = '',
+  listening = false,
+  children,
+}) => {
+  const { t } = useStrings();
+  return (
+    <Screen padBottom={false}>
+      <View style={styles.searchHead}>
+        <IconButton icon="back" label={t('search.close')} onPress={noop} />
+        <View style={styles.fill}>
+          <SearchField
+            value={query}
+            onChangeText={noop}
+            placeholder={t('search.placeholder')}
+            onVoicePress={noop}
+            listening={listening}
+            active={listening || undefined}
+          />
+        </View>
+      </View>
+      {children}
+    </Screen>
+  );
+};
+
+const searchResults = () => <SearchResultsStory />;
+const SearchResultsStory = () => {
+  const { t } = useStrings();
+  const [filter, setFilter] = useState<'ALL' | 'IMAGE' | 'DOCUMENT'>('ALL');
+  const q = 'bijli bill';
+  const photos = SEARCH_RESULTS.filter(r => r.type === 'IMAGE').length;
+  const counts = { ALL: SEARCH_RESULTS.length, IMAGE: photos, DOCUMENT: SEARCH_RESULTS.length - photos };
+  const shown = filter === 'ALL' ? SEARCH_RESULTS : SEARCH_RESULTS.filter(r => r.type === filter);
+  const filters = [
+    { id: 'ALL' as const, label: t('search.filterAll') },
+    { id: 'IMAGE' as const, label: t('search.filterPhotos') },
+    { id: 'DOCUMENT' as const, label: t('search.filterPapers') },
+  ];
+  return (
+    <SearchFrame query={q}>
+      <View style={[styles.row, styles.searchFilters]}>
+        {filters.map(f => (
+          <Chip
+            key={f.id}
+            label={t('search.filterCount', { label: f.label, n: counts[f.id] })}
+            selected={filter === f.id}
+            onPress={() => setFilter(f.id)}
+          />
+        ))}
+      </View>
+      <ScrollView contentContainerStyle={styles.searchList}>
+        <View style={styles.stack}>
+          <AppText variant="label" color="textSecondary">
+            {t('search.found', { n: shown.length })}
+          </AppText>
+          <View style={styles.row}>
+            <AppText variant="small" color="textMuted">
+              {t('search.alsoSearched')}
+            </AppText>
+            {alsoSearchedAs(q).map(w => (
+              <Tag key={w} label={w} tone="neutral" />
+            ))}
+          </View>
+          {shown.map((item, i) => (
+            <ResultItem key={item.id} item={item} query={q} index={i} pinned={i === 1} onPress={noop} />
+          ))}
+        </View>
+      </ScrollView>
+    </SearchFrame>
+  );
+};
+
+const searchHistory = () => (
+  <SearchFrame>
+    <RecentSearches
+      now={SEARCH_NOW}
+      history={[
+        { query: 'bijli bill', timestamp: SEARCH_NOW - 3600000, resultCount: 4 },
+        { query: 'आधार', timestamp: SEARCH_NOW - 7200000, resultCount: 2 },
+        { query: 'my aadhaar 4821 5512 9930', timestamp: SEARCH_NOW - 30 * 3600000, resultCount: 1 },
+        { query: 'passport photo', timestamp: SEARCH_NOW - 50 * 3600000, resultCount: 0 },
+      ]}
+      onSelect={noop}
+      onDelete={noop}
+      onClearAll={noop}
+    />
+  </SearchFrame>
+);
+
+const searchListening = () => (
+  <SearchFrame listening>
+    <ListeningPanel listening understanding={false} onStop={noop} />
+  </SearchFrame>
+);
+
+const searchUnderstanding = () => (
+  <SearchFrame>
+    <ListeningPanel listening={false} understanding onStop={noop} />
+  </SearchFrame>
+);
+
+const searchNothing = () => (
+  <SearchFrame query="pasport">
+    <NothingFound
+      query="pasport"
+      onLookEverywhere={noop}
+      history={[
+        { query: 'passport', timestamp: SEARCH_NOW, resultCount: 2 },
+        { query: 'bijli bill', timestamp: SEARCH_NOW, resultCount: 4 },
+      ]}
+      onSelect={noop}
+    />
+  </SearchFrame>
+);
+
+const searchNothingIndexing = () => (
+  <SearchFrame query="ration card">
+    <NothingFound query="ration card" indexing={{ done: 420, total: 2400 }} onLookEverywhere={noop} history={[]} onSelect={noop} />
+  </SearchFrame>
+);
+
 export const STORIES: Record<string, { title: string; lang: 'en' | 'hi'; render: () => React.ReactElement }> = {
   kit: { title: 'UI kit (English)', lang: 'en', render: () => <WithTabs active="home"><Kit /></WithTabs> },
   'kit-hi': { title: 'UI kit (Hindi)', lang: 'hi', render: () => <WithTabs active="home"><Kit /></WithTabs> },
@@ -350,6 +533,27 @@ export const STORIES: Record<string, { title: string; lang: 'en' | 'hi'; render:
   'ready-done': { title: 'First run: every photo ready', lang: 'en', render: readyDone },
   'ready-off': { title: 'First run: nothing allowed yet', lang: 'en', render: readyOff },
   'tab-banner': { title: 'Only some photos: banner above the tabs', lang: 'en', render: tabBanner },
+  gallery: { title: 'Photos', lang: 'en', render: () => <WithTabs active="photos"><GalleryScreen /></WithTabs> },
+  'gallery-hi': { title: 'Photos (Hindi)', lang: 'hi', render: () => <WithTabs active="photos"><GalleryScreen /></WithTabs> },
+  papers: { title: 'Papers', lang: 'en', render: () => <WithTabs active="papers"><DocumentVaultScreen /></WithTabs> },
+  'papers-hi': { title: 'Papers (Hindi)', lang: 'hi', render: () => <WithTabs active="papers"><DocumentVaultScreen /></WithTabs> },
+  folders: { title: 'Where Pinpointer looks', lang: 'en', render: () => <PdfFoldersScreen /> },
+  'folders-hi': { title: 'Where Pinpointer looks (Hindi)', lang: 'hi', render: () => <PdfFoldersScreen /> },
+  scan: { title: 'Scan', lang: 'en', render: () => <Scan /> },
+  'scan-text': { title: 'Scan: text found', lang: 'en', render: () => <Scan photo={fakePhoto(0)} /> },
+  'scan-text-hi': { title: 'Scan: text found (Hindi)', lang: 'hi', render: () => <Scan photo={fakePhoto(0)} /> },
+  'scan-empty': { title: 'Scan: no words found', lang: 'en', render: () => <Scan photo={`${fakePhoto(3)}#empty`} /> },
+  'search-results': { title: 'Search: results with filters', lang: 'en', render: searchResults },
+  'search-results-hi': { title: 'Search: results with filters (Hindi)', lang: 'hi', render: searchResults },
+  'search-history': { title: 'Search: recent searches', lang: 'en', render: searchHistory },
+  'search-history-hi': { title: 'Search: recent searches (Hindi)', lang: 'hi', render: searchHistory },
+  'search-listening': { title: 'Search: listening', lang: 'en', render: searchListening },
+  'search-listening-hi': { title: 'Search: listening (Hindi)', lang: 'hi', render: searchListening },
+  'search-understanding': { title: 'Search: understanding', lang: 'en', render: searchUnderstanding },
+  'search-nothing': { title: 'Search: nothing found', lang: 'en', render: searchNothing },
+  'search-nothing-hi': { title: 'Search: nothing found (Hindi)', lang: 'hi', render: searchNothing },
+  'search-nothing-indexing': { title: 'Search: nothing found while photos are read', lang: 'en', render: searchNothingIndexing },
+
 };
 
 const styles = StyleSheet.create({
@@ -364,4 +568,7 @@ const styles = StyleSheet.create({
   lockDemo: { alignItems: 'center', paddingVertical: Space.xxl },
   lockTarget: { paddingHorizontal: Space.md, paddingVertical: Space.xs },
   tabBanner: { marginHorizontal: GUTTER, marginBottom: Space.sm },
+  searchHead: { flexDirection: 'row', alignItems: 'center', gap: Space.xs, paddingLeft: Space.xs, paddingRight: GUTTER, paddingVertical: Space.sm },
+  searchFilters: { paddingHorizontal: GUTTER, paddingBottom: Space.sm },
+  searchList: { paddingHorizontal: GUTTER, paddingBottom: Space.huge },
 });

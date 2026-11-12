@@ -319,10 +319,9 @@ export const SmartClipboardScreen: React.FC = () => {
                   disabled={!text.trim()}
                   testID="scan-copy"
                 />
-                <View style={styles.row}>
-                  <Button label={t('common.share')} icon="share" variant="secondary" onPress={share} disabled={!text.trim()} style={styles.flex} testID="scan-share" />
-                  <Button label={t('scan.another')} icon="camera" variant="secondary" onPress={startOver} style={styles.flex} testID="scan-another" />
-                </View>
+                {/* One per line: two side by side wrap at large text sizes. */}
+                <Button label={t('common.share')} icon="share" variant="secondary" block onPress={share} disabled={!text.trim()} testID="scan-share" />
+                <Button label={t('scan.another')} icon="camera" variant="ghost" block onPress={startOver} testID="scan-another" />
               </View>
             </Reveal>
           </>
@@ -414,7 +413,6 @@ const styles = StyleSheet.create({
   intro: { marginTop: -Space.xs },
   tags: { flexDirection: 'row', flexWrap: 'wrap', gap: Space.sm },
   actions: { gap: Space.md },
-  row: { flexDirection: 'row', gap: Space.md },
   clipsHeader: { marginHorizontal: -GUTTER, marginTop: Space.sm, marginBottom: -Space.sm },
   reading: { alignItems: 'center', gap: Space.md, paddingTop: Space.sm },
   textCard: { gap: Space.sm },
