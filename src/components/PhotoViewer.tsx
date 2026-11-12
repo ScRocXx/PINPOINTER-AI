@@ -18,8 +18,9 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import Clipboard from '@react-native-clipboard/clipboard';
+import LinearGradient from 'react-native-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { AppText, HighlightedText, Icon, IconButton, IconName, PressableScale, useToast } from './ui';
+import { AppText, BeamGradient, HighlightedText, Icon, IconButton, IconName, PressableScale, Tag, useToast } from './ui';
 import { Colors, Duration, Ease, Elevation, GUTTER, Radius, Space, Spring, Touch } from '../theme';
 import { formatWhen, useStrings } from '../i18n';
 import { useReducedMotion } from '../hooks/useReducedMotion';
@@ -58,9 +59,11 @@ export interface PhotoViewerProps {
 const MASKED = /X{4}/;
 
 /**
- * The photo viewer: the photo on a dark stage, a white panel with four big
- * actions (Share, Copy or Read text, Important, Gallery) and the words
- * Pinpointer read in the photo. Swipe left and right for the next photo.
+ * The photo viewer: the photo on a dark stage lit softly from above, with
+ * when it was taken and its place ("3 of 12") over it. Under it, a white
+ * panel with four big coloured actions (Share, Copy or Read text, Important,
+ * Gallery) and the words Pinpointer read in the photo, marked with the beam
+ * because they were found. Swipe left and right for the next photo.
  *
  * It opens with the photo growing into place and the panel rising after it;
  * Reduce Motion shows it at once.
@@ -203,7 +206,7 @@ export const PhotoViewer: React.FC<PhotoViewerProps> = ({
 
   const when = item.takenAt ? formatWhen(t, ago, item.takenAt) : undefined;
   const position = items.length > 1 ? t('viewer.position', { i: current + 1, n: items.length }) : undefined;
-  const subtitle = [when, position].filter(Boolean).join(' · ');
+  const words = text ? text.split(/\s+/).filter(Boolean).length : 0;
   const photoScale = progress.interpolate({ inputRange: [0, 1], outputRange: [0.92, 1] });
   const panelY = progress.interpolate({ inputRange: [0, 0.4, 1], outputRange: [80, 60, 0] });
 
@@ -212,19 +215,34 @@ export const PhotoViewer: React.FC<PhotoViewerProps> = ({
       {/* Only while open: the tab's own Screen sets it back on close. */}
       {visible ? <StatusBar barStyle="light-content" backgroundColor="transparent" translucent /> : null}
       <Animated.View style={[styles.stage, { opacity: progress }]}>
+        {/* A soft violet light from the top, so the stage isn't a flat black. */}
+        <LinearGradient
+          pointerEvents="none"
+          colors={[Colors.nightGlow, Colors.night, Colors.night]}
+          locations={[0, 0.55, 1]}
+          style={StyleSheet.absoluteFill}
+        />
         <View style={[styles.header, { paddingTop: insets.top + Space.sm }]}>
           <IconButton icon="close" label={t('common.close')} variant="onNight" onPress={onClose} testID={`${testID}-close`} />
           <View style={styles.headerText}>
             <AppText variant="bodyStrong" color="onNight" accessibilityRole="header" numberOfLines={1}>
               {t('viewer.photo')}
             </AppText>
-            {subtitle ? (
+            {when ? (
               <AppText variant="small" color="onNightMuted" numberOfLines={1}>
-                {subtitle}
+                {when}
               </AppText>
             ) : null}
           </View>
-          <View style={styles.headerSpacer} />
+          {position ? (
+            <View style={styles.position} testID={`${testID}-position`}>
+              <AppText variant="label" color="onNight" numberOfLines={1}>
+                {position}
+              </AppText>
+            </View>
+          ) : (
+            <View style={styles.headerSpacer} />
+          )}
         </View>
 
         <Animated.View style={[styles.photoArea, { transform: [{ scale: photoScale }] }]}>
@@ -252,14 +270,15 @@ export const PhotoViewer: React.FC<PhotoViewerProps> = ({
         >
           <View style={styles.handle} />
           <View style={styles.actions}>
-            <RoundAction icon="share" label={t('common.share')} onPress={share} testID={`${testID}-share`} />
+            <RoundAction icon="share" label={t('common.share')} tint={ACTION_TINT.share} onPress={share} testID={`${testID}-share`} />
             {text ? (
-              <RoundAction icon="copy" label={t('common.copyText')} onPress={copy} testID={`${testID}-copy`} />
+              <RoundAction icon="copy" label={t('common.copyText')} tint={ACTION_TINT.text} onPress={copy} testID={`${testID}-copy`} />
             ) : onReadText ? (
               <RoundAction
                 icon="readText"
                 label={t('viewer.readText')}
                 hint={t('viewer.readTextHint')}
+                tint={ACTION_TINT.text}
                 onPress={() => onReadText(uri)}
                 testID={`${testID}-read`}
               />
@@ -269,6 +288,7 @@ export const PhotoViewer: React.FC<PhotoViewerProps> = ({
                 icon="star"
                 label={t('common.important')}
                 hint={t(pinned ? 'viewer.unmarkImportant' : 'viewer.markImportant')}
+                tint={ACTION_TINT.important}
                 selected={pinned}
                 onPress={togglePinned}
                 testID={`${testID}-important`}
@@ -278,26 +298,41 @@ export const PhotoViewer: React.FC<PhotoViewerProps> = ({
               icon="open"
               label={t('common.gallery')}
               hint={t('viewer.openGallery')}
+              tint={ACTION_TINT.gallery}
               onPress={openInGallery}
               testID={`${testID}-gallery`}
             />
           </View>
 
           <View style={styles.textBlock}>
-            <AppText variant="heading" accessibilityRole="header">
-              {t('viewer.textInPhoto')}
-            </AppText>
+            <View style={styles.textHead}>
+              <AppText variant="heading" accessibilityRole="header" style={styles.flex}>
+                {t('viewer.textInPhoto')}
+              </AppText>
+              {words > 0 ? (
+                <Tag
+                  label={words === 1 ? t('scan.oneWord') : t('scan.words', { n: words })}
+                  tone="found"
+                  icon="check"
+                  testID={`${testID}-words`}
+                />
+              ) : null}
+            </View>
             {text ? (
               <>
-                <ScrollView style={styles.textBox} contentContainerStyle={styles.textBoxContent} nestedScrollEnabled>
-                  {highlightTerms && highlightTerms.length > 0 ? (
-                    <HighlightedText text={text} terms={highlightTerms} variant="body" selectable testID={`${testID}-text`} />
-                  ) : (
-                    <AppText variant="body" selectable testID={`${testID}-text`}>
-                      {text}
-                    </AppText>
-                  )}
-                </ScrollView>
+                <View style={styles.textFrame}>
+                  {/* The beam marks what was found: the words in this photo. */}
+                  <BeamGradient style={styles.textBeam} />
+                  <ScrollView style={styles.textBox} contentContainerStyle={styles.textBoxContent} nestedScrollEnabled>
+                    {highlightTerms && highlightTerms.length > 0 ? (
+                      <HighlightedText text={text} terms={highlightTerms} variant="body" selectable testID={`${testID}-text`} />
+                    ) : (
+                      <AppText variant="body" selectable testID={`${testID}-text`}>
+                        {text}
+                      </AppText>
+                    )}
+                  </ScrollView>
+                </View>
                 {MASKED.test(text) ? (
                   <View style={styles.note}>
                     <Icon name="lock" size={18} color={Colors.textMuted} strokeWidth={2} />
@@ -308,9 +343,14 @@ export const PhotoViewer: React.FC<PhotoViewerProps> = ({
                 ) : null}
               </>
             ) : (
-              <AppText variant="body" color="textSecondary" testID={`${testID}-no-text`}>
-                {known ? t('viewer.noText') : t('viewer.notReadYet')}
-              </AppText>
+              <View style={styles.noText}>
+                <View style={styles.noTextIcon}>
+                  <Icon name="readText" size={22} color={Colors.textSecondary} strokeWidth={1.9} />
+                </View>
+                <AppText variant="body" color="textSecondary" style={styles.flex} testID={`${testID}-no-text`}>
+                  {known ? t('viewer.noText') : t('viewer.notReadYet')}
+                </AppText>
+              </View>
             )}
           </View>
         </Animated.View>
@@ -319,18 +359,28 @@ export const PhotoViewer: React.FC<PhotoViewerProps> = ({
   );
 };
 
+/** Each action has its own soft colour, so the four are told apart at a glance. */
+const ACTION_TINT = {
+  share: { bg: Colors.primarySoft, ink: Colors.primary },
+  text: { bg: Colors.foundSoft, ink: Colors.foundInk },
+  important: { bg: Colors.importantSoft, ink: Colors.importantInk },
+  gallery: { bg: Colors.sunken, ink: Colors.text },
+} as const;
+
 interface RoundActionProps {
   icon: IconName;
   label: string;
   /** Spoken after the label ("Opens Scan on this photo"). */
   hint?: string;
+  /** The circle's soft colour and its icon's ink. */
+  tint: { bg: string; ink: string };
   selected?: boolean;
   onPress: () => void;
   testID?: string;
 }
 
 /** A 56dp round button with its word under it, as on the spec's viewer. */
-const RoundAction: React.FC<RoundActionProps> = ({ icon, label, hint, selected, onPress, testID }) => (
+const RoundAction: React.FC<RoundActionProps> = ({ icon, label, hint, tint, selected, onPress, testID }) => (
   <PressableScale
     onPress={onPress}
     pressedScale={0.92}
@@ -341,12 +391,12 @@ const RoundAction: React.FC<RoundActionProps> = ({ icon, label, hint, selected, 
     style={styles.action}
     testID={testID}
   >
-    <View style={[styles.actionCircle, selected ? styles.actionCircleOn : null]}>
+    <View style={[styles.actionCircle, { backgroundColor: tint.bg }, selected ? styles.actionCircleOn : null]}>
       <Icon
         name={icon}
         size={24}
-        color={selected ? Colors.important : Colors.text}
-        strokeWidth={selected ? 1.6 : 1.9}
+        color={selected ? Colors.important : tint.ink}
+        strokeWidth={selected ? 1.6 : 2}
         filled={selected}
         fillColor={Colors.importantStar}
       />
@@ -358,6 +408,7 @@ const RoundAction: React.FC<RoundActionProps> = ({ icon, label, hint, selected, 
 );
 
 const styles = StyleSheet.create({
+  flex: { flex: 1 },
   stage: { flex: 1, backgroundColor: Colors.night },
   header: {
     flexDirection: 'row',
@@ -368,6 +419,15 @@ const styles = StyleSheet.create({
   },
   headerText: { flex: 1, alignItems: 'center' },
   headerSpacer: { width: Touch.min },
+  position: {
+    minWidth: Touch.min,
+    height: 36,
+    paddingHorizontal: Space.md,
+    borderRadius: Radius.pill,
+    backgroundColor: 'rgba(255,255,255,0.14)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   photoArea: { flex: 1 },
   page: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   photo: { width: '100%', height: '100%' },
@@ -394,13 +454,38 @@ const styles = StyleSheet.create({
     width: Touch.comfortable,
     height: Touch.comfortable,
     borderRadius: Radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  actionCircleOn: { borderWidth: 2, borderColor: Colors.importantStar },
+  textBlock: { gap: Space.sm },
+  textHead: { flexDirection: 'row', alignItems: 'center', gap: Space.sm },
+  textFrame: {
+    flexDirection: 'row',
+    backgroundColor: Colors.canvas,
+    borderRadius: Radius.sm,
+    borderWidth: 1,
+    borderColor: Colors.line,
+    overflow: 'hidden',
+  },
+  textBeam: { width: 5 },
+  textBox: { flex: 1, maxHeight: 168 },
+  textBoxContent: { paddingHorizontal: Space.lg, paddingVertical: Space.md },
+  note: { flexDirection: 'row', alignItems: 'center', gap: Space.xs + 2 },
+  noText: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Space.md,
+    padding: Space.md,
+    borderRadius: Radius.sm,
+    backgroundColor: Colors.canvas,
+  },
+  noTextIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: Radius.pill,
     backgroundColor: Colors.sunken,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  actionCircleOn: { backgroundColor: Colors.importantSoft },
-  textBlock: { gap: Space.sm },
-  textBox: { maxHeight: 168, backgroundColor: Colors.canvas, borderRadius: Radius.sm },
-  textBoxContent: { paddingHorizontal: Space.lg, paddingVertical: Space.md },
-  note: { flexDirection: 'row', alignItems: 'center', gap: Space.xs + 2 },
 });

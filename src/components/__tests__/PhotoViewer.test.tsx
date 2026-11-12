@@ -66,7 +66,8 @@ describe('PhotoViewer', () => {
     const onClose = jest.fn();
     await show({ onClose });
     expect(screen.getByRole('header', { name: 'Photo' })).toBeTruthy();
-    expect(screen.getByText('1 min ago · 1 of 2')).toBeTruthy();
+    expect(screen.getByText('1 min ago')).toBeTruthy();
+    expect(screen.getByTestId('photo-viewer-position')).toHaveTextContent('1 of 2');
     await fireEvent.press(screen.getByRole('button', { name: 'Close' }));
     expect(onClose).toHaveBeenCalled();
   });
@@ -168,9 +169,15 @@ describe('PhotoViewer', () => {
     expect(screen.getByText('No words found in this photo.')).toBeTruthy();
   });
 
+  it('says how many words were found', async () => {
+    await render(<PhotoViewer items={[{ uri: 'content://media/9', text: 'Amount due 1240' }]} index={0} onClose={jest.fn()} />);
+    expect(screen.getByTestId('photo-viewer-words')).toHaveTextContent('3 words');
+  });
+
   it('opens at the photo it was given', async () => {
     await render(<PhotoViewer items={ITEMS} index={1} onClose={jest.fn()} />);
-    expect(screen.getByText('2 days ago · 2 of 2')).toBeTruthy();
+    expect(screen.getByText('2 days ago')).toBeTruthy();
+    expect(screen.getByTestId('photo-viewer-position')).toHaveTextContent('2 of 2');
     expect(lookup).toHaveBeenCalledWith('content://media/2');
   });
 });
