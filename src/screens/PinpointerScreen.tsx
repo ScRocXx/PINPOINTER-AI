@@ -115,6 +115,14 @@ export const PinpointerScreen: React.FC = () => {
         }
     }, [route.params?.startUniversalSync, handleDeepSync, navigation]);
 
+    // The mic is the tab bar's middle button, on every tab. Listening always
+    // shows on the search screen, so open it when the mic starts.
+    useEffect(() => {
+        if (isRecording) setIsSearching(true);
+    }, [isRecording, setIsSearching]);
+
+    const openScan = useCallback(() => navigation.navigate('SmartClipboard'), [navigation]);
+
     const handleSearchFocus = () => {
         setIsSearching(true);
     };
@@ -159,7 +167,7 @@ export const PinpointerScreen: React.FC = () => {
             searchText={searchText}
             onChangeText={setSearchText}
             onFocus={handleSearchFocus}
-            autoFocus={isSearching}
+            autoFocus={isSearching && !isRecording && !isTranscribing}
             isRecording={isRecording}
             isTranscribing={isTranscribing}
             isModelLoading={isModelLoading}
@@ -180,7 +188,7 @@ export const PinpointerScreen: React.FC = () => {
                     importantForAccessibility={isSearching ? 'no-hide-descendants' : 'auto'}
                     accessibilityElementsHidden={isSearching}
                 >
-                    <Home onOpenImage={openImage} progress={progress} />
+                    <Home onOpenImage={openImage} onScan={openScan} progress={progress} />
                 </View>
 
                 {/* ────── SEARCHING MODE OVERLAY ────── */}

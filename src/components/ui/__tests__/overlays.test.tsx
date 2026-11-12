@@ -95,23 +95,24 @@ describe('Toast', () => {
 });
 
 describe('TabBar', () => {
-  it('puts Scan in the middle and marks the active tab', async () => {
+  it('puts the mic in the middle and marks the active tab', async () => {
     const onSelect = jest.fn();
-    const onScan = jest.fn();
+    const onMic = jest.fn();
     await render(
-      <TabBar items={ITEMS} activeKey="photos" onSelect={onSelect} scanLabel="Scan" scanAccessibilityLabel="Scan: read text" onScan={onScan} bottomInset={24} />,
+      <TabBar items={ITEMS} activeKey="photos" onSelect={onSelect} actionLabel="Speak" actionAccessibilityLabel="Search by voice" onAction={onMic} bottomInset={24} />,
     );
     const tabs = screen.getAllByRole('tab');
     expect(tabs.map(t => t.props.accessibilityLabel)).toEqual(['Home', 'Photos', 'Papers', 'Settings']);
     expect(screen.getByRole('tab', { name: 'Photos' }).props.accessibilityState).toMatchObject({ selected: true });
     await fireEvent.press(screen.getByRole('tab', { name: 'Papers' }));
     expect(onSelect).toHaveBeenCalledWith('papers');
-    await fireEvent.press(screen.getByRole('button', { name: 'Scan: read text' }));
-    expect(onScan).toHaveBeenCalled();
+    await fireEvent.press(screen.getByRole('button', { name: 'Search by voice' }));
+    expect(onMic).toHaveBeenCalled();
+    expect(screen.getByText('Speak')).toBeTruthy();
   });
 
   it('places the beam mark after layout', async () => {
-    await render(<TabBar items={ITEMS} activeKey="home" onSelect={jest.fn()} scanLabel="Scan" onScan={jest.fn()} />);
+    await render(<TabBar items={ITEMS} activeKey="home" onSelect={jest.fn()} actionLabel="Speak" onAction={jest.fn()} />);
     expect(screen.queryByTestId('tab-bar-indicator')).toBeNull();
     await fireEvent(screen.getByTestId('tab-bar'), 'layout', { nativeEvent: { layout: { width: 400, height: 72 } } });
     expect(screen.getByTestId('tab-bar-indicator')).toBeTruthy();
@@ -123,7 +124,7 @@ describe('TabBar', () => {
       listeners[event] = fn;
       return { remove: jest.fn() };
     }) as unknown as typeof Keyboard.addListener);
-    await render(<TabBar items={ITEMS} activeKey="home" onSelect={jest.fn()} scanLabel="Scan" onScan={jest.fn()} />);
+    await render(<TabBar items={ITEMS} activeKey="home" onSelect={jest.fn()} actionLabel="Speak" onAction={jest.fn()} />);
     await act(async () => listeners.keyboardDidShow());
     expect(screen.queryByTestId('tab-bar')).toBeNull();
     await act(async () => listeners.keyboardDidHide());

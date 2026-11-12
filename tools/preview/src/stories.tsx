@@ -67,7 +67,7 @@ const WithTabs: React.FC<{ active: string; children: React.ReactNode }> = ({ act
   return (
     <View style={styles.fill}>
       <View style={styles.fill}>{children}</View>
-      <TabBar items={TABS(t)} activeKey={key} onSelect={setKey} scanLabel={t('tab.scan')} onScan={() => {}} bottomInset={16} />
+      <TabBar items={TABS(t)} activeKey={key} onSelect={setKey} actionLabel={t('tab.speak')} onAction={() => {}} bottomInset={16} />
     </View>
   );
 };
@@ -518,9 +518,7 @@ const searchNothingIndexing = () => (
 const nothing = () => {};
 const homeProps = (over: Partial<HomeViewProps> = {}): HomeViewProps => ({
   onOpenSearch: nothing,
-  onVoicePress: nothing,
-  listening: false,
-  understanding: false,
+  onScan: nothing,
   photos: { running: false, paused: false, quick: false, processed: 0, checked: 3400, total: 3400, lastChecked: Date.now() - 2 * 3600 * 1000 },
   papers: { running: false, done: 0, total: 0, lastChecked: Date.now() - 26 * 3600 * 1000 },
   onCheck: nothing,

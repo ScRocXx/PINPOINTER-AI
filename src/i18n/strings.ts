@@ -18,8 +18,8 @@ export const en = {
   // Tabs
   'tab.home': 'Home',
   'tab.photos': 'Photos',
-  'tab.scan': 'Scan',
-  'tab.scanLabel': 'Scan: read text from a photo',
+  'tab.speak': 'Speak',
+  'tab.stop': 'Stop',
   'tab.papers': 'Papers',
   'tab.settings': 'Settings',
 
@@ -48,6 +48,8 @@ export const en = {
   'home.greetingEvening': 'Good evening',
   'home.title': 'What are you looking for?',
   'home.searchHint': 'Try “Aadhaar” or “bijli bill”',
+  'home.speakHint': 'Or press Speak below and just say it',
+  'home.scanBody': 'A bill, a letter or a medicine strip',
   'home.findQuickly': 'Find quickly',
   'home.important': 'Important',
   'home.importantEmpty': 'Tap the star on any photo to keep it here.',
@@ -140,6 +142,7 @@ export const en = {
   'search.searching': 'Looking…',
   'search.listeningHint': 'Say what you are looking for, like “bijli bill”.',
   'search.stopsByItself': 'It stops by itself when you finish speaking.',
+  'search.youCanSay': 'You can say',
   'search.understandingHint': 'Turning your words into a search.',
   'search.looksLikeQuery': 'Looks like “{q}”',
   'search.shows': 'Shows: {what}',
@@ -403,6 +406,7 @@ export const en = {
   // Voice
   'voice.errorTitle': 'Voice search did not start',
   'voice.errorBody': 'Please try again, or type what you need.',
+  'voice.gettingReady': 'Voice search is getting ready. Try again in a moment.',
 
   // Settings
   'settings.title': 'Settings',
@@ -452,8 +456,8 @@ export type StringKey = keyof typeof en;
 export const hi: Record<StringKey, string> = {
   'tab.home': 'होम',
   'tab.photos': 'फ़ोटो',
-  'tab.scan': 'स्कैन',
-  'tab.scanLabel': 'स्कैन: फ़ोटो से टेक्स्ट पढ़ें',
+  'tab.speak': 'बोलें',
+  'tab.stop': 'रोकें',
   'tab.papers': 'कागज़',
   'tab.settings': 'सेटिंग्स',
 
@@ -480,6 +484,8 @@ export const hi: Record<StringKey, string> = {
   'home.greetingEvening': 'शुभ संध्या',
   'home.title': 'आप क्या ढूँढ रहे हैं?',
   'home.searchHint': '“आधार” या “बिजली बिल” लिखकर देखें',
+  'home.speakHint': 'या नीचे “बोलें” दबाकर बोल दें',
+  'home.scanBody': 'बिल, चिट्ठी या दवा की पत्ती',
   'home.findQuickly': 'जल्दी ढूँढें',
   'home.important': 'ज़रूरी',
   'home.importantEmpty': 'किसी भी फ़ोटो पर तारा दबाएँ, वह यहाँ दिखेगी।',
@@ -568,6 +574,7 @@ export const hi: Record<StringKey, string> = {
   'search.searching': 'ढूँढ रहे हैं…',
   'search.listeningHint': 'जो ढूँढना है वह बोलें, जैसे “बिजली बिल”।',
   'search.stopsByItself': 'आपके बोलना रोकते ही यह अपने आप रुक जाएगा।',
+  'search.youCanSay': 'आप बोल सकते हैं',
   'search.understandingHint': 'आपके शब्दों से खोज बना रहे हैं।',
   'search.looksLikeQuery': '“{q}” जैसी दिखती है',
   'search.shows': 'इसमें दिखता है: {what}',
@@ -822,6 +829,7 @@ export const hi: Record<StringKey, string> = {
 
   'voice.errorTitle': 'बोलकर खोज शुरू नहीं हुई',
   'voice.errorBody': 'फिर से कोशिश करें, या जो चाहिए वह लिखें।',
+  'voice.gettingReady': 'बोलकर खोज तैयार हो रही है। थोड़ी देर में फिर कोशिश करें।',
 
   'settings.title': 'सेटिंग्स',
   'settings.language': 'भाषा',

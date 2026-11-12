@@ -70,8 +70,10 @@ export type MainTabBarProps = {
   state: TabNavigationState<ParamListBase>;
   descriptors: Record<string, MainTabDescriptor>;
   navigation: NavigationHelpers<ParamListBase, MainTabNavigationEventMap>;
-  /** What the middle Scan button does. */
-  onScanPress: () => void;
+  /** What the middle mic button does. */
+  onMicPress: () => void;
+  /** The mic is listening: the button shows "stop". */
+  listening?: boolean;
 };
 
 export type MainTabNavigatorProps = DefaultNavigatorOptions<
@@ -83,8 +85,10 @@ export type MainTabNavigatorProps = DefaultNavigatorOptions<
   MainTabNavigationProp<ParamListBase>
 > &
   TabRouterOptions & {
-    /** Called with the navigator's navigation when Scan is tapped. */
-    onScanPress: (navigation: NavigationHelpers<ParamListBase, MainTabNavigationEventMap>) => void;
+    /** Called with the navigator's navigation when the mic is tapped. */
+    onMicPress: (navigation: NavigationHelpers<ParamListBase, MainTabNavigationEventMap>) => void;
+    /** The mic is listening: the button shows "stop". */
+    listening?: boolean;
     /** Replace the bar (tests, previews). */
     tabBar?: (props: MainTabBarProps) => React.ReactNode;
     /**
@@ -96,7 +100,7 @@ export type MainTabNavigatorProps = DefaultNavigatorOptions<
   };
 
 /** The default bar: the shared TabBar, translated, above the gesture bar. */
-export const MainTabBar: React.FC<MainTabBarProps> = ({ state, descriptors, navigation, onScanPress }) => {
+export const MainTabBar: React.FC<MainTabBarProps> = ({ state, descriptors, navigation, onMicPress, listening = false }) => {
   const { t } = useStrings();
   const insets = useSafeAreaInsets();
   const focused = state.routes[state.index];
@@ -135,9 +139,10 @@ export const MainTabBar: React.FC<MainTabBarProps> = ({ state, descriptors, navi
       items={items}
       activeKey={focused.key}
       onSelect={onSelect}
-      scanLabel={t('tab.scan')}
-      scanAccessibilityLabel={t('tab.scanLabel')}
-      onScan={onScanPress}
+      actionLabel={listening ? t('tab.stop') : t('tab.speak')}
+      actionAccessibilityLabel={listening ? t('search.stopVoice') : t('search.voice')}
+      actionIcon={listening ? 'stop' : 'mic'}
+      onAction={onMicPress}
       bottomInset={insets.bottom}
     />
   );
@@ -153,7 +158,8 @@ function MainTabNavigator({
   screenOptions,
   screenLayout,
   UNSTABLE_router,
-  onScanPress,
+  onMicPress,
+  listening,
   tabBar,
   banner,
 }: MainTabNavigatorProps) {
@@ -186,7 +192,8 @@ function MainTabNavigator({
     state,
     descriptors: descriptors as Record<string, MainTabDescriptor>,
     navigation,
-    onScanPress: () => onScanPress(navigation),
+    onMicPress: () => onMicPress(navigation),
+    listening,
   };
 
   return (

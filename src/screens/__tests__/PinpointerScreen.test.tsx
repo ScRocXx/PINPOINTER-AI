@@ -712,29 +712,23 @@ describe('PinpointerScreen — Important and recent photos', () => {
   });
 });
 
-describe('PinpointerScreen — voice search from Home', () => {
-  test('the Home mic starts listening', async () => {
+describe('PinpointerScreen — the mic and Scan', () => {
+  test('Scan in the Home search bar opens Scan; Home has no mic of its own', async () => {
     await renderScreen();
-    await press(screen.getByTestId('home-search-voice'));
-    expect(actions.startListening).toHaveBeenCalled();
+    await press(screen.getByTestId('home-search-scan'));
+    expect(mockNav.navigate).toHaveBeenCalledWith('SmartClipboard');
+    expect(screen.queryByTestId('home-search-voice')).toBeNull();
   });
 
-  test('while listening, the Home mic stops listening', async () => {
+  test('when the mic starts listening (the tab bar button), search opens to show it', async () => {
     state.isRecording = true;
     await renderScreen();
-    expect(screen.getByLabelText('Listening… tap to stop')).toBeTruthy();
-    await press(screen.getByTestId('home-search-voice'));
-    expect(actions.stopListening).toHaveBeenCalled();
-    expect(actions.startListening).not.toHaveBeenCalled();
+    expect(actions.setIsSearching).toHaveBeenCalledWith(true);
   });
 
-  test('while turning speech into words, the mic waits', async () => {
-    state.isTranscribing = true;
+  test('search stays closed while nobody is listening', async () => {
     await renderScreen();
-    expect(screen.getByLabelText('Understanding…')).toBeTruthy();
-    await press(screen.getByTestId('home-search-voice'));
-    expect(actions.startListening).not.toHaveBeenCalled();
-    expect(actions.stopListening).not.toHaveBeenCalled();
+    expect(actions.setIsSearching).not.toHaveBeenCalled();
   });
 });
 

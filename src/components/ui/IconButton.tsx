@@ -17,7 +17,7 @@ export interface IconButtonProps {
    * - plain: icon only, on any light surface
    * - tonal: soft grey circle (header actions)
    * - onNight: for the dark photo viewer
-   * - beam: the mic and the Scan button
+   * - beam: the mic
    * - primary: violet circle
    */
   variant?: IconButtonVariant;

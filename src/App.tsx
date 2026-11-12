@@ -24,6 +24,7 @@ import { LanguageProvider } from './i18n';
 import { ToastProvider } from './components/ui';
 import { PhotoAccessBanner } from './components/PhotoAccessBanner';
 import { useFirstRunGate } from './hooks/useFirstRun';
+import { useMicButton } from './hooks/useMicButton';
 import { AppLogger } from './utils/AppLogger';
 import { scheduleBackgroundIndexing } from './services/BackgroundIndexingTask';
 
@@ -37,23 +38,27 @@ const Tabs = createMainTabNavigator<MainTabParamList>();
 const photoBanner = (routeName: string) =>
   routeName === 'Pinpointer' ? <PhotoAccessBanner style={styles.tabBanner} /> : null;
 
-/** The four tabs, with Scan in the middle of the bar. */
-const MainTabs: React.FC = () => (
-  <Tabs.Navigator
-    initialRouteName="Pinpointer"
-    onScanPress={navigation => navigation.navigate('SmartClipboard')}
-    banner={photoBanner}
-  >
-    <Tabs.Screen name="Pinpointer" component={PinpointerScreen} options={{ tabLabelKey: 'tab.home', tabIcon: 'home' }} />
-    <Tabs.Screen name="Gallery" component={GalleryScreen} options={{ tabLabelKey: 'tab.photos', tabIcon: 'photos' }} />
-    <Tabs.Screen
-      name="DocumentVault"
-      component={DocumentVaultScreen}
-      options={{ tabLabelKey: 'tab.papers', tabIcon: 'papers' }}
-    />
-    <Tabs.Screen name="Settings" component={SettingsScreen} options={{ tabLabelKey: 'tab.settings', tabIcon: 'settings' }} />
-  </Tabs.Navigator>
-);
+/** The four tabs, with the mic (speak to search) in the middle of the bar. */
+const MainTabs: React.FC = () => {
+  const mic = useMicButton();
+  return (
+    <Tabs.Navigator
+      initialRouteName="Pinpointer"
+      onMicPress={navigation => mic.press(() => navigation.navigate('Pinpointer'))}
+      listening={mic.listening}
+      banner={photoBanner}
+    >
+      <Tabs.Screen name="Pinpointer" component={PinpointerScreen} options={{ tabLabelKey: 'tab.home', tabIcon: 'home' }} />
+      <Tabs.Screen name="Gallery" component={GalleryScreen} options={{ tabLabelKey: 'tab.photos', tabIcon: 'photos' }} />
+      <Tabs.Screen
+        name="DocumentVault"
+        component={DocumentVaultScreen}
+        options={{ tabLabelKey: 'tab.papers', tabIcon: 'papers' }}
+      />
+      <Tabs.Screen name="Settings" component={SettingsScreen} options={{ tabLabelKey: 'tab.settings', tabIcon: 'settings' }} />
+    </Tabs.Navigator>
+  );
+};
 
 /**
  * App root: initializes the SQLite database, wires the navigation stack,

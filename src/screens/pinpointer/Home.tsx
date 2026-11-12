@@ -16,11 +16,12 @@ import { TILE_LOOK } from './HomeParts';
 export interface HomeProps {
   /** Open a photo in the viewer (the screen also remembers it as recent). */
   onOpenImage: (uri: string) => void;
+  /** Open Scan (read the words in a photo). */
+  onScan: () => void;
   /** What is being got ready right now, whoever started it. */
   progress: IndexingProgress;
 }
 
-const noop = () => {};
 
 /** Open a PDF in the phone's PDF app. */
 const openPaper = (filePath: string) => {
@@ -36,17 +37,12 @@ const openPaper = (filePath: string) => {
  * Home's wiring: the shared Pinpointer state, the Important stars and the
  * Home overview (tiles, photo totals, recent photos) into `HomeView`.
  */
-export const Home: React.FC<HomeProps> = ({ onOpenImage, progress }) => {
+export const Home: React.FC<HomeProps> = ({ onOpenImage, onScan, progress }) => {
   const { t } = useStrings();
   const toast = useToast();
   const {
     setSearchText,
     setIsSearching,
-    isRecording,
-    isTranscribing,
-    isModelLoading,
-    startListening,
-    stopListening,
     isSyncing,
     isPaused,
     isDeepSync,
@@ -110,9 +106,7 @@ export const Home: React.FC<HomeProps> = ({ onOpenImage, progress }) => {
   return (
     <HomeView
       onOpenSearch={() => openSearch()}
-      onVoicePress={isModelLoading ? noop : isRecording ? stopListening : startListening}
-      listening={isRecording}
-      understanding={isTranscribing}
+      onScan={onScan}
       photos={{
         running: photosRunning,
         paused: isPaused && !photosRunning,

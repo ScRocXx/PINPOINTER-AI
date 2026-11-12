@@ -15,14 +15,16 @@ export interface TabBarItem {
 }
 
 export interface TabBarProps {
-  /** Four tabs: two go left of the Scan button, two go right. */
+  /** Four tabs: two go left of the mic button, two go right. */
   items: ReadonlyArray<TabBarItem>;
   activeKey: string;
   onSelect: (key: string) => void;
-  /** The raised beam button in the middle. */
-  scanLabel: string;
-  scanAccessibilityLabel?: string;
-  onScan: () => void;
+  /** The raised beam button in the middle: the mic, the thing that finds. */
+  actionLabel: string;
+  actionAccessibilityLabel?: string;
+  onAction: () => void;
+  /** Its icon. The mic unless told otherwise ("stop" while listening). */
+  actionIcon?: IconName;
   /** Bottom safe-area inset (the gesture bar). */
   bottomInset?: number;
   /** Hide while the keyboard is open, so it never sits on top of it. */
@@ -40,9 +42,10 @@ export const TabBar: React.FC<TabBarProps> = ({
   items,
   activeKey,
   onSelect,
-  scanLabel,
-  scanAccessibilityLabel,
-  onScan,
+  actionLabel,
+  actionAccessibilityLabel,
+  onAction,
+  actionIcon = 'mic',
   bottomInset = 0,
   hideOnKeyboard = true,
   testID = 'tab-bar',
@@ -129,20 +132,20 @@ export const TabBar: React.FC<TabBarProps> = ({
         {items.slice(0, half).map(renderTab)}
         <View style={styles.tab}>
           <PressableScale
-            onPress={onScan}
+            onPress={onAction}
             pressedScale={0.92}
             accessibilityRole="button"
-            accessibilityLabel={scanAccessibilityLabel ?? scanLabel}
+            accessibilityLabel={actionAccessibilityLabel ?? actionLabel}
             style={styles.fab}
-            testID={`${testID}-scan`}
+            testID={`${testID}-action`}
           >
             <View style={styles.fabInner}>
               <BeamGradient style={StyleSheet.absoluteFill} />
-              <Icon name="scan" size={28} color={Colors.onPrimary} strokeWidth={2.25} />
+              <Icon name={actionIcon} size={30} color={Colors.onPrimary} strokeWidth={2.25} />
             </View>
           </PressableScale>
-          <AppText variant="label" color="textSecondary" numberOfLines={1} maxFontSizeMultiplier={1.3}>
-            {scanLabel}
+          <AppText variant="labelStrong" color="primary" numberOfLines={1} maxFontSizeMultiplier={1.3}>
+            {actionLabel}
           </AppText>
         </View>
         {items.slice(half).map(renderTab)}
