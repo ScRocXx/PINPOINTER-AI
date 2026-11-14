@@ -233,6 +233,27 @@ class MockDB {
     }
 
     // Paged walk over the index (pruning deleted files)
+    // fts5vocab over the search index: every token with how many rows contain it
+    if (/^SELECT term, doc FROM temp\.fts_vocab ORDER BY doc DESC LIMIT \?/i.test(q)) {
+      const [limit] = params;
+      const counts = new Map();
+      for (const d of this.documents) {
+        const toks = new Set(
+          `${d.title || ''} ${d.content || ''}`
+            .normalize('NFC')
+            .split(/[^\p{L}\p{N}\p{Co}\p{Mn}\p{Mc}]+/u)
+            .filter(Boolean)
+            .map((t) => t.toLowerCase()),
+        );
+        toks.forEach((t) => counts.set(t, (counts.get(t) || 0) + 1));
+      }
+      const rows = [...counts]
+        .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))
+        .slice(0, limit)
+        .map(([term, doc]) => ({ term, doc }));
+      return { rows };
+    }
+
     // Re-keying the search tail: rows with their text, in id order
     if (/^SELECT id, title, content FROM document_index WHERE id > \? ORDER BY id LIMIT \?/i.test(q)) {
       const [afterId, limit] = params;

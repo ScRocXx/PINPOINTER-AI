@@ -1,0 +1,46 @@
+{
+ "index of 2093 words": {
+  "stats": {
+   "hinglish: today": [
+    107,
+    386
+   ],
+   "hinglish: with spelling rescue": [
+    353,
+    386
+   ],
+   "english: today": [
+    80,
+    330
+   ],
+   "english: with spelling rescue": [
+    320,
+    330
+   ]
+  },
+  "correctQueriesCorrected": "0/121",
+  "vocabularyTerms": 6607
+ },
+ "index of 10030 words": {
+  "stats": {
+   "hinglish: today": [
+    119,
+    389
+   ],
+   "hinglish: with spelling rescue": [
+    327,
+    389
+   ],
+   "english: today": [
+    72,
+    329
+   ],
+   "english: with spelling rescue": [
+    301,
+    329
+   ]
+  },
+  "correctQueriesCorrected": "0/121",
+  "vocabularyTerms": 31416
+ }
+}

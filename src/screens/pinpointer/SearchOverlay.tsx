@@ -39,6 +39,8 @@ export interface SearchOverlayProps {
    * work on every key. Defaults to `searchText`.
    */
   resultsQuery?: string;
+  /** What was typed, when the results are for a corrected query ("Showing results for …"). */
+  correctedFrom?: string | null;
   isSearchPending: boolean;
   history: ReadonlyArray<SearchHistoryItem>;
   onSelectHistory: (query: string) => void;
@@ -119,6 +121,7 @@ const SearchContent: React.FC<SearchOverlayProps> = ({
   searchText,
   results,
   resultsQuery,
+  correctedFrom,
   isSearchPending,
   history,
   onSelectHistory,
@@ -299,6 +302,14 @@ const SearchContent: React.FC<SearchOverlayProps> = ({
               >
                 {isSearchPending ? t('search.searching') : n === 1 ? t('search.foundOne') : t('search.found', { n })}
               </AppText>
+              {correctedFrom && rowsQuery ? (
+                <View style={styles.corrected} testID="search-corrected">
+                  <AppText variant="bodyStrong">{t('search.showingFor', { q: rowsQuery })}</AppText>
+                  <AppText variant="small" color="textMuted">
+                    {t('search.youTyped', { q: correctedFrom.trim() })}
+                  </AppText>
+                </View>
+              ) : null}
               {also.length > 0 ? (
                 <View style={styles.also} testID="search-also">
                   <AppText variant="small" color="textMuted">
@@ -356,6 +367,7 @@ const styles = StyleSheet.create({
   list: { paddingHorizontal: GUTTER },
   listHead: { gap: Space.sm, paddingTop: Space.xs, paddingBottom: Space.md },
   also: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: Space.xs + 2 },
+  corrected: { gap: 2 },
   gap: { height: Space.sm + 2 },
   pending: { marginTop: Space.xxl, marginHorizontal: GUTTER },
 });

@@ -105,6 +105,17 @@ describe('SearchOverlay', () => {
     expect(describeResult).toHaveBeenCalledTimes(2);
   });
 
+  it('says when it shows results for corrected words', async () => {
+    await setup({ searchText: 'medicne', resultsQuery: 'medicine', correctedFrom: 'medicne', results: [photo()] });
+    expect(screen.getByTestId('search-corrected')).toHaveTextContent(/Showing results for “medicine”/);
+    expect(screen.getByText('You typed “medicne”')).toBeTruthy();
+  });
+
+  it('shows no correction line for words found as typed', async () => {
+    await setup({ searchText: 'bill', results: [photo()] });
+    expect(screen.queryByTestId('search-corrected')).toBeNull();
+  });
+
   it('filters photos and papers, with counts on the chips', async () => {
     await setup({ searchText: 'bill', results: [photo(), paper(), paper({ id: 3, filePath: 'file:///docs/b2.pdf' })] });
     expect(screen.getByRole('button', { name: 'Photos, 1 found' })).toBeTruthy();

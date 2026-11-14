@@ -9,6 +9,8 @@ their numbers to `results/`.
 |---|---|---|
 | `ocr-misreads.exp.ts` | If OCR misreads one letter of a word, does search still find it? Today's matching vs shape key, query expansion, OCR-tolerant sound key, sound key within one edit, joined neighbours, and all combined. Also counts false matches against ~24,000 Hindi and 20,000 English words. | `results/ocr-misreads.json` |
 | `typos.exp.ts` | If a person makes one typo (phone keyboard), does search still find the paper? Today vs correcting the query against the person's own indexed words. | `results/typos.json` |
+| `app-search.exp.ts` | The misreadings of `ocr-misreads.exp.ts`, searched with the shipped code (`OcrTolerance.ts`, search tail, query terms). | `results/app-search.json` |
+| `app-typos.exp.ts` | The typos of `typos.exp.ts`, corrected with the shipped code (`SpellingRescue.ts`, vocabulary as `fts5vocab` reads it), only when nothing is found. | `results/app-typos.json` |
 
 ## Run
 

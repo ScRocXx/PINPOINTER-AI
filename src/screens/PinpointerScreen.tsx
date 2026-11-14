@@ -36,7 +36,7 @@ export const PinpointerScreen: React.FC = () => {
 
     const {
         searchText, setSearchText,
-        searchResults, resultsQuery,
+        searchResults, resultsQuery, correctedFrom,
         isSearching, setIsSearching, isSearchPending,
         isRecording, isTranscribing, isModelLoading,
         startListening, stopListening, cancelListening,
@@ -192,6 +192,7 @@ export const PinpointerScreen: React.FC = () => {
                     searchText={searchText}
                     results={searchResults}
                     resultsQuery={resultsQuery}
+                    correctedFrom={correctedFrom}
                     isSearchPending={isSearchPending}
                     history={searchHistory}
                     onSelectHistory={handleSelectHistory}

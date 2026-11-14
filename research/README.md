@@ -23,7 +23,7 @@ This file is updated as each part lands. Status: **planned**, **in progress**,
 | # | Change | What people notice | Status |
 |---|---|---|---|
 | 1 | Misread-proof search | Papers are found even when OCR misread a letter or split a word | **done** |
-| 2 | Spelling rescue from your own words | "bijlee bil" or "medicne" still finds the paper, with "Showing results for …" | planned |
+| 2 | Spelling rescue from your own words | "bijki bil" or "medicne" still finds the paper, with "Showing results for …" | **done** |
 | 3 | Memory anchors: dates and festivals | "Diwali photos", "papers from last month", "kal ki photo" | planned |
 | 4 | Answer cards | A bill result shows "₹1,240 · due 5 April" without opening it | planned |
 | 5 | Words-first photo reader (native) | Indexing reads each photo once; screenshots' small text stays readable | planned |
@@ -93,11 +93,49 @@ exact matches.
 - Hinglish typing against a misread Hindi word stays the hard case (62%);
   part 2 (spelling rescue) helps from the query side.
 
-## 2. Spelling rescue (planned)
+## 2. Spelling rescue (done)
 
-When a typed word finds nothing, it is corrected against the words that are
-actually in your papers (SQLite lists them for free), not a generic dictionary.
-Sound keys already cover spelling variation; this adds typos.
+**What people notice.** A search with a typo ("medicne", "bijki bil") shows
+the papers anyway, with "Showing results for “medicine”" and, smaller, "You
+typed “medicne”". Correct searches are never touched.
+
+**How.** When the typed words find nothing,
+`services/SpellingService.rescueQuery` corrects each word that isn't in the
+index against the person's own words, not a generic dictionary (which knows
+neither "Telmisartan", nor the shop's name, nor "bijlee"):
+
+- `database/vocabulary.ts` reads the index's words with SQLite's
+  `fts5vocab`, as a TEMP table on the read connection (no schema change; the
+  scan runs on op-sqlite's thread). Up to 40,000 terms, most common first,
+  kept in memory while searches happen and freed after 10 idle minutes.
+- `utils/SpellingRescue.ts` finds the correction two ways: **spelling** (an
+  indexed word within 1 edit for words up to 4 letters, 2 for longer, same
+  script) and **sound** (an indexed Bhasha sound key within 1 edit of the
+  word's key; the word is then looked up in a row that holds that key). Sound
+  is what turns "bijki" into बिजली.
+- `useSearch` searches the corrected query, uses it for the CLIP step too,
+  and exposes `correctedFrom`; `SearchOverlay` shows the line.
+
+**Measured** with the shipped code (`research/experiments/app-typos.exp.ts`,
+same typos as experiment 2, policy as shipped: correct only when nothing is
+found):
+
+| One typo in the search box | Before | Now |
+|---|---|---|
+| Hinglish, index of 2k / 10k words | 28% / 31% found | 92% / 84% |
+| English, index of 2k / 10k words | 24% / 22% | 97% / 92% |
+| Correct queries "corrected" | | 0 of 121 |
+
+**Known limits, and what refines them next**
+
+- A typo that happens to match some other paper ("bil" → "bilkul") shows
+  those results and is not corrected; that is most of the remaining gap
+  (experiment 2 reached 99–100% with the top three suggestions). Next: a
+  "Did you mean …?" chip when a typed word is not in the vocabulary, shown
+  without replacing the results (only once the person stops typing, since a
+  half-typed word is not a typo).
+- The typos are simulated (neighbouring, missed, extra and swapped keys), not
+  collected from elderly users yet.
 
 ## 3. Memory anchors (planned)
 

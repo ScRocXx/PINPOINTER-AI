@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { searchDocuments, searchDocumentsAsync, DocumentRecord } from '../database';
 import { encodeText, warmUpText } from '../services/EmbeddingService';
+import { rescueQuery } from '../services/SpellingService';
 import { AppLogger } from '../utils/AppLogger';
 import { noteInteraction } from '../services/InteractionGate';
 import { clipTextForQuery } from '../utils/ConceptTable';
@@ -42,6 +43,8 @@ export const useSearch = (isDbReady: boolean) => {
     const [searchText, setSearchText] = useState('');
     const [debouncedSearchText, setDebouncedSearchText] = useState('');
     const [searchResults, setSearchResults] = useState<DocumentRecord[]>([]);
+    // What was typed, when the results shown are for a corrected query.
+    const [correctedFrom, setCorrectedFrom] = useState<string | null>(null);
     const [isSearching, setIsSearching] = useState(false);
     const [isSearchPending, setIsSearchPending] = useState(false);
     const [searchHistory, setSearchHistory] = useState<SearchHistoryItem[]>([]);
@@ -74,6 +77,7 @@ export const useSearch = (isDbReady: boolean) => {
     useEffect(() => {
         if (!isDbReady || !searchText.trim()) {
             setSearchResults([]);
+            setCorrectedFrom(null);
             setIsSearchPending(false);
             return;
         }
@@ -82,22 +86,37 @@ export const useSearch = (isDbReady: boolean) => {
         setIsSearchPending(true);
         const timer = setTimeout(async () => {
             try {
-                const textResults = searchDocuments(searchText);
+                let query = searchText;
+                let textResults = searchDocuments(searchText);
+                let typed: string | null = null;
+                // Nothing found by words: correct the typed words against the
+                // person's own index ("bijki bil" → "बिजली bill") and search that.
+                if (textResults.length === 0) {
+                    const rescue = await rescueQuery(searchText);
+                    if (!isCurrent) return;
+                    const rescued = rescue ? searchDocuments(rescue.query) : [];
+                    if (rescue && rescued.length > 0) {
+                        query = rescue.query;
+                        textResults = rescued;
+                        typed = searchText;
+                    }
+                }
                 if (!isCurrent) return;
                 lastResultRef.current = { query: searchText, count: textResults.length };
                 setSearchResults(textResults);
-                setDebouncedSearchText(searchText);
+                setDebouncedSearchText(query);
+                setCorrectedFrom(typed);
                 setIsSearchPending(false);
 
                 // Hindi and other Indian-script words never reach the
                 // English-only CLIP tokenizer: known concepts become English,
                 // unknown ones are dropped (null = skip semantic search).
-                const clipText = clipTextForQuery(searchText, queryWords(searchText));
+                const clipText = clipTextForQuery(query, queryWords(query));
                 const queryVector = clipText ? await encodeText(clipText) : null;
                 if (!isCurrent || !queryVector) return;
                 // The look-alike scan reads every photo's vector: off the JS
                 // thread, so typing and scrolling stay smooth while it runs.
-                const hybridResults = mergeResults(await searchDocumentsAsync(searchText, queryVector), textResults);
+                const hybridResults = mergeResults(await searchDocumentsAsync(query, queryVector), textResults);
                 if (!isCurrent) return;
                 lastResultRef.current = { query: searchText, count: hybridResults.length };
                 setSearchResults(hybridResults);
@@ -154,7 +173,7 @@ export const useSearch = (isDbReady: boolean) => {
 
     return {
         searchText, setSearchText, debouncedSearchText,
-        searchResults,
+        searchResults, correctedFrom,
         isSearching, setIsSearching, isSearchPending,
         searchHistory,
         handleSelectHistory, handleDeleteHistory, handleClearHistory,

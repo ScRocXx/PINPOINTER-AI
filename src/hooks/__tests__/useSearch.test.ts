@@ -41,6 +41,10 @@ jest.mock('../../services/EmbeddingService', () => ({
     warmUpText: jest.fn(),
 }));
 
+jest.mock('../../services/SpellingService', () => ({
+    rescueQuery: jest.fn(async () => null),
+}));
+
 jest.mock('../../utils/SearchHistory', () => ({
     loadSearchHistory: jest.fn(),
     saveSearch: jest.fn(),
@@ -49,6 +53,7 @@ jest.mock('../../utils/SearchHistory', () => ({
 }));
 
 const mockSearchDocuments = searchDocuments as unknown as jest.Mock;
+const mockRescue = (jest.requireMock('../../services/SpellingService') as { rescueQuery: jest.Mock }).rescueQuery;
 const mockEncodeText = encodeText as unknown as jest.Mock;
 const mockWarmUpText = warmUpText as unknown as jest.Mock;
 const mockLoadSearchHistory = loadSearchHistory as unknown as jest.Mock;
@@ -555,5 +560,46 @@ describe('useSearch — history handlers', () => {
         expect(result.current.handleSelectHistory).toBe(first.select);
         expect(result.current.handleDeleteHistory).toBe(first.del);
         expect(result.current.handleClearHistory).toBe(first.clear);
+    });
+});
+
+describe('useSearch — spelling rescue', () => {
+    test('when the typed words find nothing, shows results for the corrected words and says what was typed', async () => {
+        const found = [doc(1, 'Medicine slip')];
+        mockSearchDocuments.mockImplementation((q: string) => (q === 'medicine' ? found : []));
+        mockRescue.mockResolvedValueOnce({ query: 'medicine', corrections: [{ from: 'medicne', to: 'medicine' }] });
+        const { result } = await renderHook(() => useSearch(true));
+        await flush();
+        await typeAndWait(result, 'medicne', 200);
+        await flush();
+        expect(mockRescue).toHaveBeenCalledWith('medicne');
+        expect(result.current.searchResults).toEqual(found);
+        expect(result.current.debouncedSearchText).toBe('medicine');
+        expect(result.current.correctedFrom).toBe('medicne');
+        // The look-alike step uses the corrected words too.
+        expect(mockEncodeText.mock.calls[0][0]).toContain('medicine');
+        expect(mockEncodeText.mock.calls[0][0]).not.toContain('medicne');
+    });
+
+    test('does not correct anything when the typed words find something', async () => {
+        mockSearchDocuments.mockReturnValue([doc(2, 'Bill')]);
+        const { result } = await renderHook(() => useSearch(true));
+        await flush();
+        await typeAndWait(result, 'bill', 200);
+        await flush();
+        expect(mockRescue).not.toHaveBeenCalled();
+        expect(result.current.correctedFrom).toBeNull();
+    });
+
+    test('keeps "nothing found" when the correction finds nothing either', async () => {
+        mockSearchDocuments.mockReturnValue([]);
+        mockRescue.mockResolvedValueOnce({ query: 'ticket', corrections: [{ from: 'tikcet', to: 'ticket' }] });
+        const { result } = await renderHook(() => useSearch(true));
+        await flush();
+        await typeAndWait(result, 'tikcet', 200);
+        await flush();
+        expect(result.current.searchResults).toEqual([]);
+        expect(result.current.correctedFrom).toBeNull();
+        expect(result.current.debouncedSearchText).toBe('tikcet');
     });
 });
