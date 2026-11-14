@@ -26,7 +26,7 @@ import { Colors, GUTTER, Radius, Space, Touch } from '../theme';
 import { formatWhen, useStrings } from '../i18n';
 import { RootStackParamList } from '../navigation/types';
 import { getAllDocuments, searchDocuments } from '../database';
-import { usePinpointerShared } from '../hooks/PinpointerContext';
+import { PinpointerState, usePinpointerShared } from '../hooks/PinpointerContext';
 import { usePinnedItems } from '../hooks/usePinnedItems';
 import { describePlaces, usePdfPlaces } from '../hooks/usePdfPlaces';
 import { useScreenFocus } from '../hooks/useScreenFocus';
@@ -57,6 +57,15 @@ const openPdf = (filePath: string): void => {
   Linking.openURL(uri).catch(e => AppLogger.warn('Papers', 'Could not open the PDF', e));
 };
 
+/** Papers reads only PDF progress, so typing in search or photo progress doesn't redraw it. */
+const selectPapersSync = (s: PinpointerState) => ({
+  isSyncingDocs: s.isSyncingDocs,
+  docSyncCount: s.docSyncCount,
+  totalDocs: s.totalDocs,
+  lastDocSyncTime: s.lastDocSyncTime,
+  handleDocumentSync: s.handleDocumentSync,
+});
+
 /**
  * Papers: every PDF Pinpointer has read, newest first. Six big tiles (ID
  * cards, Bills, Bank, Medical, Tax, Other) narrow the list; the search
@@ -70,7 +79,8 @@ export const DocumentVaultScreen: React.FC = () => {
   const focused = useScreenFocus();
   const { isPinned, toggle } = usePinnedItems();
   const places = usePdfPlaces();
-  const { isSyncingDocs, docSyncCount, totalDocs, lastDocSyncTime, handleDocumentSync } = usePinpointerShared();
+  const { isSyncingDocs, docSyncCount, totalDocs, lastDocSyncTime, handleDocumentSync } =
+    usePinpointerShared(selectPapersSync);
 
   const [papers, setPapers] = useState<Paper[]>([]);
   const [group, setGroup] = useState<PaperGroup | null>(null);

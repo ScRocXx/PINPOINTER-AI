@@ -2,7 +2,7 @@ import React, { useCallback } from 'react';
 import { Linking, NativeModules } from 'react-native';
 import { useToast } from '../../components/ui';
 import { useStrings } from '../../i18n';
-import { usePinpointerShared } from '../../hooks/PinpointerContext';
+import { PinpointerState, usePinpointerShared } from '../../hooks/PinpointerContext';
 import { useHomeOverview } from '../../hooks/useHomeOverview';
 import { usePinnedItems } from '../../hooks/usePinnedItems';
 import { AppLogger } from '../../utils/AppLogger';
@@ -30,10 +30,38 @@ const openPaper = (filePath: string) => {
 };
 
 /**
+ * What Home shows. Search text and results are left out: Home sits under
+ * the search screen and must not redraw on every keystroke.
+ */
+const selectHome = (s: PinpointerState) => ({
+  setSearchText: s.setSearchText,
+  setIsSearching: s.setIsSearching,
+  isRecording: s.isRecording,
+  isTranscribing: s.isTranscribing,
+  isModelLoading: s.isModelLoading,
+  startListening: s.startListening,
+  stopListening: s.stopListening,
+  isSyncing: s.isSyncing,
+  isPaused: s.isPaused,
+  isDeepSync: s.isDeepSync,
+  syncCount: s.syncCount,
+  lastSyncTime: s.lastSyncTime,
+  handleQuickSync: s.handleQuickSync,
+  handleDeepSync: s.handleDeepSync,
+  handlePauseSync: s.handlePauseSync,
+  handleResumeSync: s.handleResumeSync,
+  isSyncingDocs: s.isSyncingDocs,
+  docSyncCount: s.docSyncCount,
+  totalDocs: s.totalDocs,
+  lastDocSyncTime: s.lastDocSyncTime,
+  handleDocumentSync: s.handleDocumentSync,
+});
+
+/**
  * Home's wiring: the shared Pinpointer state, the Important stars and the
  * Home overview (tiles, photo totals, recent photos) into `HomeView`.
  */
-export const Home: React.FC<HomeProps> = ({ onOpenImage }) => {
+const HomeInner: React.FC<HomeProps> = ({ onOpenImage }) => {
   const { t } = useStrings();
   const toast = useToast();
   const {
@@ -58,7 +86,7 @@ export const Home: React.FC<HomeProps> = ({ onOpenImage }) => {
     totalDocs,
     lastDocSyncTime,
     handleDocumentSync,
-  } = usePinpointerShared();
+  } = usePinpointerShared(selectHome);
   const { items: pinned, toggle } = usePinnedItems();
   const overview = useHomeOverview({ busy: isSyncing || isSyncingDocs, progressTick: syncCount + docSyncCount });
 
@@ -127,3 +155,7 @@ export const Home: React.FC<HomeProps> = ({ onOpenImage }) => {
     />
   );
 };
+
+/** Memoized: the search screen above it re-renders while typing; Home's own props don't change. */
+export const Home = React.memo(HomeInner);
+Home.displayName = 'Home';

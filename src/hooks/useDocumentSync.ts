@@ -81,6 +81,12 @@ export const useDocumentSync = () => {
         }
     };
     syncRef.current = handleDocumentSync;
+    // One identity for the whole life of the hook, so screens that read it
+    // through a selector don't re-render on every progress tick.
+    const stableDocumentSync = useCallback(
+        (limit?: number, fromShare = false) => syncRef.current(limit, fromShare),
+        [],
+    );
 
     // PDFs shared to Pinpointer from other apps: confirm, then index them.
     useEffect(() => subscribeToSharedPdfs((count) => {
@@ -96,7 +102,7 @@ export const useDocumentSync = () => {
         docSyncCount,
         totalDocs,
         lastDocSyncTime,
-        handleDocumentSync,
+        handleDocumentSync: stableDocumentSync,
         loadPersistedState
     };
 };

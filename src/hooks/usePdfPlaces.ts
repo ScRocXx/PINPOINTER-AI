@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 import { useToast } from '../components/ui';
 import { useStrings } from '../i18n';
-import { usePinpointerShared } from './PinpointerContext';
+import { PinpointerState, usePinpointerShared } from './PinpointerContext';
 import {
   PdfFolder,
   canRequestAllFilesAccess,
@@ -31,6 +31,11 @@ export interface PdfPlaces {
 
 const INITIAL: PdfPlaces = { ready: false, standard: false, canAskStandard: true, canPick: false, folders: [] };
 
+/** Only the action: this hook never needs to re-render for indexing progress. */
+const selectDocumentSync = (s: PinpointerState) => ({
+  handleDocumentSync: s.handleDocumentSync,
+});
+
 /**
  * The places Pinpointer reads PDFs from, plus the actions that change them.
  * Every change is confirmed with a toast and starts a document check, so new
@@ -40,7 +45,7 @@ const INITIAL: PdfPlaces = { ready: false, standard: false, canAskStandard: true
 export const usePdfPlaces = () => {
   const { t } = useStrings();
   const toast = useToast();
-  const { handleDocumentSync } = usePinpointerShared();
+  const { handleDocumentSync } = usePinpointerShared(selectDocumentSync);
   const [places, setPlaces] = useState<PdfPlaces>(INITIAL);
   const alive = useRef(true);
 

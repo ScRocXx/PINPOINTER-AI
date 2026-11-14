@@ -148,6 +148,24 @@ describe('mount & persisted state', () => {
 });
 
 // ─── happy-path sync (android) ──────────────────────────────────────────────
+describe('handleDocumentSync identity', () => {
+  test('stays the same function across renders and syncs', async () => {
+    (RNFS.readDir as jest.Mock).mockImplementation(async (p: string) =>
+      p === DOWNLOAD ? asItems([pdfFile('a.pdf', `${DOWNLOAD}/a.pdf`)]) : asItems([]),
+    );
+    const { result, rerender } = await renderHook(() => useDocumentSync());
+    const first = result.current.handleDocumentSync;
+
+    await act(async () => {
+      await result.current.handleDocumentSync();
+    });
+    await rerender({});
+
+    expect(result.current.handleDocumentSync).toBe(first);
+    expect(processPDF).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('handleDocumentSync — android happy path', () => {
   test('processes new PDFs with file:// URIs', async () => {
     (RNFS.readDir as jest.Mock).mockImplementation(async (p: string) =>
