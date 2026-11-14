@@ -180,12 +180,28 @@ describe('useSearch — debounced search (200ms)', () => {
         expect(result.current.searchResults).toEqual([doc(2, 'Beach'), likeOnly]);
     });
 
-    test('warms up the text encoder shortly after mount', async () => {
-        await renderHook(() => useSearch(true));
+    test('loads the text encoder when search opens, not at app start', async () => {
+        const { result } = await renderHook(() => useSearch(true));
         await flush();
+        await act(async () => { jest.advanceTimersByTime(60_000); });
         expect(mockWarmUpText).not.toHaveBeenCalled();
-        await act(async () => { jest.advanceTimersByTime(1500); });
+
+        await act(async () => { result.current.setIsSearching(true); });
         expect(mockWarmUpText).toHaveBeenCalledTimes(1);
+
+        // Typing doesn't ask again; closing and reopening search does
+        // (cheap when loaded: it only restarts the 10-minute countdown).
+        await typeAndWait(result, 'cat', 200);
+        expect(mockWarmUpText).toHaveBeenCalledTimes(1);
+        await act(async () => { result.current.setIsSearching(false); });
+        await act(async () => { result.current.setIsSearching(true); });
+        expect(mockWarmUpText).toHaveBeenCalledTimes(2);
+    });
+
+    test('does not load the text encoder before the database is ready', async () => {
+        const { result } = await renderHook(() => useSearch(false));
+        await act(async () => { result.current.setIsSearching(true); });
+        expect(mockWarmUpText).not.toHaveBeenCalled();
     });
 
     test('no search fires before the 200ms debounce elapses', async () => {

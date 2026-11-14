@@ -28,6 +28,8 @@ Object.assign(NativeModules, {
   MobileCLIPModule: {
     encodeImage: jest.fn(async () => []),
     encodeText: jest.fn(async () => []),
+    warmUpText: jest.fn(async () => true),
+    unloadText: jest.fn(async () => true),
   },
   NativePdfModule: {
     getPdfInfo: jest.fn(async () => ({ pageCount: 0, title: '' })),

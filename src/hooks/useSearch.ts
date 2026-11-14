@@ -12,7 +12,6 @@ import {
 
 const SEARCH_DEBOUNCE_MS = 200;
 const HISTORY_DEBOUNCE_MS = 800;
-const WARMUP_DELAY_MS = 1500;
 
 /**
  * Hybrid results first, then any text-only matches (synonyms, Soundex, LIKE
@@ -59,13 +58,14 @@ export const useSearch = (isDbReady: boolean) => {
         loadSearchHistory().then(setSearchHistory);
     }, [isDbReady]);
 
-    // Load the CLIP text encoder in the background shortly after startup, so the
-    // first search doesn't wait for the model to load.
+    // Load the CLIP text encoder when search opens, not at app start: it
+    // loads while the person types (word results never wait for it), and
+    // people who never search don't pay ~64 MB for it. EmbeddingService frees
+    // it again after 10 minutes without a search.
     useEffect(() => {
-        if (!isDbReady) return;
-        const timer = setTimeout(() => { warmUpText(); }, WARMUP_DELAY_MS);
-        return () => clearTimeout(timer);
-    }, [isDbReady]);
+        if (!isDbReady || !isSearching) return;
+        warmUpText();
+    }, [isDbReady, isSearching]);
 
     // Debounced search — 200ms after last keystroke.
     // Step 1 runs the text index right away (a few ms) and shows those results.

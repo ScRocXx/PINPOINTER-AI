@@ -211,6 +211,28 @@ class MobileCLIPModule(reactContext: ReactApplicationContext) : ReactContextBase
         }
     }
 
+    /**
+     * Free the text encoder and tokenizer (about 64 MB) after a long time
+     * without a search; the next query loads them again. Runs on the text
+     * thread, so it never closes the session under a running query. Resolves
+     * true when something was freed.
+     */
+    @ReactMethod
+    fun unloadText(promise: Promise) {
+        textExecutor.execute {
+            val loaded = textSession != null || bpeTokenizer != null
+            try {
+                textSession?.close()
+            } catch (e: Exception) {
+                Log.w(TAG, "Closing the text encoder failed", e)
+            }
+            textSession = null
+            bpeTokenizer = null
+            if (loaded) Log.i(TAG, "Text encoder unloaded")
+            promise.resolve(loaded)
+        }
+    }
+
     override fun invalidate() {
         imageExecutor.shutdownNow()
         textExecutor.shutdownNow()

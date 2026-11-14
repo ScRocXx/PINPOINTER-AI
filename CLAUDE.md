@@ -18,7 +18,7 @@ npm start                   # Metro
 npm run android             # build + install (needs Android SDK, a device or emulator)
 npx tsc --noEmit            # type check (must be clean)
 npm run lint                # eslint (must be clean)
-npx jest                    # 78 suites / ~2030 tests (must all pass). Slow on the D: drive; use --silent (--runInBand if workers run out of memory)
+npx jest                    # 78 suites / ~2040 tests (must all pass). Slow on the D: drive; use --silent (--runInBand if workers run out of memory)
 cd android && ./gradlew assembleDebug    # native compile check (JDK 17 from JAVA_HOME)
 cd android && ./gradlew assembleRelease  # release APK for phones (arm64-v8a + armeabi-v7a); signed with your keystore if configured (see below), else the debug key
 cd android && ./gradlew assembleRelease -PpinpointerAbis=arm64-v8a,armeabi-v7a,x86_64   # a release build that also runs on an emulator
@@ -58,7 +58,7 @@ cd tools/preview && npm install && npm run dev   # browser preview of the UI kit
 - `src/utils/DocumentPipeline.ts`: 5-phase PDF pipeline (native text for digital PDFs, raster + OCR for scanned ones; 500 chars/page, 2000 total, pages 1–3).
 
 ### Search and language
-- `src/hooks/useSearch.ts`: FTS results show **immediately**, then get re-ranked when the CLIP query vector arrives. No duplicate search for history. Hindi words reach CLIP as English through `ConceptTable`, and unknown non-Latin text skips CLIP.
+- `src/hooks/useSearch.ts`: FTS results show **immediately**, then get re-ranked when the CLIP query vector arrives. No duplicate search for history. Hindi words reach CLIP as English through `ConceptTable`, and unknown non-Latin text skips CLIP. The CLIP text model (about 64 MB) is **not** loaded at app start: `warmUpText()` runs when search opens (it loads while the person types; word results never wait), and `EmbeddingService` frees it with `MobileCLIPModule.unloadText()` after `TEXT_IDLE_UNLOAD_MS` (10 min) without a search. `isTextModelReady()` / `onTextModelReady()` tell others when it is loaded.
 - `src/utils/IndicText.ts`: one converter from 10 Indian scripts to Roman (schwa deletion, conjuncts, Indic digits) plus the **Bhasha sound key**.
 - `src/utils/SearchKeys.ts`: builds the same sound and concept keys for documents and queries.
 - `src/utils/Collections.ts`: the six collections (ID cards, Bills, Medicine, Bank, Screenshots, Family) as concept ids plus exact phrases. A whole query naming one (English or Hindi) searches the whole collection (`collectionForQuery`).
@@ -75,7 +75,7 @@ cd tools/preview && npm install && npm run dev   # browser preview of the UI kit
 ### State and UI
 - `src/hooks/PinpointerContext.tsx` provides one `usePinpointer()`. **Screens must use `usePinpointerShared()`.** A second instance means duplicate sync engines and listeners. The value changes on every keystroke and every indexed photo, so screens pass a module-level selector, `usePinpointerShared(selectX)`, and re-render only when their slice changes (shallow compare). Callbacks in the value must keep one identity (useCallback, or a ref like `handleDocumentSync`), or selectors stop helping.
 - Hooks (`useGallerySync`, `useDocumentSync`) only handle permissions, alerts and progress. They call `IndexingService` and must never run sync loops themselves.
-- `src/hooks/useHomeOverview.ts`: Home's tiles (words via `collections.ts`, Screenshots from the MediaStore album, Family by CLIP after a 3 s delay), photo totals and recent photos; loads after the first frame, never asks for permission, refreshes gently while indexing runs.
+- `src/hooks/useHomeOverview.ts`: Home's tiles (words via `collections.ts`, Screenshots from the MediaStore album, Family by CLIP once a search has loaded the text model; until then Family shows the photos found by words), photo totals and recent photos; loads after the first frame, never asks for permission, refreshes gently while indexing runs.
 - `src/hooks/useIndexingProgress.ts`: live photo and PDF progress for any screen, whoever started the work (listens to `IndexingService`, re-reads `getReadyCounts()` at most every 500 ms, counts every photo with `getGalleryTotalCount()`, which sums the camera-roll albums). The pure part is `toIndexingProgress`.
 - Navigation (`src/App.tsx`, `src/navigation/`): a stack whose `Main` route is Pinpointer's own bottom-tab navigator (`MainTabs.tsx`, built on React Navigation's `TabRouter`, no extra package). Tabs: `Pinpointer` (Home/search), `Gallery` (Photos), `DocumentVault` (Papers), `Settings`; the raised Scan button in the middle opens `SmartClipboard` on the stack. Tabs mount on first visit and stay mounted. Screens type navigation with `RootStackParamList` (all routes by name) and hide the bar with `setOptions({ tabBarHidden: true })`. `MainTabs` takes a `banner(routeName)` slot drawn just above the bar (hidden with it); App uses it for `PhotoAccessBanner` on Home (Photos has its own notice in the page).
 - First run (`FirstRunScreen`, steps in `src/screens/firstRun/`): Welcome (language, the scan animation) → Photos (asks in plain words; written-out Settings steps once Android won't ask again) → PDFs (All files access, or one folder; only on Android 11+) → Ready (starts `deepGallerySync`, then `documentSync`, and shows "120 of 2,400" from `useIndexingProgress`). Steps already allowed are skipped. `useFirstRunGate()` + `utils/FirstRun.ts` decide at start (`FirstRun` route vs `Main`); people updating with an existing index skip it. Every step has "Not now", and Android back never traps anyone.
@@ -97,7 +97,7 @@ cd tools/preview && npm install && npm run dev   # browser preview of the UI kit
 - `hooks/useReducedMotion.ts` (one shared check and listener for the whole app), `hooks/useScreenFocus.ts` (focus that also works outside a navigator).
 
 ### Native modules (`android/app/src/main/java/com/pinpointer/app/`)
-`MobileCLIPModule` (own thread, int8 models, ORT 1.20; decodes file paths and the `content://` URIs gallery photos use) + `BPETokenizer` (CLIP-exact vocab), `NativePdfModule`, `SherpaOnnxModule`, `StorageModule`, `DocumentAccessModule`, `IndexingJobService` + `IndexingSchedulerModule`. The package name and application ID are `com.pinpointer.app`.
+`MobileCLIPModule` (own thread per encoder, int8 models; decodes file paths and the `content://` URIs gallery photos use; `unloadText` frees the text encoder on its own thread) + `BPETokenizer` (CLIP-exact vocab), `NativePdfModule`, `SherpaOnnxModule`, `StorageModule`, `DocumentAccessModule`, `IndexingJobService` + `IndexingSchedulerModule`. The package name and application ID are `com.pinpointer.app`.
 
 ## Rules
 

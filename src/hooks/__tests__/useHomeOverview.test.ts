@@ -23,9 +23,28 @@ jest.mock('../../database', () => ({
     (jest.requireMock('../../database') as { getSimilarPhotos: (v: Float32Array, n: number) => unknown }).getSimilarPhotos(v, n)),
 }));
 
-jest.mock('../../services/EmbeddingService', () => ({
-  encodeText: jest.fn(),
-}));
+// The text model's "ready" signal, driven by each test (it fires after a search loads the model).
+jest.mock('../../services/EmbeddingService', () => {
+  const listeners = new Set<() => void>();
+  let ready = false;
+  return {
+    encodeText: jest.fn(),
+    isTextModelReady: jest.fn(() => ready),
+    onTextModelReady: jest.fn((listener: () => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    }),
+    __modelLoaded: () => {
+      ready = true;
+      listeners.forEach(l => l());
+    },
+    __resetModel: () => {
+      ready = false;
+      listeners.clear();
+    },
+  };
+});
+const textModel = jest.requireMock('../../services/EmbeddingService') as { __modelLoaded: () => void; __resetModel: () => void };
 
 jest.mock('../../utils/RecentPhotos', () => ({
   getRecentPhotos: jest.fn(),
@@ -60,6 +79,7 @@ const mount = async (initialProps: HomeOverviewOptions = { busy: false }) => {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  textModel.__resetModel();
   mockChecked.mockReturnValue(120);
   mockPreview.mockImplementation((c: Collection) => PREVIEWS[c.id] ?? { count: 0, capped: false, photos: [] });
   mockSimilar.mockReturnValue([]);
@@ -185,21 +205,25 @@ describe('useHomeOverview', () => {
   });
 
   describe('Family, found by look', () => {
-    it('adds look-alike photos after search\'s warm-up and drops the count', async () => {
+    const family = ['file:///mum.jpg', 'file:///wedding.jpg', 'file:///kids.jpg', 'file:///picnic.jpg'];
+
+    it('does not load the text model at start; fills in once a search has loaded it', async () => {
       jest.useFakeTimers();
       const vector = new Float32Array([0.1, 0.2]);
       mockEncode.mockResolvedValue(vector);
-      mockSimilar.mockReturnValue(['file:///mum.jpg', 'file:///wedding.jpg', 'file:///kids.jpg', 'file:///picnic.jpg']);
+      mockSimilar.mockReturnValue(family);
 
       const { result } = await renderHook(() => useHomeOverview({ busy: false }));
       await act(async () => {
-        await jest.advanceTimersByTimeAsync(500);
+        await jest.advanceTimersByTimeAsync(10_000);
       });
+      // Long after start: still the tile found by words, and no CLIP call.
       expect(result.current.collections.family).toEqual({ count: 3, capped: false, photos: ['file:///wedding.jpg'] });
       expect(mockEncode).not.toHaveBeenCalled();
 
       await act(async () => {
-        await jest.advanceTimersByTimeAsync(3000);
+        textModel.__modelLoaded();
+        await jest.advanceTimersByTimeAsync(0);
       });
       expect(mockEncode).toHaveBeenCalledWith('family photo');
       expect(mockSimilar).toHaveBeenCalledWith(vector, 9);
@@ -210,32 +234,37 @@ describe('useHomeOverview', () => {
       });
     });
 
+    it('uses the model at once when it is already loaded as Home mounts', async () => {
+      mockEncode.mockResolvedValue(new Float32Array([0.3]));
+      mockSimilar.mockReturnValue(family);
+      textModel.__modelLoaded();
+      const { result } = await mount();
+      await waitFor(() => expect(result.current.collections.family.photos[0]).toBe('file:///mum.jpg'));
+    });
+
     it('keeps the tile found by words when CLIP is not available', async () => {
-      jest.useFakeTimers();
-      const { result } = await renderHook(() => useHomeOverview({ busy: false }));
+      const { result } = await mount();
       await act(async () => {
-        await jest.advanceTimersByTimeAsync(4000);
+        textModel.__modelLoaded();
       });
       expect(mockSimilar).not.toHaveBeenCalled();
       expect(result.current.collections.family).toEqual({ count: 3, capped: false, photos: ['file:///wedding.jpg'] });
     });
 
     it('survives the encoder failing', async () => {
-      jest.useFakeTimers();
       mockEncode.mockRejectedValue(new Error('model missing'));
-      const { result } = await renderHook(() => useHomeOverview({ busy: false }));
+      const { result } = await mount();
       await act(async () => {
-        await jest.advanceTimersByTimeAsync(4000);
+        textModel.__modelLoaded();
       });
       expect(result.current.collections.family.count).toBe(3);
     });
 
     it('does not ask CLIP after Home is gone', async () => {
-      jest.useFakeTimers();
-      const { unmount } = await renderHook(() => useHomeOverview({ busy: false }));
+      const { unmount } = await mount();
       await unmount();
       await act(async () => {
-        await jest.advanceTimersByTimeAsync(4000);
+        textModel.__modelLoaded();
       });
       expect(mockEncode).not.toHaveBeenCalled();
     });
