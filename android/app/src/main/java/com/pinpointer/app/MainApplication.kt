@@ -24,6 +24,7 @@ class MainApplication : Application(), ReactApplication {
               // sherpa-onnx powered on-device STT
               add(SherpaOnnxPackage())
               add(MobileCLIPPackage())
+              add(PhotoReaderPackage())
               // Schedules background indexing while charging (IndexingJobService)
               add(IndexingSchedulerPackage())
             }

@@ -183,6 +183,11 @@ dependencies {
     // 2. The "Devanagari" model (for Hindi)
     implementation 'com.google.mlkit:text-recognition-devanagari:16.0.0'
 
+    // 2b. Image labels, for PhotoReaderModule (labels the bitmap it already
+    // decoded). The same version @react-native-ml-kit/image-labeling bundles,
+    // so nothing new goes into the APK.
+    implementation 'com.google.mlkit:image-labeling:17.0.9'
+
     // 3. ONNX Runtime Android - Java/Kotlin API for MobileCLIP inference, and
     // the one libonnxruntime.so in the APK. The version must be the ONNX
     // Runtime that the sherpa-onnx AAR is built against (download-models.js).

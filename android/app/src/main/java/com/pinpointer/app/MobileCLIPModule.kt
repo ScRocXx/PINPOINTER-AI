@@ -134,7 +134,10 @@ class MobileCLIPModule(reactContext: ReactApplicationContext) : ReactContextBase
             var result: OrtSession.Result? = null
             try {
                 val path = if (imagePath.startsWith("file://")) imagePath.substring(7) else imagePath
-                val bitmap = loadSquareBitmap(path)
+                // Upright, as people see it: a sideways portrait photo looks like something else.
+                val bitmap = loadSquareBitmap(path)?.let {
+                    ImageOrientation.rotate(it, ImageOrientation.rotationDegrees(reactApplicationContext, path))
+                }
                 if (bitmap == null) {
                     promise.reject("IMAGE_ERROR", "Failed to load image from path")
                     return@execute

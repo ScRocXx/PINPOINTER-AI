@@ -18,7 +18,7 @@ npm start                   # Metro
 npm run android             # build + install (needs Android SDK, a device or emulator)
 npx tsc --noEmit            # type check (must be clean)
 npm run lint                # eslint (must be clean)
-npx jest                    # 85 suites / ~2180 tests (must all pass). Slow on the D: drive; use --silent (--runInBand if workers run out of memory)
+npx jest                    # 86 suites / ~2190 tests (must all pass). Slow on the D: drive; use --silent (--runInBand if workers run out of memory)
 cd android && ./gradlew assembleDebug    # native compile check (JDK 17 from JAVA_HOME)
 cd android && ./gradlew assembleRelease  # release APK for phones (arm64-v8a + armeabi-v7a); signed with your keystore if configured (see below), else the debug key
 cd android && ./gradlew assembleRelease -PpinpointerAbis=arm64-v8a,armeabi-v7a,x86_64   # a release build that also runs on an emulator
@@ -55,7 +55,7 @@ cd tools/preview && npm install && npm run dev   # browser preview of the UI kit
 - `src/utils/DocumentSync.ts`: PDF crawl (Download/, Documents/, plus copies of picked or shared PDFs from `PdfImport`). Newest first; a `limit` counts only PDFs that still need work.
 - `src/utils/MissingFiles.ts`: removes deleted photos and PDFs from the index (`removeDocument`). `pruneMissingFiles` is the `prune` job; `forgetIfGone` runs when a result is tapped. A file only counts as gone when we may look (full photo access, All Files Access, or our own imported copy) and `RNFS.stat` says it doesn't exist.
 - `src/services/BackgroundIndexingTask.ts` + native `IndexingJobService.kt` / `IndexingSchedulerModule.kt`: a JobScheduler job (**id 4711**, every 6 h with 2 h flex, only while charging with battery and storage not low, persisted). It runs a headless JS task that resumes deep sync, then the prune, then the rekey, then the backfill, stops after 8 min or on unplug, never asks for permissions, and counts limited photo access.
-- `src/utils/VisionPipeline.ts`: resize → ML Kit OCR (Latin + Devanagari) → garbage filter → labels as a fallback → CLIP image embedding (`EmbeddingService` → `MobileCLIPModule`).
+- `src/utils/VisionPipeline.ts`: with the native `PhotoReader` (one decode, at most 1,600 px; ML Kit recognizers reused on background threads; rotation from MediaStore/EXIF; labels from the same bitmap when there is little text), scripts chosen per photo by `utils/ScriptPlanner.ts` (Latin only for English galleries once learned, Devanagari when Latin finds little, both every 10th photo); without it the old path: resize → ML Kit OCR (Latin + Devanagari) → labels. Then garbage filter → CLIP image embedding (`EmbeddingService` → `MobileCLIPModule`).
 - `src/utils/DocumentPipeline.ts`: 5-phase PDF pipeline (native text for digital PDFs, raster + OCR for scanned ones; 500 chars/page, 2000 total, pages 1–3).
 
 ### Search and language
@@ -99,7 +99,7 @@ cd tools/preview && npm install && npm run dev   # browser preview of the UI kit
 - `hooks/useReducedMotion.ts` (one shared check and listener for the whole app), `hooks/useScreenFocus.ts` (focus that also works outside a navigator).
 
 ### Native modules (`android/app/src/main/java/com/pinpointer/app/`)
-`MobileCLIPModule` (own thread per encoder, int8 models; decodes file paths and the `content://` URIs gallery photos use; `unloadText` frees the text encoder on its own thread) + `BPETokenizer` (CLIP-exact vocab), `NativePdfModule`, `SherpaOnnxModule`, `StorageModule`, `DocumentAccessModule`, `IndexingJobService` + `IndexingSchedulerModule`. The package name and application ID are `com.pinpointer.app`.
+`MobileCLIPModule` (own thread per encoder, int8 models; decodes file paths and the `content://` URIs gallery photos use, turned upright; `unloadText` frees the text encoder on its own thread), `PhotoReaderModule` (one-decode OCR and labels, see VisionPipeline) + `ImageOrientation` + `BPETokenizer` (CLIP-exact vocab), `NativePdfModule`, `SherpaOnnxModule`, `StorageModule`, `DocumentAccessModule`, `IndexingJobService` + `IndexingSchedulerModule`. The package name and application ID are `com.pinpointer.app`.
 
 ## Rules
 

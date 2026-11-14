@@ -518,3 +518,54 @@ describe('VisionPipeline — analyzeImage', () => {
         });
     });
 });
+
+describe('analyzeImage — one decode with the native PhotoReader', () => {
+    const readText = jest.fn();
+    beforeEach(async () => {
+        jest.requireActual('../ScriptPlanner').__resetScriptPlanner();
+        (NativeModules as Record<string, unknown>).PhotoReader = { readText };
+        readText.mockReset();
+    });
+    afterEach(() => {
+        delete (NativeModules as Record<string, unknown>).PhotoReader;
+    });
+
+    it('reads the original once: no resized copy, CLIP gets the original too', async () => {
+        readText.mockResolvedValue({ results: [{ script: 'latin', text: 'Electricity bill amount 1240' }, { script: 'devanagari', text: '' }] });
+        const result = await analyzeImage(IMG);
+        expect(resizeMock).not.toHaveBeenCalled();
+        expect(recognizeMock).not.toHaveBeenCalled();
+        expect(readText).toHaveBeenCalledWith(IMG, expect.objectContaining({ scripts: ['latin', 'devanagari'], labelBelowChars: 20 }));
+        expect(encodeImageNative).toHaveBeenCalledWith(IMG);
+        expect(result.detection_type).toBe('TEXT');
+        expect(result.raw_text).toBe('Electricity bill amount 1240');
+    });
+
+    it('keeps only the Hindi lines of the Devanagari pass, so English is not stored twice', async () => {
+        readText.mockResolvedValue({
+            results: [
+                { script: 'latin', text: 'Electricity bill' },
+                { script: 'devanagari', text: 'बिजली बिल\nElectricity bill', lines: [{ text: 'बिजली बिल' }, { text: 'Electricity bill' }] },
+            ],
+        });
+        const result = await analyzeImage(IMG);
+        expect(result.raw_text).toBe('Electricity bill बिजली बिल');
+    });
+
+    it('uses the labels it made from the same bitmap, never ML Kit\'s full-size file loader', async () => {
+        readText.mockResolvedValue({ results: [{ script: 'latin', text: '' }, { script: 'devanagari', text: '' }], labels: [{ text: 'Dog', confidence: 0.9 }] });
+        const result = await analyzeImage(IMG);
+        expect(labelMock).not.toHaveBeenCalled();
+        expect(result.detection_type).toBe('OBJECT');
+        expect(result.raw_text).toBe('Dog');
+    });
+
+    it('falls back to the old path when PhotoReader fails', async () => {
+        readText.mockRejectedValue(new Error('decode failed'));
+        setResizedUri(RESIZED);
+        setOCR('Bill text here');
+        const result = await analyzeImage(IMG);
+        expect(resizeMock).toHaveBeenCalled();
+        expect(result.raw_text).toBe('Bill text here');
+    });
+});

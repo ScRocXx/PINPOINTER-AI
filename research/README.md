@@ -26,7 +26,7 @@ This file is updated as each part lands. Status: **planned**, **in progress**,
 | 2 | Spelling rescue from your own words | "bijki bil" or "medicne" still finds the paper, with "Showing results for …" | **done** |
 | 3 | Memory anchors: dates and festivals | "Diwali photos", "papers from last month", "kal ki photo" | **done** |
 | 4 | Answer cards | A bill result shows "Amount ₹1,240 · Pay by 5 April" without opening it | **done** |
-| 5 | Words-first photo reader (native) | Indexing reads each photo once; screenshots' small text stays readable | planned |
+| 5 | Words-first photo reader (native) | Indexing reads each photo once; screenshots' small text stays readable | **done** (needs a phone build) |
 | 6 | Hindi voice tuned to your words (native) | Speak in Hindi; names and medicine words in your papers are understood | planned |
 | 7 | Series and duplicates | WhatsApp copies read once; "latest electricity bill" | planned |
 
@@ -218,10 +218,63 @@ it).
 - Next: read the answer aloud with the phone's own Hindi voice (Android
   text-to-speech, offline), for people who find reading hard.
 
-## 5–7 (planned)
+## 5. Words-first photo reader (done; needs a phone build)
 
-Native work, described in [`notes.md`](notes.md). They need an Android build
-and a phone to prove, so they come after 1–4.
+**What people notice.** Indexing is lighter on the phone, and small text in
+screenshots is read more often: a 1080x2400 screenshot was shrunk to 461x1024
+before OCR, now it keeps 720x1600.
+
+**How.** A new native module, `PhotoReaderModule.kt`:
+
+- **One decode per photo**, downsampling while decoding, at most 1,600 px on
+  the longer side. The old path decoded 3–4 times and wrote and deleted a JPEG
+  for every photo.
+- **ML Kit recognizers made once and reused.** The RN library made a new one
+  per call and never closed it.
+- **Background-priority threads**, so reading never competes with drawing.
+- **The photo's rotation** is passed with the bitmap (MediaStore's orientation
+  for gallery photos, EXIF for files; `ImageOrientation.kt`).
+- **Labels** for photos with little text come from the same bitmap. ML Kit's
+  file loader would decode the full 12 MP original, about 48 MB.
+- **Each line** comes back with its confidence and position, for later use.
+
+`MobileCLIPModule` now turns photos upright too. This also fixes the CLIP
+backfill, which gave the model sideways originals. Vectors already stored are
+kept: re-encoding every photo for this isn't worth the battery.
+
+`utils/ScriptPlanner.ts` decides the scripts per photo:
+
+- both while it learns the gallery (the first 100 photos read with
+  Devanagari);
+- both always if Devanagari turns up in 2% or more of photos;
+- otherwise Latin, plus Devanagari on any photo where Latin finds fewer than
+  15 characters, and both on every 10th photo.
+
+When both scripts run, only the Devanagari pass's Hindi lines are kept (it
+reads English too, which was being stored twice). `VisionPipeline` uses
+PhotoReader when it is there and falls back to the old path otherwise.
+
+**Checked:** the Kotlin compiles against the real classes of react-android
+0.83.1, onnxruntime-android 1.27.0 and ML Kit (text recognition 16.0.0,
+Devanagari 16.0.0, image labeling 17.0.9). Not yet: `assembleDebug`, and a
+run on a phone (speed, memory, and whether the 1,600 px reads screenshots
+better).
+
+`android/app/build.gradle` now names `com.google.mlkit:image-labeling:17.0.9`
+for the app's own code: the version the RN library already bundles, so the
+APK doesn't grow.
+
+## 6. Hindi voice tuned to your words (planned; needs your decision)
+
+Swapping Whisper base.en (English only, about 160 MB) for a small streaming
+Hindi model (indic-lekhan, 28 MB) with the person's own words as sherpa-onnx
+hotwords changes who voice search serves, and the APK. Keeping both, or
+choosing by app language, is a product choice; see [`notes.md`](notes.md).
+
+## 7. Series and duplicates (planned)
+
+WhatsApp copies (same file in several folders) read once; monthly bills
+grouped ("latest electricity bill").
 
 ## What stays the same
 
