@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { searchDocuments, DocumentRecord } from '../database';
+import { searchDocuments, searchDocumentsAsync, DocumentRecord } from '../database';
 import { encodeText, warmUpText } from '../services/EmbeddingService';
 import { AppLogger } from '../utils/AppLogger';
 import { noteInteraction } from '../services/InteractionGate';
@@ -95,7 +95,9 @@ export const useSearch = (isDbReady: boolean) => {
                 const clipText = clipTextForQuery(searchText, queryWords(searchText));
                 const queryVector = clipText ? await encodeText(clipText) : null;
                 if (!isCurrent || !queryVector) return;
-                const hybridResults = mergeResults(searchDocuments(searchText, queryVector), textResults);
+                // The look-alike scan reads every photo's vector: off the JS
+                // thread, so typing and scrolling stay smooth while it runs.
+                const hybridResults = mergeResults(await searchDocumentsAsync(searchText, queryVector), textResults);
                 if (!isCurrent) return;
                 lastResultRef.current = { query: searchText, count: hybridResults.length };
                 setSearchResults(hybridResults);

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CameraRoll } from '@react-native-camera-roll/camera-roll';
-import { countCheckedFiles, getCollectionPreview, getSimilarPhotos } from '../database';
+import { countCheckedFiles, getCollectionPreview, getSimilarPhotosAsync } from '../database';
 import { encodeText } from '../services/EmbeddingService';
 import { AppLogger } from '../utils/AppLogger';
 import { COLLECTIONS, CollectionId, getCollection } from '../utils/Collections';
@@ -77,7 +77,8 @@ const readAlbums = async (): Promise<{ total: number | null; screenshots: string
 /** Photos that look like a collection (Family), closest first. */
 const readSimilar = async (id: CollectionId): Promise<string[]> => {
   const vector = await encodeText(getCollection(id).clip);
-  return vector ? getSimilarPhotos(vector, PHOTOS_PER_TILE * 3) : [];
+  // Off the JS thread: it runs 3 s after start, just when people first tap around.
+  return vector ? getSimilarPhotosAsync(vector, PHOTOS_PER_TILE * 3) : [];
 };
 
 /**

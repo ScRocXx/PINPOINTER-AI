@@ -52,12 +52,14 @@ const EXPECTED_EXPORTS = [
   'removeDocument',
   'rollbackTransaction',
   'searchDocuments',
+  'searchDocumentsAsync',
   'setupDatabase',
   'getSimilarPhotos',
+  'getSimilarPhotosAsync',
 ].sort();
 
 // Internal helpers that must NOT leak through the public barrel.
-const INTERNAL_HELPERS = ['getDb', 'isFtsAvailable', 'isVecAvailable', 'processResults'];
+const INTERNAL_HELPERS = ['getDb', 'getReadDb', 'isFtsAvailable', 'isVecAvailable', 'processResults'];
 
 const barrelNs = Database as unknown as Record<string, unknown>;
 

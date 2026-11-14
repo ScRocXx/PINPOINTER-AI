@@ -342,6 +342,13 @@ class MockDB {
       const [blob, k] = params;
       return { rows: this._vectorDistances(blob).slice(0, k) };
     }
+    // Sampled distances for the far-photo yardstick: every stride-th document_id.
+    if (/^SELECT vec_distance_l2\(embedding, vec_f32\(\?\)\) AS distance\s+FROM vec_index\s+WHERE document_id % \? = 0/i.test(q)) {
+      const [blob, stride] = params;
+      const rows = this._vectorDistances(blob).filter((r) => r.document_id % stride === 0);
+      this.sampledDistanceReads = (this.sampledDistanceReads || 0) + rows.length;
+      return { rows: rows.map((r) => ({ distance: r.distance })) };
+    }
     if (/^SELECT vec_distance_l2\(embedding, vec_f32\(\?\)\) AS distance\s+FROM vec_index ORDER BY distance LIMIT 1 OFFSET \?/i.test(q)) {
       const [blob, offset] = params;
       const row = this._vectorDistances(blob)[offset];

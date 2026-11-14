@@ -18,6 +18,9 @@ jest.mock('../../database', () => ({
   countCheckedFiles: jest.fn(),
   getCollectionPreview: jest.fn(),
   getSimilarPhotos: jest.fn(),
+  // Home awaits this; it hands over to the getSimilarPhotos mock.
+  getSimilarPhotosAsync: jest.fn(async (v: Float32Array, n: number) =>
+    (jest.requireMock('../../database') as { getSimilarPhotos: (v: Float32Array, n: number) => unknown }).getSimilarPhotos(v, n)),
 }));
 
 jest.mock('../../services/EmbeddingService', () => ({

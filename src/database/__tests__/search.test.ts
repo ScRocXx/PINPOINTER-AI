@@ -18,7 +18,7 @@ import * as connection from '../connection';
 import { indexDocument } from '../documents';
 import { getEmbeddingCount, indexEmbedding, MIN_PHOTOS_FOR_STAND_OUT } from '../vectors';
 import { soundex } from '../../utils/Soundex';
-import { extractSnippet, mergeByRank, searchDocuments, MAX_VECTOR_DISTANCE, RANK_K, TEXT_WEIGHT } from '../search';
+import { extractSnippet, mergeByRank, searchDocuments, searchDocumentsAsync, MAX_VECTOR_DISTANCE, RANK_K, TEXT_WEIGHT } from '../search';
 import type { DocumentRecord } from '../types';
 
 // Top-level import: jest's moduleNameMapper routes this to the SAME mock
@@ -318,6 +318,39 @@ describe('searchDocuments — photos that look like the query', () => {
       return real(sql, params as never);
     }) as never);
     expect(paths(searchDocuments('goa', QUERY))).toEqual(['/photos/goa.jpg']);
+  });
+});
+
+describe('searchDocumentsAsync — the look-alike scan off the JS thread', () => {
+  test('finds the same results as searchDocuments, in the same order', async () => {
+    for (let i = 0; i < MIN_PHOTOS_FOR_STAND_OUT + 4; i++) addPhoto(`far${i}`, 0.05, 2 + i);
+    addPhoto('lookonly', 0.4, 100);
+    const goaId = connection.getDb().executeSync('SELECT id FROM document_index WHERE filePath = ? LIMIT 1', ['/photos/goa.jpg']);
+    indexEmbedding((goaId.rows[0] as { id: number }).id, atCosine(0.3, 101));
+
+    for (const q of ['trip', 'zzzlook', 'aadhaar card', 'goa', '']) {
+      expect(paths(await searchDocumentsAsync(q, QUERY))).toEqual(paths(searchDocuments(q, QUERY)));
+      expect(paths(await searchDocumentsAsync(q))).toEqual(paths(searchDocuments(q)));
+    }
+  });
+
+  test('runs the vector queries on the read connection, never with executeSync', async () => {
+    for (let i = 0; i < MIN_PHOTOS_FOR_STAND_OUT + 4; i++) addPhoto(`far${i}`, 0.05, 2 + i);
+    const closest = addPhoto('closest', 0.4, 101);
+    const db = connection.getDb();
+    const real = db.executeSync.bind(db);
+    const vecOnJsThread: string[] = [];
+    jest.spyOn(db, 'executeSync').mockImplementation(((sql: string, params?: unknown[]) => {
+      if (/vec_index|vec_distance/.test(sql)) vecOnJsThread.push(sql);
+      return real(sql, params as never);
+    }) as never);
+    expect(paths(await searchDocumentsAsync('zzzlook', QUERY))).toEqual([closest]);
+    expect(vecOnJsThread).toEqual([]);
+  });
+
+  test('a failing read connection still returns the word matches', async () => {
+    jest.spyOn(connection.getReadDb(), 'execute').mockImplementation((() => Promise.reject(new Error('no vec0'))) as never);
+    expect(paths(await searchDocumentsAsync('goa', QUERY))).toEqual(['/photos/goa.jpg']);
   });
 });
 

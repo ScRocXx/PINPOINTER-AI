@@ -9,8 +9,8 @@
 import { AppLogger } from '../utils/AppLogger';
 import type { Collection } from '../utils/Collections';
 import { collectionTerms } from './collectionTerms';
-import { getDb, isFtsAvailable, isVecAvailable } from './connection';
-import { findLookAlikes } from './vectors';
+import { getDb, getReadDb, isFtsAvailable, isVecAvailable } from './connection';
+import { findLookAlikes, findLookAlikesAsync } from './vectors';
 
 /** Collections are counted up to this many files; more shows as "999+". */
 export const COLLECTION_COUNT_CAP = 999;
@@ -84,6 +84,16 @@ export const getCollectionPreview = (collection: Collection, photoLimit = 3): Co
   }
 };
 
+const PATHS_BY_IDS_SQL = (count: number) =>
+  `SELECT id, filePath FROM document_index
+       WHERE type = 'IMAGE' AND id IN (${Array.from({ length: count }, () => '?').join(', ')})`;
+
+const pathsInIdOrder = (ids: number[], result: { rows?: Array<Record<string, unknown>> } | null | undefined): string[] => {
+  const rows = (result?.rows ?? []) as unknown as Array<{ id: number; filePath?: string }>;
+  const pathById = new Map(rows.map(r => [r.id, r.filePath]));
+  return [...new Set(ids.map(id => pathById.get(id)).filter((p): p is string => !!p))];
+};
+
 /**
  * Photos whose CLIP vector is close to `queryVector`, closest first. Empty
  * when the vector index isn't available. Same rule as search: only photos
@@ -94,16 +104,22 @@ export const getSimilarPhotos = (queryVector: Float32Array, limit = 12): string[
   try {
     const ids = findLookAlikes(queryVector, limit).map(l => l.documentId);
     if (ids.length === 0) return [];
-    const result = getDb().executeSync(
-      `SELECT id, filePath FROM document_index
-       WHERE type = 'IMAGE' AND id IN (${ids.map(() => '?').join(', ')})`,
-      ids,
-    );
-    const rows = (result?.rows ?? []) as unknown as Array<{ id: number; filePath?: string }>;
-    const pathById = new Map(rows.map(r => [r.id, r.filePath]));
-    return [...new Set(ids.map(id => pathById.get(id)).filter((p): p is string => !!p))];
+    return pathsInIdOrder(ids, getDb().executeSync(PATHS_BY_IDS_SQL(ids.length), ids));
   } catch (e) {
     AppLogger.warn('DB', 'getSimilarPhotos failed:', e);
+    return [];
+  }
+};
+
+/** getSimilarPhotos on the read connection, off the JS thread (Home's Family tile). */
+export const getSimilarPhotosAsync = async (queryVector: Float32Array, limit = 12): Promise<string[]> => {
+  if (!isVecAvailable()) return [];
+  try {
+    const ids = (await findLookAlikesAsync(queryVector, limit)).map(l => l.documentId);
+    if (ids.length === 0) return [];
+    return pathsInIdOrder(ids, await getReadDb().execute(PATHS_BY_IDS_SQL(ids.length), ids));
+  } catch (e) {
+    AppLogger.warn('DB', 'getSimilarPhotosAsync failed:', e);
     return [];
   }
 };

@@ -1,7 +1,7 @@
 /**
  * sqlite-vec embedding storage: per-document 512-dim vectors.
  */
-import { getDb, isVecAvailable } from './connection';
+import { getDb, getReadDb, isVecAvailable } from './connection';
 import { AppLogger } from '../utils/AppLogger';
 import { CURRENT_EMBED_MODEL, MAX_ATTEMPTS } from './fileState';
 
@@ -44,45 +44,117 @@ export interface LookAlike {
   distance: number;
 }
 
+/**
+ * The yardstick is measured on at most about this many photos. The 90th
+ * percentile of a 256-photo sample is within a few ranks of the true one,
+ * far finer than STAND_OUT_GAP, and it spares a 10,000-photo gallery from
+ * measuring and sorting every vector on each search. Galleries this size
+ * or smaller are measured whole, exactly as before.
+ */
+export const FAR_SAMPLE_SIZE = 256;
+
+/** Measure every `stride`-th photo (by id) so about FAR_SAMPLE_SIZE are measured. */
+export const sampleStride = (count: number): number => Math.max(1, Math.ceil(count / FAR_SAMPLE_SIZE));
+
+/** The FAR_PERCENTILE distance among `distances` (NaN when there are none). */
+export const farDistanceOf = (distances: ReadonlyArray<number>): number => {
+  const sorted = distances.filter(d => Number.isFinite(d)).sort((a, b) => a - b);
+  if (sorted.length === 0) return NaN;
+  return sorted[Math.floor((sorted.length - 1) * FAR_PERCENTILE)];
+};
+
+const SAMPLE_SQL = `SELECT vec_distance_l2(embedding, vec_f32(?)) AS distance
+       FROM vec_index
+       WHERE document_id % ? = 0`;
+
+const KNN_SQL = `SELECT document_id, distance FROM vec_index
+       WHERE embedding MATCH vec_f32(?) AND k = ?
+       ORDER BY distance`;
+
+const COUNT_SQL = 'SELECT COUNT(*) as cnt FROM vec_index';
+
+type Rows = { rows?: Array<Record<string, unknown>> } | null | undefined;
+
+const countFrom = (result: Rows): number => {
+  const cnt = Number((result?.rows?.[0] as { cnt?: number } | undefined)?.cnt);
+  return Number.isFinite(cnt) ? cnt : 0;
+};
+
+/** The look-alike limit from the sampled distances. */
+const limitFrom = (result: Rows): number => {
+  const far = farDistanceOf((result?.rows ?? []).map(r => Number((r as { distance?: number }).distance)));
+  return Number.isFinite(far) && far > 0 ? standOutLimit(far) : MAX_VECTOR_DISTANCE;
+};
+
+/** KNN rows that stand out enough, closest first. */
+const lookAlikesFrom = (result: Rows, maxDistance: number): LookAlike[] =>
+  ((result?.rows ?? []) as unknown as Array<{ document_id: number; distance: number }>)
+    .filter(r => r.distance <= maxDistance)
+    .map(r => ({ documentId: r.document_id, distance: r.distance }));
+
+/**
+ * The query's bytes. op-sqlite binds a typed array by its whole underlying
+ * buffer, so a view into a bigger buffer is copied out first.
+ */
+const blobOf = (queryVector: Float32Array): Uint8Array =>
+  queryVector.byteOffset === 0 && queryVector.byteLength === queryVector.buffer.byteLength
+    ? new Uint8Array(queryVector.buffer)
+    : new Uint8Array(queryVector.slice().buffer);
+
+const knnLimit = (limit: number) => Math.max(1, Math.floor(limit));
+
 const lookAlikeLimit = (blob: Uint8Array): number => {
   const count = getEmbeddingCount();
   if (count < MIN_PHOTOS_FOR_STAND_OUT) return MAX_VECTOR_DISTANCE;
   try {
-    const result = getDb().executeSync(
-      `SELECT vec_distance_l2(embedding, vec_f32(?)) AS distance
-       FROM vec_index ORDER BY distance LIMIT 1 OFFSET ?`,
-      [blob, Math.floor((count - 1) * FAR_PERCENTILE)],
-    );
-    const far = Number((result?.rows?.[0] as { distance?: number } | undefined)?.distance);
-    if (Number.isFinite(far) && far > 0) return standOutLimit(far);
+    return limitFrom(getDb().executeSync(SAMPLE_SQL, [blob, sampleStride(count)]));
   } catch (e) {
     AppLogger.warn('DB', 'Could not read the far photo distance, using the fixed limit:', e);
+    return MAX_VECTOR_DISTANCE;
   }
-  return MAX_VECTOR_DISTANCE;
 };
 
 /**
  * The photos that look like `queryVector`, closest first, at most `limit`.
  * Only photos that stand out for this query are returned (see above), so a
  * query nothing matches returns an empty list instead of the nearest photos.
+ *
+ * Runs on the JS thread; screens use findLookAlikesAsync.
  */
 export const findLookAlikes = (queryVector: Float32Array, limit = 50): LookAlike[] => {
   if (!isVecAvailable()) return [];
   try {
-    const blob = new Uint8Array(queryVector.buffer, queryVector.byteOffset, queryVector.byteLength);
+    const blob = blobOf(queryVector);
     const maxDistance = lookAlikeLimit(blob);
-    const result = getDb().executeSync(
-      `SELECT document_id, distance FROM vec_index
-       WHERE embedding MATCH vec_f32(?) AND k = ?
-       ORDER BY distance`,
-      [blob, Math.max(1, Math.floor(limit))],
-    );
-    const rows = (result?.rows ?? []) as unknown as Array<{ document_id: number; distance: number }>;
-    return rows
-      .filter(r => r.distance <= maxDistance)
-      .map(r => ({ documentId: r.document_id, distance: r.distance }));
+    return lookAlikesFrom(getDb().executeSync(KNN_SQL, [blob, knnLimit(limit)]), maxDistance);
   } catch (e) {
     AppLogger.warn('DB', 'findLookAlikes failed:', e);
+    return [];
+  }
+};
+
+/**
+ * findLookAlikes on the read connection, off the JS thread. The KNN scan
+ * reads every stored vector; on a slow phone with thousands of photos that
+ * is long enough to freeze scrolling and typing if it ran on the JS thread.
+ */
+export const findLookAlikesAsync = async (queryVector: Float32Array, limit = 50): Promise<LookAlike[]> => {
+  if (!isVecAvailable()) return [];
+  try {
+    const db = getReadDb();
+    const blob = blobOf(queryVector);
+    const count = countFrom(await db.execute(COUNT_SQL));
+    let maxDistance = MAX_VECTOR_DISTANCE;
+    if (count >= MIN_PHOTOS_FOR_STAND_OUT) {
+      try {
+        maxDistance = limitFrom(await db.execute(SAMPLE_SQL, [blob, sampleStride(count)]));
+      } catch (e) {
+        AppLogger.warn('DB', 'Could not read the far photo distance, using the fixed limit:', e);
+      }
+    }
+    return lookAlikesFrom(await db.execute(KNN_SQL, [blob, knnLimit(limit)]), maxDistance);
+  } catch (e) {
+    AppLogger.warn('DB', 'findLookAlikesAsync failed:', e);
     return [];
   }
 };
@@ -125,10 +197,7 @@ export const hasEmbedding = (documentId: number): boolean => {
 export const getEmbeddingCount = (): number => {
   if (!isVecAvailable()) return 0;
   try {
-    const db = getDb();
-    const result = db.executeSync('SELECT COUNT(*) as cnt FROM vec_index');
-    const rows = result?.rows || [];
-    return rows.length > 0 ? (rows[0] as { cnt: number }).cnt : 0;
+    return countFrom(getDb().executeSync(COUNT_SQL));
   } catch {
     return 0;
   }

@@ -9,7 +9,7 @@
  * Raw stored bytes are read back through the mock's vec_index rows.
  */
 import {
-  findLookAlikes, getEmbeddingCount, getImagesMissingEmbeddings, hasEmbedding, indexEmbedding,
+  findLookAlikes, findLookAlikesAsync, farDistanceOf, sampleStride, FAR_SAMPLE_SIZE, getEmbeddingCount, getImagesMissingEmbeddings, hasEmbedding, indexEmbedding,
   standOutLimit, FAR_PERCENTILE, MAX_VECTOR_DISTANCE, MIN_PHOTOS_FOR_STAND_OUT, STAND_OUT_GAP,
 } from '../vectors';
 import { indexDocument } from '../documents';
@@ -329,5 +329,94 @@ describe('findLookAlikes', () => {
     const big = new Float32Array(DIM * 2);
     big.set(query, DIM);
     expect(findLookAlikes(big.subarray(DIM)).map(l => l.documentId)).toEqual([1]);
+  });
+});
+
+describe('look-alikes off the JS thread, with a sampled yardstick', () => {
+  const atCosine = (cosine: number, axis: number): Float32Array => {
+    const v = new Float32Array(DIM);
+    v[0] = cosine;
+    v[axis % DIM] = Math.sqrt(1 - cosine * cosine);
+    return v;
+  };
+  const query = atCosine(1, 1);
+
+  test('sampleStride measures about FAR_SAMPLE_SIZE photos', () => {
+    expect(sampleStride(0)).toBe(1);
+    expect(sampleStride(FAR_SAMPLE_SIZE)).toBe(1);
+    expect(sampleStride(FAR_SAMPLE_SIZE + 1)).toBe(2);
+    expect(sampleStride(10_000)).toBe(40);
+  });
+
+  test('farDistanceOf picks the FAR_PERCENTILE distance and skips junk', () => {
+    expect(farDistanceOf([])).toBeNaN();
+    expect(farDistanceOf([10, 1, 9, 2, 8, 3, 7, 4, 6, 5])).toBe(9);
+    expect(farDistanceOf([NaN, 1.3, Infinity])).toBe(1.3);
+  });
+
+  test('gives the same photos as findLookAlikes', async () => {
+    for (let i = 0; i < 30; i++) indexEmbedding(100 + i, atCosine(0.05, 2 + i));
+    indexEmbedding(1, atCosine(0.3, 200));
+    indexEmbedding(2, atCosine(0.4, 201));
+    const sync = findLookAlikes(query);
+    expect(sync.map(l => l.documentId)).toEqual([2, 1]);
+    await expect(findLookAlikesAsync(query)).resolves.toEqual(sync);
+    await expect(findLookAlikesAsync(query, 1)).resolves.toEqual(findLookAlikes(query, 1));
+  });
+
+  test('uses the read connection and never the JS-thread executeSync', async () => {
+    for (let i = 0; i < 30; i++) indexEmbedding(100 + i, atCosine(0.05, 2 + i));
+    indexEmbedding(1, atCosine(0.4, 200));
+    const readDb = connectionModule.getReadDb();
+    const readSpy = jest.spyOn(connectionModule, 'getReadDb');
+    const syncSpy = jest.spyOn(readDb, 'executeSync');
+    const asyncSpy = jest.spyOn(readDb, 'execute');
+
+    await expect(findLookAlikesAsync(query)).resolves.toEqual([expect.objectContaining({ documentId: 1 })]);
+    expect(readSpy).toHaveBeenCalled();
+    expect(asyncSpy).toHaveBeenCalled();
+    expect(syncSpy).not.toHaveBeenCalled();
+  });
+
+  test('a big gallery is measured on a sample, and still finds the photo that stands out', async () => {
+    for (let i = 0; i < 1000; i++) indexEmbedding(1000 + i, atCosine(0.05, 2 + (i % 500)));
+    indexEmbedding(1, atCosine(0.4, 510));
+    indexEmbedding(2, atCosine(0.3, 511));
+    const db = mockDb() as unknown as { sampledDistanceReads?: number };
+
+    db.sampledDistanceReads = 0;
+    expect(findLookAlikes(query).map(l => l.documentId)).toEqual([1, 2]);
+    const measured = db.sampledDistanceReads ?? 0;
+    expect(measured).toBeGreaterThan(FAR_SAMPLE_SIZE / 2);
+    expect(measured).toBeLessThanOrEqual(FAR_SAMPLE_SIZE);
+
+    await expect(findLookAlikesAsync(query)).resolves.toEqual(findLookAlikes(query));
+  });
+
+  test('a query vector that is a view is sent as its own bytes (op-sqlite binds the whole buffer)', () => {
+    for (let i = 0; i < 30; i++) indexEmbedding(100 + i, atCosine(0.05, 2 + i));
+    indexEmbedding(1, atCosine(0.4, 200));
+    const big = new Float32Array(DIM * 2);
+    big.set(query, DIM);
+    const db = getDb();
+    const spy = jest.spyOn(db, 'executeSync');
+    findLookAlikes(big.subarray(DIM));
+    const sent = spy.mock.calls.map(c => (c[1] as unknown[] | undefined)?.[0]).filter(p => p instanceof Uint8Array) as Uint8Array[];
+    expect(sent.length).toBeGreaterThan(0);
+    for (const blob of sent) {
+      expect(blob.byteOffset).toBe(0);
+      expect(blob.buffer.byteLength).toBe(DIM * 4);
+    }
+  });
+
+  test('is empty without the vector index, and on errors', async () => {
+    indexEmbedding(1, atCosine(0.4, 200));
+    jest.spyOn(connectionModule, 'isVecAvailable').mockReturnValue(false);
+    await expect(findLookAlikesAsync(query)).resolves.toEqual([]);
+    jest.restoreAllMocks();
+
+    const readDb = connectionModule.getReadDb();
+    jest.spyOn(readDb, 'execute').mockImplementation((() => Promise.reject(new Error('disk I/O error'))) as never);
+    await expect(findLookAlikesAsync(query)).resolves.toEqual([]);
   });
 });

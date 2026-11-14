@@ -7,10 +7,10 @@ import { soundex } from '../utils/Soundex';
 import { searchWords, termsForQueryWord } from '../utils/SearchKeys';
 import { collectionForQuery } from '../utils/Collections';
 import { AppLogger } from '../utils/AppLogger';
-import { getDb, isFtsAvailable } from './connection';
+import { getDb, getReadDb, isFtsAvailable } from './connection';
 import { processResults } from './documents';
 import { collectionTerms } from './collectionTerms';
-import { findLookAlikes } from './vectors';
+import { findLookAlikes, findLookAlikesAsync } from './vectors';
 import type { DocumentRecord } from './types';
 
 // ─── Synonym Map for Indian Documents ───────────────────────────────────────
@@ -65,17 +65,28 @@ export const mergeByRank = (textHits: DocumentRecord[], lookAlikes: DocumentReco
   return [...scores.values()].sort((x, y) => y.score - x.score).map(e => e.doc);
 };
 
+const BY_IDS_SQL = (count: number) =>
+  `SELECT id, title, content, filePath, type, detection_type, timestamp
+     FROM document_index WHERE id IN (${Array.from({ length: count }, () => '?').join(', ')})`;
+
+/** The rows for `ids`, in the order of `ids`. */
+const inIdOrder = (ids: number[], result: Parameters<typeof processResults>[0]): DocumentRecord[] => {
+  const byId = new Map(processResults(result).map(doc => [doc.id, doc]));
+  return ids.map(id => byId.get(id)).filter((doc): doc is DocumentRecord => !!doc);
+};
+
 /** The photos that look like the query vector, closest first. */
 const searchByLook = (queryVector: Float32Array): DocumentRecord[] => {
   const ids = findLookAlikes(queryVector).map(l => l.documentId);
   if (ids.length === 0) return [];
-  const result = getDb().executeSync(
-    `SELECT id, title, content, filePath, type, detection_type, timestamp
-     FROM document_index WHERE id IN (${ids.map(() => '?').join(', ')})`,
-    ids,
-  );
-  const byId = new Map(processResults(result).map(doc => [doc.id, doc]));
-  return ids.map(id => byId.get(id)).filter((doc): doc is DocumentRecord => !!doc);
+  return inIdOrder(ids, getDb().executeSync(BY_IDS_SQL(ids.length), ids));
+};
+
+/** searchByLook on the read connection, off the JS thread. */
+const searchByLookAsync = async (queryVector: Float32Array): Promise<DocumentRecord[]> => {
+  const ids = (await findLookAlikesAsync(queryVector)).map(l => l.documentId);
+  if (ids.length === 0) return [];
+  return inIdOrder(ids, await getReadDb().execute(BY_IDS_SQL(ids.length), ids));
 };
 
 /**
@@ -125,6 +136,26 @@ export const searchDocuments = (query: string, queryVector?: Float32Array): Docu
   try {
     const lookAlikes = searchByLook(queryVector);
     AppLogger.info('DB', `Look-alike search took ${Date.now() - t0}ms. Found ${lookAlikes.length} photos.`);
+    return lookAlikes.length > 0 ? mergeByRank(textHits, lookAlikes) : textHits;
+  } catch (e) {
+    AppLogger.warn('DB', 'Look-alike search failed, showing word matches only:', e);
+    return textHits;
+  }
+};
+
+/**
+ * searchDocuments for screens: the words are matched right away (an FTS
+ * query capped at 50 rows, a few ms), and the look-alike scan, which reads
+ * every photo's vector, runs on the read connection off the JS thread.
+ * Same results as searchDocuments.
+ */
+export const searchDocumentsAsync = async (query: string, queryVector?: Float32Array): Promise<DocumentRecord[]> => {
+  const textHits = searchByWords(query);
+  if (!queryVector || !query.trim()) return textHits;
+  const t0 = Date.now();
+  try {
+    const lookAlikes = await searchByLookAsync(queryVector);
+    AppLogger.info('DB', `Look-alike search took ${Date.now() - t0}ms (off the JS thread). Found ${lookAlikes.length} photos.`);
     return lookAlikes.length > 0 ? mergeByRank(textHits, lookAlikes) : textHits;
   } catch (e) {
     AppLogger.warn('DB', 'Look-alike search failed, showing word matches only:', e);

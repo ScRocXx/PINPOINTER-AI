@@ -5,7 +5,7 @@
 import * as connection from '../connection';
 import { indexDocument } from '../documents';
 import { searchDocuments } from '../search';
-import { getCollectionPreview, getSimilarPhotos } from '../collections';
+import { getCollectionPreview, getSimilarPhotos, getSimilarPhotosAsync } from '../collections';
 import { indexEmbedding } from '../vectors';
 import { countCheckedFiles, markOcrDone, markStageFailed, noteFileSeen } from '../fileState';
 import { getCollection } from '../../utils/Collections';
@@ -118,6 +118,35 @@ describe('getSimilarPhotos', () => {
       throw new Error('no vec0');
     });
     expect(getSimilarPhotos(new Float32Array(512))).toEqual([]);
+  });
+});
+
+describe('getSimilarPhotosAsync', () => {
+  const unit = (cosine: number, axis: number): Float32Array => {
+    const v = new Float32Array(512);
+    v[0] = cosine;
+    v[axis] = Math.sqrt(1 - cosine * cosine);
+    return v;
+  };
+
+  test('gives the same photos as getSimilarPhotos', async () => {
+    const query = unit(1, 1);
+    const add = (path: string, type: 'IMAGE' | 'DOCUMENT', cosine: number, axis: number) =>
+      indexEmbedding(indexDocument(null, 'words', path, type, 'TEXT')!, unit(cosine, axis));
+    for (let i = 0; i < 24; i++) add(`/photos/far${i}.jpg`, 'IMAGE', 0.05, 2 + i);
+    add('/photos/b.jpg', 'IMAGE', 0.3, 100);
+    add('/photos/a.jpg', 'IMAGE', 0.4, 101);
+    add('/docs/paper.pdf', 'DOCUMENT', 0.5, 102);
+    await expect(getSimilarPhotosAsync(query, 9)).resolves.toEqual(['/photos/a.jpg', '/photos/b.jpg']);
+    await expect(getSimilarPhotosAsync(query, 1)).resolves.toEqual(getSimilarPhotos(query, 1));
+  });
+
+  test('is empty without the vector index or when the read connection fails', async () => {
+    jest.spyOn(connection, 'isVecAvailable').mockReturnValue(false);
+    await expect(getSimilarPhotosAsync(new Float32Array(512))).resolves.toEqual([]);
+    jest.restoreAllMocks();
+    jest.spyOn(connection.getReadDb(), 'execute').mockImplementation((() => Promise.reject(new Error('no vec0'))) as never);
+    await expect(getSimilarPhotosAsync(new Float32Array(512))).resolves.toEqual([]);
   });
 });
 

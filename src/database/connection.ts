@@ -20,7 +20,35 @@ export const getDb = (): ReturnType<typeof open> => {
   return _db;
 };
 
+/**
+ * A second connection, for reads that may take a while (photo look-alike
+ * search scans every vector). Its async execute() runs on op-sqlite's own
+ * thread, so the JS thread stays free to draw; WAL lets it read while
+ * indexing writes on the main connection. Opened on first use, after
+ * setupDatabase() has created the tables.
+ */
+let _readDb: ReturnType<typeof open> | null = null;
+
+export const getReadDb = (): ReturnType<typeof open> => {
+  if (!_readDb) {
+    _readDb = open({ name: 'pinpoint.db' });
+  }
+  return _readDb;
+};
+
 export const closeDatabase = () => {
+  if (_readDb) {
+    const readDb = _readDb;
+    _readDb = null;
+    // In tests open() hands back the same object for the same name.
+    if (readDb !== _db) {
+      try {
+        readDb.close();
+      } catch (e) {
+        AppLogger.warn('DB', 'Failed to close the read connection', e);
+      }
+    }
+  }
   if (_db) {
     try {
       _db.close();

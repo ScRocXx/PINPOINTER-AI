@@ -30,6 +30,10 @@ import {
 
 jest.mock('../../database', () => ({
     searchDocuments: jest.fn(),
+    // The hybrid step awaits this; it hands over to the searchDocuments mock,
+    // so each test sets one mock for both steps.
+    searchDocumentsAsync: jest.fn(async (q: string, v?: Float32Array) =>
+        (jest.requireMock('../../database') as { searchDocuments: (q: string, v?: Float32Array) => unknown }).searchDocuments(q, v)),
 }));
 
 jest.mock('../../services/EmbeddingService', () => ({
