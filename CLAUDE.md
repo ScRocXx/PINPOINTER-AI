@@ -18,7 +18,7 @@ npm start                   # Metro
 npm run android             # build + install (needs Android SDK, a device or emulator)
 npx tsc --noEmit            # type check (must be clean)
 npm run lint                # eslint (must be clean)
-npx jest                    # 77 suites / ~2000 tests (must all pass). Slow on the D: drive; use --silent (--runInBand if workers run out of memory)
+npx jest                    # 78 suites / ~2030 tests (must all pass). Slow on the D: drive; use --silent (--runInBand if workers run out of memory)
 cd android && ./gradlew assembleDebug    # native compile check (JDK 17 from JAVA_HOME)
 cd android && ./gradlew assembleRelease  # release APK for phones (arm64-v8a + armeabi-v7a); signed with your keystore if configured (see below), else the debug key
 cd android && ./gradlew assembleRelease -PpinpointerAbis=arm64-v8a,armeabi-v7a,x86_64   # a release build that also runs on an emulator
@@ -40,15 +40,16 @@ cd tools/preview && npm install && npm run dev   # browser preview of the UI kit
 **Data flow:** gallery/PDFs → `IndexingService` queue → pipelines (Vision/Document) → enrichment (Indic transliteration, sound keys, concepts, PII masking, classifier) → op-sqlite (FTS5 + sqlite-vec) → hybrid search.
 
 ### Database: `src/database/`
-- `connection.ts`: singleton op-sqlite DB `pinpoint.db` (WAL). **`MIGRATIONS[]`** is versioned with `PRAGMA user_version`, one transaction each. Migration 1 adds the `files` table and seeds it from the existing index. Migration 2 adds Indian-language search keys and the FTS5 tokenizer, and re-masks old rows.
+- `connection.ts`: singleton op-sqlite DB `pinpoint.db` (WAL), plus `getReadDb()`, a second connection for slow reads: its async `execute()` runs on op-sqlite's own thread, so the JS thread stays free (WAL lets it read while indexing writes). **`MIGRATIONS[]`** is versioned with `PRAGMA user_version`, one transaction each. Migration 1 adds the `files` table and seeds it from the existing index. Migration 2 adds Indian-language search keys and the FTS5 tokenizer, and re-masks old rows.
 - `documents.ts`: `indexDocument` (masks PII, writes search keys, deletes the old vector), `isFileIndexed`, `clearIndex` (also clears `vec_index`).
 - `fileState.ts`: the **`files` table**, with per-file, per-stage state: `ocr` and `embed` status (`pending|done|failed|skipped`), embed model (`CURRENT_EMBED_MODEL = 'mobileclip2-s0'`), attempts (`MAX_ATTEMPTS = 3`), last error and mtime. Call `noteFileSeen(uri, kind, mtime)` to get the stages a file still needs. `getReadyCounts()` gives photos and PDFs that are no longer pending (the "120 of 2,400" numbers).
-- `vectors.ts`: sqlite-vec `vec_index` (float32[512]), `getImagesMissingEmbeddings` for the backfill, and `findLookAlikes`: the one rule for which photos count as looking like a query. A photo must be `STAND_OUT_GAP = 0.12` closer to the query than the 90th-percentile photo is; a fixed distance limit can't work (nonsense text sits close to every photo, real words sit far from all of them). Measured with the INT8 models on sample photos; tune the gap on a phone. Under 20 photos it falls back to `MAX_VECTOR_DISTANCE = 1.26`.
+- `vectors.ts`: sqlite-vec `vec_index` (float32[512]), `getImagesMissingEmbeddings` for the backfill, and `findLookAlikes`: the one rule for which photos count as looking like a query. A photo must be `STAND_OUT_GAP = 0.12` closer to the query than the 90th-percentile photo is; a fixed distance limit can't work (nonsense text sits close to every photo, real words sit far from all of them). Measured with the INT8 models on sample photos; tune the gap on a phone. Under 20 photos it falls back to `MAX_VECTOR_DISTANCE = 1.26`. The far distance is measured on about `FAR_SAMPLE_SIZE = 256` photos (every n-th id); galleries that size or smaller are measured whole. Screens use `findLookAlikesAsync` (read connection); the sync `findLookAlikes` stays for the sync search.
 - `collections.ts` + `collectionTerms.ts`: Home's "Find quickly" counts and photos (bounded, read-only) and CLIP look-alikes (`findLookAlikes`); the same terms back search, so a tile's count matches its search.
-- `search.ts`: word search (FTS5 with every word required, then LIKE + synonyms + Soundex; filler like "of" and "photo of" is left out by `searchWords`) merged with photos that look like the query (`mergeByRank`: rank fusion with `RANK_K = 10`, words weighted 2×, so the best look-alike always lands within the first dozen results). Indian-language queries are matched through the sound and concept keys.
+- `search.ts`: word search (FTS5 with every word required, then LIKE + synonyms + Soundex; filler like "of" and "photo of" is left out by `searchWords`) merged with photos that look like the query (`mergeByRank`: rank fusion with `RANK_K = 10`, words weighted 2×, so the best look-alike always lands within the first dozen results). Indian-language queries are matched through the sound and concept keys. `searchDocumentsAsync` and `getSimilarPhotosAsync` (collections.ts) are the same with the vector scan on the read connection; useSearch and Home use them.
 
 ### Indexing: one queue
 - `src/services/IndexingService.ts` is **the only place indexing runs**: one queue, one job at a time. Jobs: `gallery-quick`, `gallery-quick-background`, `gallery-deep`, `documents`, `backfill`, `prune`. User-started jobs go before background ones, and the backfill yields. Calling sync twice reuses the running job.
+- `src/services/InteractionGate.ts`: indexing steps aside while someone uses the phone. The App root reports touches, the main lists and Home/Papers report scrolling, search reports typing (`noteInteraction()`). Before each photo and PDF the loops do `if (!isQuiet()) await waitForQuiet(cancel)`: they wait until nobody has touched the screen for `QUIET_AFTER_MS = 700`, at most `MAX_HOLD_MS = 6000` per wait. Add the same check to any new indexing loop.
 - `src/utils/GallerySync.ts`: gallery loops (quick, deep with a saved cursor, embedding backfill).
 - `src/utils/DocumentSync.ts`: PDF crawl (Download/, Documents/, plus copies of picked or shared PDFs from `PdfImport`). Newest first; a `limit` counts only PDFs that still need work.
 - `src/utils/MissingFiles.ts`: removes deleted photos and PDFs from the index (`removeDocument`). `pruneMissingFiles` is the `prune` job; `forgetIfGone` runs when a result is tapped. A file only counts as gone when we may look (full photo access, All Files Access, or our own imported copy) and `RNFS.stat` says it doesn't exist.
@@ -72,7 +73,7 @@ cd tools/preview && npm install && npm run dev   # browser preview of the UI kit
 - Manifest: `MANAGE_EXTERNAL_STORAGE` (needs a Play declaration, "on-device file search"), `READ_MEDIA_IMAGES`, `READ_MEDIA_VISUAL_USER_SELECTED`, legacy storage capped at `maxSdkVersion 32`, `RECEIVE_BOOT_COMPLETED`.
 
 ### State and UI
-- `src/hooks/PinpointerContext.tsx` provides one `usePinpointer()`. **Screens must use `usePinpointerShared()`.** A second instance means duplicate sync engines and listeners.
+- `src/hooks/PinpointerContext.tsx` provides one `usePinpointer()`. **Screens must use `usePinpointerShared()`.** A second instance means duplicate sync engines and listeners. The value changes on every keystroke and every indexed photo, so screens pass a module-level selector, `usePinpointerShared(selectX)`, and re-render only when their slice changes (shallow compare). Callbacks in the value must keep one identity (useCallback, or a ref like `handleDocumentSync`), or selectors stop helping.
 - Hooks (`useGallerySync`, `useDocumentSync`) only handle permissions, alerts and progress. They call `IndexingService` and must never run sync loops themselves.
 - `src/hooks/useHomeOverview.ts`: Home's tiles (words via `collections.ts`, Screenshots from the MediaStore album, Family by CLIP after a 3 s delay), photo totals and recent photos; loads after the first frame, never asks for permission, refreshes gently while indexing runs.
 - `src/hooks/useIndexingProgress.ts`: live photo and PDF progress for any screen, whoever started the work (listens to `IndexingService`, re-reads `getReadyCounts()` at most every 500 ms, counts every photo with `getGalleryTotalCount()`, which sums the camera-roll albums). The pure part is `toIndexingProgress`.
@@ -93,7 +94,7 @@ cd tools/preview && npm install && npm run dev   # browser preview of the UI kit
 - `components/ui/`: 25 shared parts (AppText, Icon, Button, IconButton, SearchField, Chip/Tag, Card/ListRow, ProgressBar/Ring/Card, EmptyState, Sheet, Toast, TabBar, Screen, the beam, lock-on corners, the mark...).
 - `i18n/`: every string in English and Hindi (`strings.ts`, plain words, jargon glossary at the top), `useStrings()` → `t()`, `ago()`, `setLang()`; the choice is saved in AsyncStorage, Hindi phones start in Hindi.
 - `utils/PinnedItems.ts` + `hooks/usePinnedItems.ts`: "Important" stars, AsyncStorage, synced across screens (titles must be masked).
-- `hooks/useReducedMotion.ts`, `hooks/useScreenFocus.ts` (focus that also works outside a navigator).
+- `hooks/useReducedMotion.ts` (one shared check and listener for the whole app), `hooks/useScreenFocus.ts` (focus that also works outside a navigator).
 
 ### Native modules (`android/app/src/main/java/com/pinpointer/app/`)
 `MobileCLIPModule` (own thread, int8 models, ORT 1.20; decodes file paths and the `content://` URIs gallery photos use) + `BPETokenizer` (CLIP-exact vocab), `NativePdfModule`, `SherpaOnnxModule`, `StorageModule`, `DocumentAccessModule`, `IndexingJobService` + `IndexingSchedulerModule`. The package name and application ID are `com.pinpointer.app`.
@@ -104,6 +105,7 @@ cd tools/preview && npm install && npm run dev   # browser preview of the UI kit
 - Indexing → only through `IndexingService`. Record per-file progress in `files` (`fileState.ts`).
 - PII → mask before storing (content **and** title). Search history is still unmasked in AsyncStorage (known gap).
 - Logging → `AppLogger`, not `console.log`.
+- Smoothness on 2 GB phones → the JS thread draws the UI: queries that scan many rows (every vector, thousands of rows) go through `getReadDb().execute()`, not `executeSync`; list rows are memoized (SectionList re-creates `renderItem` on every render); screens read shared state through a selector.
 - UI → build from `src/components/ui` and `src/theme` tokens; text through `AppText` and `t()` (add every string to `en` and `hi`); 48dp minimum touch (56dp for main actions); respect Reduce Motion; the beam only on things that find. Restyled screens drop `AppColors`.
 - Imports are relative (no path aliases).
 - Tests live in `__tests__/` next to the code. Native modules are mocked in `jest.setup.js` and `__mocks__/`. Add or adjust tests with every change.
