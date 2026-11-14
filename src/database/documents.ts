@@ -140,6 +140,28 @@ export const listIndexedFiles = (afterId: number, limit: number): Array<{ id: nu
   }
 };
 
+/** One page of rows with their stored text, in id order, for re-keying the search tail. */
+export const listContentAfter = (
+  afterId: number,
+  limit: number,
+): Array<{ id: number; title: string | null; content: string | null }> => {
+  try {
+    const result = getDb().executeSync(
+      'SELECT id, title, content FROM document_index WHERE id > ? ORDER BY id LIMIT ?',
+      [afterId, limit]
+    );
+    return (result?.rows ?? []) as unknown as Array<{ id: number; title: string | null; content: string | null }>;
+  } catch (e) {
+    AppLogger.warn('DB', 'listContentAfter failed:', e);
+    return [];
+  }
+};
+
+/** Replace one row's stored text; the fts_update trigger keeps the search index in step. */
+export const updateDocumentContent = (id: number, content: string): void => {
+  getDb().executeSync('UPDATE document_index SET content = ? WHERE id = ?', [content, id]);
+};
+
 /** Returns the total number of indexed documents */
 export const getIndexedCount = (): number => {
   try {

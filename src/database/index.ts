@@ -17,6 +17,8 @@ export {
   getDocumentByPath,
   removeDocument,
   listIndexedFiles,
+  listContentAfter,
+  updateDocumentContent,
 } from './documents';
 export { indexEmbedding, hasEmbedding, getEmbeddingCount, getImagesMissingEmbeddings } from './vectors';
 export type { MissingEmbedding } from './vectors';

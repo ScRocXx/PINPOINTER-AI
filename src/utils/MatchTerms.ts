@@ -11,6 +11,7 @@
 import { CONCEPTS, conceptsForWord } from './ConceptTable';
 import { bhashaKey, containsIndic, romanize, tokenizeWords } from './IndicText';
 import { searchWords } from './SearchKeys';
+import { foldedSoundKey, matraDrops, shapeKey } from './OcrTolerance';
 
 const DEVANAGARI = /[ऀ-ॿ]/;
 const conceptWords = new Map(CONCEPTS.map(c => [c.id, c.words]));
@@ -88,6 +89,35 @@ export const matchTermsIn = (text: string, query: string): string[] => {
         const sound = !prefix && keys.size > 0 && keys.has(bhashaKey(token));
         const meaning = !prefix && !sound && concepts.size > 0 && conceptsForWord(token).some(id => concepts.has(id));
         if (prefix || sound || meaning) found.push(token);
+    }
+    return found.length > 0 ? found : misreadTermsIn(text, words);
+};
+
+/**
+ * The words in `text` that look like an OCR misreading of a query word
+ * (same shape key, or same folded sound key). Used only when nothing matched
+ * outright: that is how search found the result (OcrTolerance.ts).
+ */
+const misreadTermsIn = (text: string, words: string[]): string[] => {
+    const shapes = new Set<string>();
+    const folds = new Set<string>();
+    for (const w of words) {
+        const s = shapeKey(w);
+        if (s) shapes.add(s);
+        if (containsIndic(w)) for (const v of matraDrops(w)) { const d = shapeKey(v); if (d) shapes.add(d); }
+        const f = foldedSoundKey(w);
+        if (f) folds.add(f);
+    }
+    if (shapes.size === 0 && folds.size === 0) return [];
+    const found: string[] = [];
+    const seen = new Set<string>();
+    for (const token of tokenizeWords(text)) {
+        const lower = token.toLowerCase();
+        if (seen.has(lower)) continue;
+        seen.add(lower);
+        const s = shapeKey(token);
+        const f = foldedSoundKey(token);
+        if ((s && shapes.has(s)) || (f && folds.has(f))) found.push(token);
     }
     return found;
 };

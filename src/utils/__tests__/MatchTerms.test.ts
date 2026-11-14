@@ -79,6 +79,22 @@ describe('matchTermsIn', () => {
   });
 });
 
+describe('matchTermsIn — words OCR misread', () => {
+    it('marks the misread word when nothing matched outright', () => {
+        expect(matchTermsIn('rnedicine twice a day', 'medicine')).toEqual(['rnedicine']);
+        expect(matchTermsIn('मुगतान रसीद', 'भुगतान')).toEqual(['मुगतान']);
+        expect(matchTermsIn('मुगतान रसीद', 'bhugtan')).toEqual(['मुगतान']);
+    });
+
+    it('marks only exact, sound and meaning matches when there are any', () => {
+        expect(matchTermsIn('medicine and rnedicine', 'medicine')).toEqual(['medicine']);
+    });
+
+    it('marks nothing unrelated', () => {
+        expect(matchTermsIn('train ticket', 'medicine')).toEqual([]);
+    });
+});
+
 describe('snippetFrom', () => {
   test('starts at the first matched word', () => {
     expect(snippetFrom('Government of India · Aadhaar ****-****-4821', ['Aadhaar'])).toBe('Aadhaar ****-****-4821');

@@ -354,6 +354,57 @@ describe('searchDocumentsAsync — the look-alike scan off the JS thread', () =>
   });
 });
 
+describe('searchDocuments — words OCR misread', () => {
+  const add = (content: string, filePath: string) => indexDocument(null, content, filePath, 'IMAGE', 'TEXT');
+
+  test('finds an English word with a misread letter, after exact matches', () => {
+    add('rnedicine twice a day', '/photos/misread.jpg');
+    add('medicine after food', '/photos/exact.jpg');
+    expect(paths(searchDocuments('medicine'))).toEqual(['/photos/exact.jpg', '/photos/misread.jpg']);
+  });
+
+  test('finds a Hindi word with a look-alike letter, typed in Hindi or Hinglish', () => {
+    add('मुगतान रसीद', '/photos/receipt.jpg');
+    expect(paths(searchDocuments('भुगतान'))).toEqual(['/photos/receipt.jpg']);
+    expect(paths(searchDocuments('bhugtan'))).toEqual(['/photos/receipt.jpg']);
+  });
+
+  test('finds a word OCR split in two', () => {
+    add('elec tricity board', '/photos/split.jpg');
+    expect(paths(searchDocuments('electricity'))).toEqual(['/photos/split.jpg']);
+  });
+
+  test('finds a Hindi word whose vowel sign OCR dropped', () => {
+    add('बजली का बिल', '/photos/bijli.jpg');
+    expect(paths(searchDocuments('बिजली'))).toEqual(['/photos/bijli.jpg']);
+  });
+
+  test('every word must still match, exactly or as a misreading', () => {
+    add('rnedicine twice a day', '/photos/misread.jpg');
+    expect(searchDocuments('medicine passport')).toEqual([]);
+  });
+
+  test('leaves unrelated words alone', () => {
+    add('rnedicine twice a day', '/photos/misread.jpg');
+    expect(searchDocuments('ticket')).toEqual([]);
+  });
+
+  test('a collection search adds papers whose words OCR misread, and only for that collection', () => {
+    add('rnedicine twice a day', '/photos/misread.jpg');
+    add('tablet after food prescription', '/photos/rx.jpg');
+    expect(paths(searchDocuments('medicine'))).toEqual(['/photos/rx.jpg', '/photos/misread.jpg']);
+    expect(paths(searchDocuments('ID cards'))).not.toContain('/photos/misread.jpg');
+  });
+
+  test('misread matches never push out exact ones', () => {
+    add('rnedicine twice a day', '/photos/misread.jpg');
+    add('passport renewal', '/photos/passport2.jpg');
+    const found = paths(searchDocuments('passport'));
+    expect(found[0]).toBe('/docs/passport.pdf');
+    expect(found).not.toContain('/photos/misread.jpg');
+  });
+});
+
 describe('searchDocuments — filler words', () => {
   test('"photo of goa" searches for goa, not for "photo" and "of"', () => {
     expect(paths(searchDocuments('photo of goa'))).toEqual(['/photos/goa.jpg']);

@@ -26,9 +26,10 @@ import {
 } from '../utils/GallerySync';
 import { performDocumentSync, type DocumentSyncResult } from '../utils/DocumentSync';
 import { pruneMissingFiles } from '../utils/MissingFiles';
+import { rekeySearchTails } from '../utils/SearchRekey';
 import { AppLogger } from '../utils/AppLogger';
 
-export type JobKind = 'gallery-quick' | 'gallery-quick-background' | 'gallery-deep' | 'documents' | 'backfill' | 'prune';
+export type JobKind = 'gallery-quick' | 'gallery-quick-background' | 'gallery-deep' | 'documents' | 'backfill' | 'prune' | 'rekey';
 
 type CancelRef = { current: boolean };
 
@@ -57,9 +58,9 @@ interface Job {
     reject: (error: unknown) => void;
 }
 
-const BACKGROUND_JOBS: ReadonlySet<JobKind> = new Set(['gallery-quick-background', 'backfill', 'prune']);
+const BACKGROUND_JOBS: ReadonlySet<JobKind> = new Set(['gallery-quick-background', 'backfill', 'prune', 'rekey']);
 /** Jobs that "Pause" stops. PDF sync isn't paused by the gallery's pause button. */
-const PAUSABLE_JOBS: ReadonlySet<JobKind> = new Set(['gallery-quick', 'gallery-quick-background', 'gallery-deep', 'backfill', 'prune']);
+const PAUSABLE_JOBS: ReadonlySet<JobKind> = new Set(['gallery-quick', 'gallery-quick-background', 'gallery-deep', 'backfill', 'prune', 'rekey']);
 
 const isBackground = (kind: JobKind) => BACKGROUND_JOBS.has(kind);
 
@@ -128,6 +129,14 @@ class IndexingServiceImpl {
     /** Add missing or outdated CLIP vectors, at the lowest priority. */
     backfill(): Promise<number> {
         return this.enqueue<number>('backfill', 0, (cancel) => backfillEmbeddings(cancel));
+    }
+
+    /**
+     * Give rows indexed before the current search keys (SEARCH_KEYS_VERSION)
+     * the new ones, at the lowest priority. Resumes where it stopped.
+     */
+    rekey(): Promise<number> {
+        return this.enqueue<number>('rekey', 0, (cancel) => rekeySearchTails(cancel));
     }
 
     /** Remove files deleted from the phone from the index, at the lowest priority. */

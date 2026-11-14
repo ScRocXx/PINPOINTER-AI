@@ -233,6 +233,16 @@ class MockDB {
     }
 
     // Paged walk over the index (pruning deleted files)
+    // Re-keying the search tail: rows with their text, in id order
+    if (/^SELECT id, title, content FROM document_index WHERE id > \? ORDER BY id LIMIT \?/i.test(q)) {
+      const [afterId, limit] = params;
+      const rows = this.documents
+        .filter((r) => r.id > afterId)
+        .sort((a, b) => a.id - b.id)
+        .slice(0, limit)
+        .map((r) => ({ id: r.id, title: r.title, content: r.content }));
+      return { rows };
+    }
     if (/^SELECT id, filePath, type FROM document_index WHERE id > \? ORDER BY id LIMIT \?/i.test(q)) {
       const [afterId, limit] = params;
       const rows = this.documents

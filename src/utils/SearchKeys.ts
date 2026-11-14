@@ -9,6 +9,7 @@
  */
 import { CONCEPT_PREFIX, conceptsForText, conceptsForWord } from './ConceptTable';
 import { bhashaKey, bhashaKeysFor, romanize, tokenizeWords, containsIndic, normalizeIndic } from './IndicText';
+import { toleranceTokens } from './OcrTolerance';
 
 /** U+2063 INVISIBLE SEPARATOR: FTS5 treats it as a word break, users never see it. */
 export const SEARCH_TAIL_MARK = '\u2063';
@@ -23,12 +24,21 @@ export const visibleContent = (content: string | null | undefined): string => {
     return i < 0 ? content : content.slice(0, i).trimEnd();
 };
 
-/** The tail tokens for a text: Bhasha keys, then concept ids. */
+/**
+ * Bump when buildSearchTail() changes, so rows indexed before get the new
+ * tail in the background (utils/SearchRekey.ts). 2: OCR-tolerant keys.
+ */
+export const SEARCH_KEYS_VERSION = 2;
+
+/**
+ * The tail tokens for a text: Bhasha keys, concept ids, then the keys that
+ * find OCR misreadings (shape, folded sound, joined neighbours: OcrTolerance).
+ */
 export const buildSearchTail = (text: string): string => {
     const words = tokenizeWords(text);
     const keys = bhashaKeysFor(text).map(k => KEY_PREFIX + k);
     const concepts = conceptsForText(words).map(id => CONCEPT_PREFIX + id);
-    return [...keys, ...concepts].join(' ');
+    return [...keys, ...concepts, ...toleranceTokens(words)].join(' ');
 };
 
 /**

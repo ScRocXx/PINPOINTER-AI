@@ -5,6 +5,7 @@
  */
 import { soundex } from '../utils/Soundex';
 import { searchWords, termsForQueryWord } from '../utils/SearchKeys';
+import { tolerantTermsForQueryWord } from '../utils/OcrTolerance';
 import { collectionForQuery } from '../utils/Collections';
 import { AppLogger } from '../utils/AppLogger';
 import { getDb, getReadDb, isFtsAvailable } from './connection';
@@ -118,6 +119,44 @@ const ftsGroup = (word: string): string => {
 };
 
 /**
+ * The same group plus the tokens that find OCR misreadings of the word: its
+ * shape keys, its folded sound key and the joined-neighbour key. e.g. भुगतान →
+ *   ("भुगतान"* OR … OR "qvमुगतान" OR "qfbudtn" OR "qkbudtn" OR "qjbugtn")
+ */
+const tolerantFtsGroup = (word: string): string => {
+  const exact = ftsGroup(word);
+  const t = tolerantTermsForQueryWord(word);
+  const extra = [...t.shapes, ...t.folded, ...t.joined].map(term => `"${term}"`);
+  if (extra.length === 0) return exact;
+  const inner = exact.startsWith('(') ? exact.slice(1, -1) : exact;
+  return `(${[inner, ...extra].join(' OR ')})`;
+};
+
+/** Most results one search shows. */
+const RESULT_LIMIT = 50;
+
+/**
+ * Papers and photos whose words were misread by OCR: each query word matched
+ * exactly or as a likely misreading. Only what the exact search didn't find,
+ * so these always come after it.
+ */
+const searchMisread = (db: ReturnType<typeof getDb>, words: string[], exact: DocumentRecord[]): DocumentRecord[] => {
+  const room = RESULT_LIMIT - exact.length;
+  if (room <= 0 || words.length === 0) return [];
+  const found = new Set(exact.map(d => d.id));
+  const result = db.executeSync(
+    `SELECT d.id, d.title, d.content, d.filePath, d.type, d.detection_type, d.timestamp
+     FROM fts_index f
+     JOIN document_index d ON d.id = f.rowid
+     WHERE f.fts_index MATCH ?
+     ORDER BY rank
+     LIMIT ${RESULT_LIMIT}`,
+    [words.map(tolerantFtsGroup).join(' AND ')],
+  );
+  return processResults(result).filter(d => !found.has(d.id)).slice(0, room);
+};
+
+/**
  * Search documents by their words and, when `queryVector` is given, by what
  * the photos look like.
  *
@@ -193,6 +232,14 @@ const searchByWords = (query: string): DocumentRecord[] => {
           [ftsTerms]
         );
         results = processResults(ftsResults);
+        // Then the typed words as OCR may have misread them ("rnedicine",
+        // "मुगतान"), after the exact ones. A collection ("Medicine") too: a
+        // paper that says "rnedicine" belongs in it.
+        try {
+          results = [...results, ...searchMisread(db, words, results)];
+        } catch (err) {
+          AppLogger.warn('DB', `Misread search failed for "${trimmed}":`, err);
+        }
         if (results.length > 0) {
           AppLogger.info('DB', `FTS5 Search for "${safeQuery}" took ${Date.now() - t0}ms. Found ${results.length} hits.`);
           return results;

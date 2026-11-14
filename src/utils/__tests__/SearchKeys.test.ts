@@ -86,3 +86,21 @@ describe('searchWords', () => {
         expect(searchWords('of')).toEqual(['of']);
     });
 });
+
+describe('buildSearchTail — OCR-tolerant keys', () => {
+    const { buildSearchTail: tail, SEARCH_KEYS_VERSION: version } = jest.requireActual('../SearchKeys');
+
+    it('adds shape, folded and joined keys after the sound keys and concepts', () => {
+        const t: string = tail('rnedicine elec tricity');
+        const tokens = t.split(' ');
+        const firstTolerant = tokens.findIndex(x => /^q[vfj]/.test(x));
+        expect(firstTolerant).toBeGreaterThan(0);
+        expect(tokens.slice(0, firstTolerant).every(x => /^q[kc]/.test(x))).toBe(true);
+        expect(tokens).toEqual(expect.arrayContaining(['qvmedldne']));
+        expect(tokens.some(x => x.startsWith('qj'))).toBe(true);
+    });
+
+    it('is at version 2 (bump it with every change to the tail)', () => {
+        expect(version).toBe(2);
+    });
+});

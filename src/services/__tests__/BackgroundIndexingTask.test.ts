@@ -14,7 +14,7 @@ import { setupDatabase } from '../../database';
 import { loadSavedCursor } from '../../utils/GallerySync';
 
 jest.mock('../IndexingService', () => ({
-  IndexingService: { deepGallerySync: jest.fn(), pruneMissing: jest.fn(), backfill: jest.fn(), pause: jest.fn() },
+  IndexingService: { deepGallerySync: jest.fn(), pruneMissing: jest.fn(), rekey: jest.fn(), backfill: jest.fn(), pause: jest.fn() },
 }));
 jest.mock('../../database', () => ({ setupDatabase: jest.fn() }));
 jest.mock('../../utils/GallerySync', () => ({ loadSavedCursor: jest.fn() }));
@@ -25,6 +25,7 @@ jest.mock('../../utils/AppLogger', () => ({
 const deep = IndexingService.deepGallerySync as jest.Mock;
 const prune = IndexingService.pruneMissing as jest.Mock;
 const backfill = IndexingService.backfill as jest.Mock;
+const rekey = IndexingService.rekey as jest.Mock;
 const pause = IndexingService.pause as jest.Mock;
 
 const setPlatform = (os: string, version = 34) => {
@@ -41,6 +42,7 @@ beforeEach(() => {
   (loadSavedCursor as jest.Mock).mockResolvedValue('cursor_40');
   deep.mockResolvedValue({ processed: 12, wasCancelled: false });
   prune.mockResolvedValue(2);
+  rekey.mockResolvedValue(5);
   backfill.mockResolvedValue(3);
 });
 
@@ -51,14 +53,16 @@ afterEach(() => {
 });
 
 describe('runBackgroundIndexing', () => {
-  test('opens the database, resumes deep sync from the saved cursor, drops deleted files, then backfills', async () => {
+  test('opens the database, resumes deep sync from the saved cursor, drops deleted files, updates search keys, then backfills', async () => {
     await expect(runBackgroundIndexing({ budgetMs: 1000 })).resolves.toBe('finished');
 
     expect(setupDatabase).toHaveBeenCalled();
     expect(deep).toHaveBeenCalledWith(undefined, 'cursor_40');
     expect(prune).toHaveBeenCalledTimes(1);
     expect(backfill).toHaveBeenCalledTimes(1);
-    expect(prune.mock.invocationCallOrder[0]).toBeLessThan(backfill.mock.invocationCallOrder[0]);
+    expect(rekey).toHaveBeenCalledTimes(1);
+    expect(prune.mock.invocationCallOrder[0]).toBeLessThan(rekey.mock.invocationCallOrder[0]);
+    expect(rekey.mock.invocationCallOrder[0]).toBeLessThan(backfill.mock.invocationCallOrder[0]);
     expect(pause).not.toHaveBeenCalled();
   });
 

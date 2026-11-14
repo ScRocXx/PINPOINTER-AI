@@ -39,7 +39,12 @@ export const useGallerySync = () => {
             const count = getIndexedCount();
             if (count > 0) {
                 setSyncCount(count);
-                setTimeout(startBackfill, BACKFILL_STARTUP_DELAY_MS);
+                setTimeout(() => {
+                    // Older rows get the newest search keys first (quick, no files read),
+                    // then photos get missing CLIP vectors (slow).
+                    IndexingService.rekey().catch((e) => AppLogger.warn('GallerySync', 'Search key update failed', e));
+                    startBackfill();
+                }, BACKFILL_STARTUP_DELAY_MS);
             }
 
             const timeStr = await AsyncStorage.getItem('gallery_last_sync_time');
