@@ -14,3 +14,5 @@ const state = {
   handleDocumentSync: noop,
 };
 export const usePinpointerShared = () => state;
+/** The real one is ReturnType<typeof usePinpointer>; the preview only fills these. */
+export type PinpointerState = typeof state;

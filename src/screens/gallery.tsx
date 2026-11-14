@@ -33,7 +33,7 @@ import { PhotoViewer, ViewerItem } from '../components/PhotoViewer';
 import { Colors, GUTTER, Radius, Space } from '../theme';
 import { StringKey, formatDay, formatMonth, formatWhen, useStrings } from '../i18n';
 import { RootStackParamList } from '../navigation/types';
-import { PinpointerState, usePinpointerShared } from '../hooks/PinpointerContext';
+import { type PinpointerState, usePinpointerShared } from '../hooks/PinpointerContext';
 import { usePinnedItems } from '../hooks/usePinnedItems';
 import { useScreenFocus } from '../hooks/useScreenFocus';
 import { addRecentPhoto } from '../utils/RecentPhotos';

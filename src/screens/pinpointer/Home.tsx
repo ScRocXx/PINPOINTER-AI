@@ -2,7 +2,7 @@ import React, { useCallback } from 'react';
 import { Linking, NativeModules } from 'react-native';
 import { useToast } from '../../components/ui';
 import { useStrings } from '../../i18n';
-import { PinpointerState, usePinpointerShared } from '../../hooks/PinpointerContext';
+import { type PinpointerState, usePinpointerShared } from '../../hooks/PinpointerContext';
 import { useHomeOverview } from '../../hooks/useHomeOverview';
 import { usePinnedItems } from '../../hooks/usePinnedItems';
 import { AppLogger } from '../../utils/AppLogger';

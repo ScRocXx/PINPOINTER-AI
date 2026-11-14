@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 import { useToast } from '../components/ui';
 import { useStrings } from '../i18n';
-import { PinpointerState, usePinpointerShared } from './PinpointerContext';
+import { type PinpointerState, usePinpointerShared } from './PinpointerContext';
 import {
   PdfFolder,
   canRequestAllFilesAccess,

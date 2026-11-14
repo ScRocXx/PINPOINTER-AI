@@ -26,7 +26,7 @@ import { Colors, GUTTER, Radius, Space, Touch } from '../theme';
 import { formatWhen, useStrings } from '../i18n';
 import { RootStackParamList } from '../navigation/types';
 import { getAllDocuments, searchDocuments } from '../database';
-import { PinpointerState, usePinpointerShared } from '../hooks/PinpointerContext';
+import { type PinpointerState, usePinpointerShared } from '../hooks/PinpointerContext';
 import { noteInteraction } from '../services/InteractionGate';
 import { usePinnedItems } from '../hooks/usePinnedItems';
 import { describePlaces, usePdfPlaces } from '../hooks/usePdfPlaces';
