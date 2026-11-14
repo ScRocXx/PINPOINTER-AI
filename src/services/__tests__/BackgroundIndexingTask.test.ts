@@ -14,7 +14,9 @@ import { setupDatabase } from '../../database';
 import { loadSavedCursor } from '../../utils/GallerySync';
 
 jest.mock('../IndexingService', () => ({
-  IndexingService: { deepGallerySync: jest.fn(), pruneMissing: jest.fn(), backfill: jest.fn(), pause: jest.fn() },
+  IndexingService: {
+    deepGallerySync: jest.fn(), pruneMissing: jest.fn(), backfill: jest.fn(), pause: jest.fn(), stopBackgroundWork: jest.fn(),
+  },
 }));
 jest.mock('../../database', () => ({ setupDatabase: jest.fn() }));
 jest.mock('../../utils/GallerySync', () => ({ loadSavedCursor: jest.fn() }));
@@ -26,6 +28,7 @@ const deep = IndexingService.deepGallerySync as jest.Mock;
 const prune = IndexingService.pruneMissing as jest.Mock;
 const backfill = IndexingService.backfill as jest.Mock;
 const pause = IndexingService.pause as jest.Mock;
+const stopBackground = IndexingService.stopBackgroundWork as jest.Mock;
 
 const setPlatform = (os: string, version = 34) => {
   Object.defineProperty(Platform, 'OS', { value: os, configurable: true, writable: true });
@@ -55,10 +58,12 @@ describe('runBackgroundIndexing', () => {
     await expect(runBackgroundIndexing({ budgetMs: 1000 })).resolves.toBe('finished');
 
     expect(setupDatabase).toHaveBeenCalled();
-    expect(deep).toHaveBeenCalledWith(undefined, 'cursor_40');
-    expect(prune).toHaveBeenCalledTimes(1);
-    expect(backfill).toHaveBeenCalledTimes(1);
+    // Every job is marked as background work, so a stop never touches the person's own sync.
+    expect(deep).toHaveBeenCalledWith(undefined, 'cursor_40', { origin: 'background' });
+    expect(prune).toHaveBeenCalledWith({ origin: 'background' });
+    expect(backfill).toHaveBeenCalledWith({ origin: 'background' });
     expect(prune.mock.invocationCallOrder[0]).toBeLessThan(backfill.mock.invocationCallOrder[0]);
+    expect(stopBackground).not.toHaveBeenCalled();
     expect(pause).not.toHaveBeenCalled();
   });
 
@@ -97,7 +102,8 @@ describe('runBackgroundIndexing', () => {
 
     const run = runBackgroundIndexing({ budgetMs: 5000 });
     await jest.advanceTimersByTimeAsync(5000);
-    expect(pause).toHaveBeenCalledTimes(1);
+    expect(stopBackground).toHaveBeenCalledTimes(1);
+    expect(pause).not.toHaveBeenCalled(); // the person's Pause is a different thing
 
     finish({ processed: 4, wasCancelled: true });
     await expect(run).resolves.toBe('stopped');
@@ -112,7 +118,7 @@ describe('runBackgroundIndexing', () => {
     });
 
     await expect(runBackgroundIndexing({ budgetMs: 60_000 })).resolves.toBe('stopped');
-    expect(pause).toHaveBeenCalledTimes(1);
+    expect(stopBackground).toHaveBeenCalledTimes(1);
     expect(backfill).not.toHaveBeenCalled();
   });
 
@@ -123,13 +129,29 @@ describe('runBackgroundIndexing', () => {
     const run = runBackgroundIndexing({ budgetMs: 60_000 });
     for (let i = 0; i < 50 && deep.mock.calls.length === 0; i++) await Promise.resolve();
     DeviceEventEmitter.emit(STOP_EVENT);
-    expect(pause).toHaveBeenCalledTimes(1);
+    expect(stopBackground).toHaveBeenCalledTimes(1);
 
     finish({ processed: 1, wasCancelled: true });
     await expect(run).resolves.toBe('stopped');
     // the listener is removed afterwards
     DeviceEventEmitter.emit(STOP_EVENT);
-    expect(pause).toHaveBeenCalledTimes(1);
+    expect(stopBackground).toHaveBeenCalledTimes(1);
+  });
+
+  test('a stop while the person’s own sync runs reports "stopped" and skips the clean-up', async () => {
+    // The person opened the app and joined the deep sync: the stop leaves it
+    // running (IndexingService decides that), and it then finishes normally.
+    let finish!: (v: unknown) => void;
+    deep.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+
+    const run = runBackgroundIndexing({ budgetMs: 60_000 });
+    for (let i = 0; i < 50 && deep.mock.calls.length === 0; i++) await Promise.resolve();
+    DeviceEventEmitter.emit(STOP_EVENT);
+    finish({ processed: 30, wasCancelled: false });
+
+    await expect(run).resolves.toBe('stopped');
+    expect(prune).not.toHaveBeenCalled();
+    expect(backfill).not.toHaveBeenCalled();
   });
 
   test('a failing sync is reported, not thrown', async () => {

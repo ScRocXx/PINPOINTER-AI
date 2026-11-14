@@ -8,6 +8,10 @@
  * IndexingService queue the app uses. It stops
  * by itself after `budgetMs`, or as soon as native says the conditions no
  * longer hold; deep sync saves its cursor, so the next run carries on.
+ *
+ * Its jobs are marked as background work. If the person opens the app while
+ * this runs and asks for the same sync, the job is theirs too, and stopping
+ * this run leaves it going (IndexingService.stopBackgroundWork).
  */
 import { DeviceEventEmitter, NativeModules, Platform } from 'react-native';
 import { setupDatabase } from '../database';
@@ -22,6 +26,9 @@ export const BACKGROUND_TASK_KEY = 'PinpointerBackgroundIndexing';
 export const STOP_EVENT = 'PinpointerBackgroundIndexingStop';
 /** Used when native passes no budget. */
 const DEFAULT_BUDGET_MS = 8 * 60 * 1000;
+
+/** Every job this run asks for is background work (see IndexingService.stopBackgroundWork). */
+const BACKGROUND = { origin: 'background' } as const;
 
 /** What one background run did, for logs and tests. */
 export type BackgroundRunOutcome = 'no-permission' | 'stopped' | 'finished' | 'failed' | 'not-android';
@@ -40,7 +47,7 @@ export const runBackgroundIndexing = async (data?: { budgetMs?: number }): Promi
     const stop = () => {
         if (stopped) return;
         stopped = true;
-        IndexingService.pause();
+        IndexingService.stopBackgroundWork();
     };
     const timer = setTimeout(stop, budgetMs);
     const subscription = DeviceEventEmitter.addListener(STOP_EVENT, stop);
@@ -48,14 +55,14 @@ export const runBackgroundIndexing = async (data?: { budgetMs?: number }): Promi
     try {
         setupDatabase(); // the app's mount effect doesn't run in a headless start
         const cursor = await loadSavedCursor();
-        const { processed, wasCancelled } = await IndexingService.deepGallerySync(undefined, cursor);
+        const { processed, wasCancelled } = await IndexingService.deepGallerySync(undefined, cursor, BACKGROUND);
         AppLogger.info('BackgroundIndexing', `Gallery pass: ${processed} photos${wasCancelled ? ' (paused)' : ''}`);
         if (!stopped && !wasCancelled) {
             // Drop deleted files first, so the backfill doesn't spend time on them.
-            const removed = await IndexingService.pruneMissing();
+            const removed = await IndexingService.pruneMissing(BACKGROUND);
             AppLogger.info('BackgroundIndexing', `Removed ${removed} deleted files`);
             if (!stopped) {
-                const added = await IndexingService.backfill();
+                const added = await IndexingService.backfill(BACKGROUND);
                 AppLogger.info('BackgroundIndexing', `Backfill added ${added} embeddings`);
             }
         }

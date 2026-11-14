@@ -278,3 +278,237 @@ describe('subscribe', () => {
     expect(IndexingService.getSnapshot()).toMatchObject({ docsProcessed: 0, docsTotal: 0 });
   });
 });
+
+/**
+ * A deep sync mock that reports `step` photos, then waits until it is asked
+ * to stop (it then "saves its cursor" and returns cancelled) or released.
+ */
+const stoppableDeep = (step = 3) => {
+  const calls: Array<{ resumeFrom?: string; cancel: CancelRef }> = [];
+  const releases: Array<() => void> = [];
+  const impl = (onProgress: (count: number, uri?: string) => void, cancel: CancelRef, resumeFrom?: string) => {
+    calls.push({ resumeFrom, cancel });
+    onProgress(step, 'content://photo');
+    return new Promise((resolve) => {
+      const poll = setInterval(() => {
+        if (cancel.current) { clearInterval(poll); resolve({ processed: step, wasCancelled: true }); }
+      }, 1);
+      releases.push(() => { clearInterval(poll); resolve({ processed: step, wasCancelled: false }); });
+    });
+  };
+  return { impl, calls, release: (i: number) => releases[i](), runs: () => calls.length };
+};
+
+const waitFor = async (check: () => boolean) => {
+  for (let i = 0; i < 200 && !check(); i++) await new Promise((r) => setTimeout(r, 1));
+  expect(check()).toBe(true);
+};
+
+describe('progress for every caller', () => {
+  test('a caller that joins a running job gets its progress too', async () => {
+    const d = stoppableDeep(4);
+    deep.mockImplementation(d.impl);
+    const firstRun = jest.fn();
+    const home = jest.fn();
+
+    const p1 = IndexingService.deepGallerySync(firstRun);
+    await waitFor(() => d.runs() === 1);
+    const p2 = IndexingService.deepGallerySync(home);
+    expect(p2).toBe(p1);
+
+    // Home joined after the first report; it hears the next one.
+    (deep.mock.calls[0][0] as (n: number) => void)(5);
+    expect(firstRun).toHaveBeenLastCalledWith(5, undefined);
+    expect(home).toHaveBeenLastCalledWith(5, undefined);
+    d.release(0);
+    await p1;
+  });
+
+  test('a progress callback that throws does not stop the sync', async () => {
+    quick.mockImplementation(async (onProgress: (n: number) => void) => {
+      onProgress(1);
+      return { processed: 1, wasCancelled: false };
+    });
+    const bad = jest.fn(() => { throw new Error('screen gone'); });
+    await expect(IndexingService.quickGallerySync(bad)).resolves.toEqual({ processed: 1, wasCancelled: false });
+    expect(bad).toHaveBeenCalled();
+  });
+});
+
+describe('a quick check during a deep sync', () => {
+  test('the deep sync steps aside, the quick check runs, then the deep sync carries on from its saved cursor', async () => {
+    const d = stoppableDeep(3);
+    deep.mockImplementation(d.impl);
+    const order: string[] = [];
+    quick.mockImplementation(async () => { order.push('quick'); return { processed: 2, wasCancelled: false }; });
+    const deepProgress = jest.fn();
+    const deepDone = jest.fn();
+
+    IndexingService.deepGallerySync(deepProgress, 'cursor_from_caller').then(deepDone);
+    await waitFor(() => d.runs() === 1);
+    const quickResult = await IndexingService.quickGallerySync();
+
+    expect(quickResult).toEqual({ processed: 2, wasCancelled: false });
+    expect(d.calls[0].cancel.current).toBe(true); // asked to step aside
+    await waitFor(() => d.runs() === 2);
+    expect(order).toEqual(['quick']);
+    expect(deepDone).not.toHaveBeenCalled(); // still one sync, still running
+    expect(d.calls[1].resumeFrom).toBeUndefined(); // reads the cursor it saved
+    expect(d.calls[1].cancel.current).toBe(false); // fresh cancel flag
+    expect(IndexingService.getSnapshot().running).toBe('gallery-deep');
+
+    // The count carries on from where it was: 3 before, 3 more now.
+    expect(deepProgress).toHaveBeenLastCalledWith(6, 'content://photo');
+    d.release(1);
+    await waitFor(() => deepDone.mock.calls.length === 1);
+    expect(deepDone).toHaveBeenCalledWith({ processed: 6, wasCancelled: false });
+  });
+
+  test('a quick check goes ahead of a deep sync that is still waiting its turn', async () => {
+    const pdf = gate({ status: 'done', processed: 0, total: 0, wasCancelled: false });
+    docs.mockImplementation(pdf.impl);
+    const order: string[] = [];
+    deep.mockImplementation(async () => { order.push('deep'); return { processed: 0, wasCancelled: false }; });
+    quick.mockImplementation(async () => { order.push('quick'); return { processed: 0, wasCancelled: false }; });
+
+    IndexingService.documentSync();
+    await settle();
+    IndexingService.deepGallerySync();
+    IndexingService.quickGallerySync();
+    expect(IndexingService.getSnapshot().queued).toEqual(['gallery-quick', 'gallery-deep']);
+    pdf.release();
+    await IndexingService.whenIdle();
+    expect(order).toEqual(['quick', 'deep']);
+  });
+
+  test('a deep sync that was already finishing just finishes', async () => {
+    let finish!: (v: unknown) => void;
+    deep.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    const deepResult = IndexingService.deepGallerySync();
+    await settle();
+    IndexingService.quickGallerySync();
+    finish({ processed: 10, wasCancelled: false }); // done before it noticed the request
+    await expect(deepResult).resolves.toEqual({ processed: 10, wasCancelled: false });
+    await IndexingService.whenIdle();
+    expect(deep).toHaveBeenCalledTimes(1);
+  });
+
+  test('Pause while the deep sync is set aside stops it for good, with the count so far', async () => {
+    const d = stoppableDeep(3);
+    deep.mockImplementation(d.impl);
+    const q = gate({ processed: 0, wasCancelled: false });
+    quick.mockImplementation(q.impl);
+
+    const deepResult = IndexingService.deepGallerySync();
+    await waitFor(() => d.runs() === 1);
+    IndexingService.quickGallerySync();
+    await waitFor(() => IndexingService.getSnapshot().running === 'gallery-quick');
+    expect(IndexingService.getSnapshot().queued).toContain('gallery-deep');
+
+    IndexingService.pause();
+    await expect(deepResult).resolves.toEqual({ processed: 3, wasCancelled: true });
+    expect(q.cancels[0].current).toBe(true);
+    q.release();
+    await IndexingService.whenIdle();
+    expect(d.runs()).toBe(1);
+  });
+});
+
+describe('Pause', () => {
+  test('drops a photo sync that has not started yet', async () => {
+    const pdf = gate({ status: 'done', processed: 0, total: 0, wasCancelled: false });
+    docs.mockImplementation(pdf.impl);
+    IndexingService.documentSync();
+    await settle();
+    const deepResult = IndexingService.deepGallerySync();
+    const quickResult = IndexingService.quickGallerySync();
+
+    IndexingService.pause();
+    await expect(deepResult).resolves.toEqual({ processed: 0, wasCancelled: true });
+    await expect(quickResult).resolves.toEqual({ processed: 0, wasCancelled: true });
+    expect(pdf.cancels[0].current).toBe(false); // PDF sync carries on
+    pdf.release();
+    await IndexingService.whenIdle();
+    expect(deep).not.toHaveBeenCalled();
+    expect(quick).not.toHaveBeenCalled();
+  });
+
+  test('a backfill that made way does not come back after Pause', async () => {
+    const b = gate(0);
+    backfill.mockImplementationOnce(b.impl);
+    const d = gate({ processed: 0, wasCancelled: false });
+    deep.mockImplementation(d.impl);
+
+    IndexingService.backfill();
+    await settle();
+    IndexingService.deepGallerySync();
+    expect(b.cancels[0].current).toBe(true); // asked to make way
+    IndexingService.pause(); // before it finished its current photo
+    b.release();
+    await IndexingService.whenIdle();
+    await settle();
+    await IndexingService.whenIdle();
+    expect(backfill).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('stopping the charging-time run', () => {
+  test('stops background-only work, running and queued', async () => {
+    const d = gate({ processed: 0, wasCancelled: false });
+    deep.mockImplementation(d.impl);
+    IndexingService.deepGallerySync(undefined, undefined, { origin: 'background' });
+    await settle();
+    const queuedBackfill = IndexingService.backfill({ origin: 'background' });
+
+    IndexingService.stopBackgroundWork();
+    expect(d.cancels[0].current).toBe(true);
+    await expect(queuedBackfill).resolves.toBe(0);
+    d.release();
+    await IndexingService.whenIdle();
+    expect(backfill).not.toHaveBeenCalled();
+  });
+
+  test('leaves a sync the person joined running', async () => {
+    const d = gate({ processed: 7, wasCancelled: false });
+    deep.mockImplementation(d.impl);
+    const background = IndexingService.deepGallerySync(undefined, undefined, { origin: 'background' });
+    await settle();
+    const mine = IndexingService.deepGallerySync(); // the person opened the app and tapped Check
+    expect(mine).toBe(background);
+
+    IndexingService.stopBackgroundWork();
+    expect(d.cancels[0].current).toBe(false);
+    d.release();
+    await expect(mine).resolves.toEqual({ processed: 7, wasCancelled: false });
+  });
+
+  test('leaves work the app asked for, running or queued', async () => {
+    const pdf = gate({ status: 'done', processed: 0, total: 0, wasCancelled: false });
+    docs.mockImplementation(pdf.impl);
+    IndexingService.documentSync();
+    await settle();
+    IndexingService.backfill(); // the app's own start-up backfill
+
+    IndexingService.stopBackgroundWork();
+    expect(pdf.cancels[0].current).toBe(false);
+    expect(IndexingService.getSnapshot().queued).toEqual(['backfill']);
+    pdf.release();
+    await IndexingService.whenIdle();
+    expect(backfill).toHaveBeenCalledTimes(1);
+  });
+
+  test('a background-only backfill that made way does not come back after the stop', async () => {
+    const b = gate(0);
+    backfill.mockImplementationOnce(b.impl);
+    IndexingService.backfill({ origin: 'background' });
+    await settle();
+    IndexingService.deepGallerySync(); // the app's user job
+    IndexingService.stopBackgroundWork();
+    b.release();
+    await IndexingService.whenIdle();
+    await settle();
+    await IndexingService.whenIdle();
+    expect(backfill).toHaveBeenCalledTimes(1);
+    expect(deep).toHaveBeenCalledTimes(1); // the app's sync still ran
+  });
+});
