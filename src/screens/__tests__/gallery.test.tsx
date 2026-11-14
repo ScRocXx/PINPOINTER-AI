@@ -14,7 +14,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { CameraRoll } from '@react-native-camera-roll/camera-roll';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation } from '@react-navigation/native';
-import { GalleryScreen, PAGE_SIZE } from '../gallery';
+import { GalleryScreen, PAGE_SIZE, sameGalleryRow } from '../gallery';
 import { usePinpointerShared } from '../../hooks/PinpointerContext';
 import { addRecentPhoto } from '../../utils/RecentPhotos';
 import { ensurePhotoAccess, getPhotoAccess, openAppSettingsAndWait } from '../../utils/StoragePermissions';
@@ -265,5 +265,33 @@ describe('GalleryScreen', () => {
   it('labels each photo with when it was taken', async () => {
     await renderGallery();
     expect(screen.getByRole('button', { name: 'Photo, yesterday' })).toBeTruthy();
+  });
+});
+
+describe('sameGalleryRow', () => {
+  const onOpen = () => {};
+  const label = () => 'Photo';
+  const base = {
+    row: [{ uri: 'a', takenAt: 1 }, { uri: 'b', takenAt: 2 }],
+    indices: [0, 1],
+    pinned: [false, false],
+    tile: 100,
+    playKey: 'all' as const,
+    onOpen,
+    label,
+  };
+
+  it('treats a re-chunked row with the same photos as unchanged', () => {
+    expect(sameGalleryRow(base, { ...base, row: base.row.map(p => ({ ...p })), indices: [0, 1], pinned: [false, false] })).toBe(true);
+  });
+
+  it('redraws when a photo, its place, its star, the size or the filter changes', () => {
+    expect(sameGalleryRow(base, { ...base, row: [base.row[0], { uri: 'c', takenAt: 2 }] })).toBe(false);
+    expect(sameGalleryRow(base, { ...base, indices: [1, 2] })).toBe(false);
+    expect(sameGalleryRow(base, { ...base, pinned: [false, true] })).toBe(false);
+    expect(sameGalleryRow(base, { ...base, tile: 101 })).toBe(false);
+    expect(sameGalleryRow(base, { ...base, playKey: 'today' })).toBe(false);
+    expect(sameGalleryRow(base, { ...base, row: [base.row[0]], indices: [0], pinned: [false] })).toBe(false);
+    expect(sameGalleryRow(base, { ...base, label: () => 'Foto' })).toBe(false);
   });
 });

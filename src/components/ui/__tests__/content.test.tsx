@@ -241,6 +241,13 @@ describe('Thumbnail', () => {
     expect(screen.getByTestId('icon-papers', { includeHiddenElements: true })).toBeTruthy();
   });
 
+  it('can skip the icon while loading (grids), but still shows it when the photo fails', async () => {
+    await render(<Thumbnail uri="file:///p.jpg" iconWhileLoading={false} />);
+    expect(screen.queryByTestId('icon-photos', { includeHiddenElements: true })).toBeNull();
+    await fireEvent(screen.getByTestId('thumbnail-image'), 'error');
+    expect(screen.getByTestId('icon-photos', { includeHiddenElements: true })).toBeTruthy();
+  });
+
   it('shows only the placeholder without a uri, and can fill a grid cell', async () => {
     await render(<Thumbnail uri={null} fill aspectRatio={0.75} />);
     expect(screen.queryByTestId('thumbnail-image')).toBeNull();
