@@ -1,0 +1,126 @@
+{
+ "vocab 2093": {
+  "stats": {
+   "hinglish: today": [
+    107,
+    386
+   ],
+   "hinglish: spelling fix, top 1": [
+    382,
+    386
+   ],
+   "hinglish: spelling fix, top 3": [
+    382,
+    386
+   ],
+   "hinglish: sound-key fix, top 1": [
+    332,
+    386
+   ],
+   "hinglish: both fixes, top 3": [
+    386,
+    386
+   ],
+   "hinglish: fix only when nothing found": [
+    362,
+    386
+   ],
+   "hinglish: (typed word finds nothing)": [
+    255,
+    386
+   ],
+   "english: today": [
+    80,
+    330
+   ],
+   "english: spelling fix, top 1": [
+    329,
+    330
+   ],
+   "english: spelling fix, top 3": [
+    330,
+    330
+   ],
+   "english: sound-key fix, top 1": [
+    275,
+    330
+   ],
+   "english: both fixes, top 3": [
+    330,
+    330
+   ],
+   "english: fix only when nothing found": [
+    323,
+    330
+   ],
+   "english: (typed word finds nothing)": [
+    243,
+    330
+   ]
+  },
+  "cleanQueriesThatFindNothing": "0/121",
+  "scanMsPerQuery": 22.66
+ },
+ "vocab 10030": {
+  "stats": {
+   "hinglish: today": [
+    119,
+    389
+   ],
+   "hinglish: spelling fix, top 1": [
+    372,
+    389
+   ],
+   "hinglish: spelling fix, top 3": [
+    378,
+    389
+   ],
+   "hinglish: sound-key fix, top 1": [
+    317,
+    389
+   ],
+   "hinglish: both fixes, top 3": [
+    386,
+    389
+   ],
+   "hinglish: fix only when nothing found": [
+    342,
+    389
+   ],
+   "hinglish: (typed word finds nothing)": [
+    225,
+    389
+   ],
+   "english: today": [
+    72,
+    329
+   ],
+   "english: spelling fix, top 1": [
+    318,
+    329
+   ],
+   "english: spelling fix, top 3": [
+    323,
+    329
+   ],
+   "english: sound-key fix, top 1": [
+    267,
+    329
+   ],
+   "english: both fixes, top 3": [
+    329,
+    329
+   ],
+   "english: fix only when nothing found": [
+    310,
+    329
+   ],
+   "english: (typed word finds nothing)": [
+    238,
+    329
+   ]
+  },
+  "cleanQueriesThatFindNothing": "0/121",
+  "scanMsPerQuery": 137.36
+ }
+}

@@ -5,3 +5,5 @@ android/
 ios/
 # Browser preview tool: its own project, tsconfig and dependencies.
 tools/preview/
+# Research scripts and notes (see research/README.md), not app code.
+research/
