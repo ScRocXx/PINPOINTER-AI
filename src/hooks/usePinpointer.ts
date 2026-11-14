@@ -23,7 +23,7 @@ export const usePinpointer = () => {
 
     // --- Sub-hooks ---
     const {
-        searchText, setSearchText,
+        searchText, setSearchText, debouncedSearchText,
         searchResults,
         isSearching, setIsSearching, isSearchPending,
         searchHistory,
@@ -128,6 +128,8 @@ export const usePinpointer = () => {
     return {
         // Search
         searchText, setSearchText, searchResults, isSearching, setIsSearching, isSearchPending,
+        // The query the current results were found for (lags typing by the debounce).
+        resultsQuery: debouncedSearchText,
         searchHistory, handleSelectHistory, handleDeleteHistory, handleClearHistory,
 
         // Image viewer

@@ -32,6 +32,12 @@ export interface SearchOverlayProps {
   visible: boolean;
   searchText: string;
   results: ReadonlyArray<DocumentRecord>;
+  /**
+   * The query `results` were found for. While typing it lags `searchText`
+   * by the search debounce; rows mark its words, so they don't redo that
+   * work on every key. Defaults to `searchText`.
+   */
+  resultsQuery?: string;
   isSearchPending: boolean;
   history: ReadonlyArray<SearchHistoryItem>;
   onSelectHistory: (query: string) => void;
@@ -111,6 +117,7 @@ const SearchContent: React.FC<SearchOverlayProps> = ({
   visible,
   searchText,
   results,
+  resultsQuery,
   isSearchPending,
   history,
   onSelectHistory,
@@ -136,6 +143,7 @@ const SearchContent: React.FC<SearchOverlayProps> = ({
   const opening = useRef(false);
 
   const query = searchText.trim();
+  const rowsQuery = (resultsQuery ?? searchText).trim();
   const voice = isRecording || isTranscribing;
 
   // The keyboard would cover the listening panel.
@@ -172,12 +180,14 @@ const SearchContent: React.FC<SearchOverlayProps> = ({
     [live, active],
   );
 
-  const also = useMemo(() => (query ? alsoSearchedAs(query) : []), [query]);
+  const also = useMemo(() => (rowsQuery ? alsoSearchedAs(rowsQuery) : []), [rowsQuery]);
 
   // Read through a ref so `open` (and every row) keeps one identity while
   // results re-rank or a filter changes.
   const shownRef = useRef(shown);
   shownRef.current = shown;
+  const searchTextRef = useRef(searchText);
+  searchTextRef.current = searchText;
 
   const open = useCallback(
     async (item: DocumentRecord) => {
@@ -186,10 +196,11 @@ const SearchContent: React.FC<SearchOverlayProps> = ({
       try {
         const outcome = await openResult(item);
         if (outcome === 'gone') {
+          const q = searchTextRef.current;
           setGone(prev => {
-            const paths = new Set(prev.q === searchText ? prev.paths : []);
+            const paths = new Set(prev.q === q ? prev.paths : []);
             paths.add(item.filePath);
-            return { q: searchText, paths };
+            return { q, paths };
           });
           toast.show(t('error.fileGone'), { icon: 'alert' });
           return;
@@ -205,14 +216,14 @@ const SearchContent: React.FC<SearchOverlayProps> = ({
         opening.current = false;
       }
     },
-    [searchText, onOpenPhoto, toast, t],
+    [onOpenPhoto, toast, t],
   );
 
   const renderItem = useCallback(
     ({ item, index }: ListRenderItemInfo<DocumentRecord>) => (
-      <ResultItem item={item} query={query} index={index} pinned={isPinned(item.filePath)} onPress={open} />
+      <ResultItem item={item} query={rowsQuery} index={index} pinned={isPinned(item.filePath)} onPress={open} />
     ),
-    [query, isPinned, open],
+    [rowsQuery, isPinned, open],
   );
 
   let body: React.ReactNode;
