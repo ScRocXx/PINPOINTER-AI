@@ -5,6 +5,7 @@ import { TintName } from '../../theme';
 import { DocumentCategory, classifyDocument } from '../../utils/DocumentClassifier';
 import { maskSensitiveData } from '../../utils/DataMasking';
 import { matchTermsIn, snippetFrom } from '../../utils/MatchTerms';
+import { answerFacts, type AnswerFacts } from '../../utils/AnswerCards';
 
 /** The kind of paper, for the row's tile and its word ("Bill", "ID"). */
 export interface PaperKind {
@@ -54,6 +55,8 @@ export interface ResultInfo {
   /** The photo's text is what ML Kit saw in it ("Dog, Grass"), not words in it. */
   isLabels: boolean;
   kind: PaperKind | null;
+  /** Amount, due date, validity, medicine times read from the text ({} when none). */
+  facts: AnswerFacts;
 }
 
 export const describeResult = (item: DocumentRecord, query: string): ResultInfo => {
@@ -63,12 +66,12 @@ export const describeResult = (item: DocumentRecord, query: string): ResultInfo 
     const isLabels = item.detection_type === 'OBJECT';
     const terms = matchTermsIn(content, query);
     const snippet = isLabels ? content.replace(/\s+/g, ' ').trim() : snippetFrom(content, terms);
-    return { isPhoto, title: null, snippet, terms, wordsMatch: terms.length > 0, isLabels, kind: null };
+    return { isPhoto, title: null, snippet, terms, wordsMatch: terms.length > 0, isLabels, kind: null, facts: isLabels ? {} : answerFacts(content) };
   }
   // Stored titles are masked at index time; a file name never went through that.
   const title = (item.title ?? '').trim() || maskSensitiveData(fileNameOf(item.filePath));
   const terms = matchTermsIn(`${title} ${content}`, query);
   const snippet = snippetFrom(content, terms);
   const kind = paperKind(classifyDocument(content, item.filePath.split('/').pop() || '').category);
-  return { isPhoto, title, snippet, terms, wordsMatch: terms.length > 0, isLabels: false, kind };
+  return { isPhoto, title, snippet, terms, wordsMatch: terms.length > 0, isLabels: false, kind, facts: answerFacts(content) };
 };

@@ -87,6 +87,9 @@ const FILLER_WORDS = new Set([
     'a', 'an', 'the', 'of', 'in', 'on', 'at', 'with', 'for', 'and', 'or', 'to', 'from', 'my', 'is', 'are',
     'ka', 'ki', 'ke', 'ko', 'mein', 'aur', 'wala', 'wali', 'wale', 'mera', 'meri', 'mere',
     'का', 'की', 'के', 'को', 'में', 'और', 'वाला', 'वाली', 'वाले', 'मेरा', 'मेरी', 'मेरे',
+    // Questions the answer line replies to ("bijli bill kitna", "policy kab tak"):
+    // the paper doesn't contain them.
+    'kitna', 'kitni', 'kitne', 'kab', 'tak', 'how', 'much', 'when', 'कितना', 'कितनी', 'कितने', 'कब', 'तक',
 ]);
 
 /** "photo of X", "X ki photo": the word asks for a photo, it isn't written in one. */

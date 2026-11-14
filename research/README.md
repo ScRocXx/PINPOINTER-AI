@@ -25,7 +25,7 @@ This file is updated as each part lands. Status: **planned**, **in progress**,
 | 1 | Misread-proof search | Papers are found even when OCR misread a letter or split a word | **done** |
 | 2 | Spelling rescue from your own words | "bijki bil" or "medicne" still finds the paper, with "Showing results for …" | **done** |
 | 3 | Memory anchors: dates and festivals | "Diwali photos", "papers from last month", "kal ki photo" | **done** |
-| 4 | Answer cards | A bill result shows "₹1,240 · due 5 April" without opening it | planned |
+| 4 | Answer cards | A bill result shows "Amount ₹1,240 · Pay by 5 April" without opening it | **done** |
 | 5 | Words-first photo reader (native) | Indexing reads each photo once; screenshots' small text stays readable | planned |
 | 6 | Hindi voice tuned to your words (native) | Speak in Hindi; names and medicine words in your papers are understood | planned |
 | 7 | Series and duplicates | WhatsApp copies read once; "latest electricity bill" | planned |
@@ -180,10 +180,43 @@ photos that look like it (CLIP: "diwali lamps and lights") rise to the top.
   Pongal's days, Bihu, Durga Puja's days) are next, each tested like these.
 - "kal" is read as yesterday (nobody searches tomorrow's photos).
 
-## 4. Answer cards (planned)
+## 4. Answer cards (done)
 
-Amounts, due dates, expiry dates and medicine times are read from the stored
-text with rules (no extra model) and shown in the result row.
+**What people notice.** A result shows the answer itself, in bold, in English
+or Hindi: "Amount ₹1,240 · Pay by 5 April" (or "Was due …" once past),
+"Valid till 31 March 2025" / "Expired on …", "Take: morning, night, after
+food" (रकम, … तक भरें, … तक मान्य, लेना है: सुबह, रात, खाने के बाद). Question
+words are left out of the search ("bijli bill kitna", "policy kab tak",
+"बिल कितना"), so the answer line replies to them.
+
+**How.** `utils/AnswerCards.ts` reads the stored (already masked) text with a
+few rules, no model:
+
+- **Amount:** after the most telling label ("amount payable", "net payable",
+  "total", "कुल देय", "देय राशि", "राशि"), else the largest amount written with
+  ₹/Rs/INR. Indian grouping (1,24,500.50); long numbers that are IDs are left
+  alone.
+- **Due date:** after "due date", "pay by", "last date", "अंतिम तिथि", "देय
+  तिथि". Dates are dd/mm/yyyy (Indian order), dd-mm-yy, "5th April 2024",
+  "April 5, 2024", "5 अप्रैल 2024". Impossible dates are rejected.
+- **Valid till:** after "valid till/upto", "expiry", "वैधता", "समाप्ति";
+  "12/2025" means the end of that month.
+- **Medicine times:** only on prescriptions (tab, cap, syrup, mg, दवा, गोली):
+  1-0-1 shorthand, OD/BD/TDS/HS/SOS, after or before food, Hindi
+  instructions (सुबह शाम, खाने के बाद).
+
+`screens/pinpointer/answerLine.ts` words it, past dates differently;
+`resultInfo` reads it once per row; `ResultItem` shows it (and TalkBack reads
+it).
+
+**Known limits, and what refines them next**
+
+- Rules see the text as one line; on a busy bill, the amount next to "Total"
+  can be a subtotal. Next: OCR's text positions (part 5), so a label and its
+  value are paired by where they sit on the page.
+- A date without a year is taken as this year.
+- Next: read the answer aloud with the phone's own Hindi voice (Android
+  text-to-speech, offline), for people who find reading hard.
 
 ## 5–7 (planned)
 

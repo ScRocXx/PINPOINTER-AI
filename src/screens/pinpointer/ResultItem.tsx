@@ -14,6 +14,7 @@ import { useStrings } from '../../i18n';
 import { Colors, Elevation, Radius, Space, Stagger, Tints, staggerDelay, Duration } from '../../theme';
 import { describeResult } from './resultInfo';
 import { MatchedSnippet } from './MatchedSnippet';
+import { answerLine } from './answerLine';
 
 /** Size of the photo or paper tile at the start of a row. */
 export const RESULT_TILE = 76;
@@ -41,6 +42,7 @@ export const ResultItem: React.FC<ResultItemProps> = React.memo(
     const info = useMemo(() => describeResult(item, query), [item, query]);
 
     const kindWord = t(info.isPhoto ? 'search.photo' : 'search.paper');
+    const answer = answerLine(t, info.facts);
     const paperWord = info.kind?.label ? t(info.kind.label) : null;
     const tint = info.kind ? Tints[info.kind.tint] : null;
 
@@ -52,6 +54,7 @@ export const ResultItem: React.FC<ResultItemProps> = React.memo(
       kindWord,
       paperWord,
       info.title,
+      answer,
       mainText || (info.isPhoto ? t('search.looksLikeQuery', { q: query.trim() }) : ''),
       pinned ? t('common.important') : null,
     ]
@@ -104,6 +107,12 @@ export const ResultItem: React.FC<ResultItemProps> = React.memo(
                 color={Colors.text}
                 numberOfLines={2}
               />
+            ) : null}
+
+            {answer ? (
+              <AppText variant="bodyStrong" color="text" numberOfLines={2} testID={`${testID}-answer`}>
+                {answer}
+              </AppText>
             ) : null}
 
             {mainText ? (

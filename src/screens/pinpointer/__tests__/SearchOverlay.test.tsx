@@ -116,6 +116,12 @@ describe('SearchOverlay', () => {
     expect(screen.getByTestId('search-when')).toHaveTextContent('When: Diwali, every year');
   });
 
+  it('shows the answer a paper holds, without opening it', async () => {
+    const bill = paper({ id: 7, content: 'Amount Payable Rs. 1,240 Due Date 05/04/2099', filePath: 'file:///docs/b7.pdf' });
+    await setup({ searchText: 'bill', results: [bill] });
+    expect(screen.getByTestId('result-item-answer')).toHaveTextContent('Amount ₹1,240 · Pay by 5 April 2099');
+  });
+
   it('shows no correction line for words found as typed', async () => {
     await setup({ searchText: 'bill', results: [photo()] });
     expect(screen.queryByTestId('search-corrected')).toBeNull();

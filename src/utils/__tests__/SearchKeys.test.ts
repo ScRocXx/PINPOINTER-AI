@@ -104,3 +104,12 @@ describe('buildSearchTail — OCR-tolerant keys', () => {
         expect(version).toBe(2);
     });
 });
+
+describe('searchWords — question words', () => {
+    const { searchWords: words } = jest.requireActual('../SearchKeys');
+    it('leaves out the question the answer line replies to', () => {
+        expect(words('bijli bill kitna')).toEqual(['bijli', 'bill']);
+        expect(words('policy kab tak')).toEqual(['policy']);
+        expect(words('बिल कितना')).toEqual(['बिल']);
+    });
+});
