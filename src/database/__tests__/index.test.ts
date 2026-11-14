@@ -46,6 +46,7 @@ const EXPECTED_EXPORTS = [
   'listIndexedFiles',
   'listContentAfter',
   'updateDocumentContent',
+  'setTakenAt',
   'markEmbedDone',
   'markEmbedSkipped',
   'markOcrDone',

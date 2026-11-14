@@ -63,6 +63,12 @@ const mtimeOf = (edge: GalleryEdge): number | undefined => {
     return typeof t === 'number' ? t : undefined;
 };
 
+/** When the photo was taken, in ms (MediaStore gives seconds), for date searches. */
+const takenOf = (edge: GalleryEdge): number | undefined => {
+    const t = edge.node.timestamp ?? edge.node.modificationTimestamp;
+    return typeof t === 'number' && t > 0 ? Math.round(t * 1000) : undefined;
+};
+
 /**
  * Set once any image encode succeeds this session. Until then a missing
  * embedding is blamed on the encoder (models missing, still loading), not the
@@ -95,7 +101,7 @@ const recordEmbedding = (uri: string, docId: number, embedding: Float32Array | n
  * one. The ML work happens first; the DB writes then run in one short
  * transaction with no await inside, so other sync loops can't interleave.
  */
-export const indexPhoto = async (uri: string, mtime?: number): Promise<PhotoOutcome> => {
+export const indexPhoto = async (uri: string, mtime?: number, takenAt?: number): Promise<PhotoOutcome> => {
     const work = noteFileSeen(uri, 'IMAGE', mtime);
     if (!work.ocr) {
         return work.embed ? embedPhoto(uri) : 'skipped';
@@ -118,7 +124,7 @@ export const indexPhoto = async (uri: string, mtime?: number): Promise<PhotoOutc
 
     beginTransaction();
     try {
-        const docId = indexDocument(null, content || 'image', uri, 'IMAGE', detection);
+        const docId = indexDocument(null, content || 'image', uri, 'IMAGE', detection, takenAt ?? null);
         if (docId == null) throw new Error('indexDocument did not write a row');
         markOcrDone(uri);
         recordEmbedding(uri, docId, embedding);
@@ -198,7 +204,7 @@ export const performQuickSync = async (
             if (!isQuiet()) await waitForQuiet(() => !!cancelRef?.current);
             if (cancelRef?.current) break;
 
-            await indexPhoto(edge.node.image.uri, mtimeOf(edge));
+            await indexPhoto(edge.node.image.uri, mtimeOf(edge), takenOf(edge));
 
             totalProcessed++;
             onProgress(totalProcessed);
@@ -250,7 +256,7 @@ export const performQuickSyncBackground = async (
             }
             if (!isQuiet()) await waitForQuiet(() => !!cancelRef?.current);
             if (cancelRef?.current) break;
-            await indexPhoto(edge.node.image.uri, mtimeOf(edge));
+            await indexPhoto(edge.node.image.uri, mtimeOf(edge), takenOf(edge));
             bgProcessed++;
         }
 
@@ -306,7 +312,7 @@ export const performFullGallerySync = async (
                 }
 
                 const uri = edge.node.image.uri;
-                await indexPhoto(uri, mtimeOf(edge));
+                await indexPhoto(uri, mtimeOf(edge), takenOf(edge));
 
                 totalProcessed++;
                 onProgress(totalProcessed, uri);

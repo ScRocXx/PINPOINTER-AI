@@ -16,6 +16,7 @@ interface RawRow {
   type: string;
   detection_type: string;
   timestamp: number;
+  taken_at?: number | null;
 }
 
 /**
@@ -36,6 +37,7 @@ export const processResults = (
       type: r.type,
       detection_type: r.detection_type,
       timestamp: r.timestamp,
+      takenAt: typeof r.taken_at === 'number' ? r.taken_at : null,
     };
   }) as DocumentRecord[];
 };
@@ -69,7 +71,9 @@ export const indexDocument = (
   content: string,
   filePath: string,
   type: 'IMAGE' | 'DOCUMENT',
-  detection_type: 'TEXT' | 'OBJECT'
+  detection_type: 'TEXT' | 'OBJECT',
+  /** When the photo was taken or the PDF last changed (ms), for date searches. */
+  takenAt: number | null = null,
 ): number | null => {
   // C2 fix: Mask PII (Aadhaar/PAN/phone) at the single chokepoint so no caller can bypass it
   content = maskSensitiveData(content ?? '');
@@ -98,8 +102,8 @@ export const indexDocument = (
     // Always DELETE first to ensure FTS triggers fire correctly for updates
     db.executeSync('DELETE FROM document_index WHERE filePath = ?', [filePath]);
     db.executeSync(
-      'INSERT INTO document_index (title, content, filePath, type, detection_type, timestamp) VALUES (?, ?, ?, ?, ?, ?)',
-      [title, content.trim(), filePath, type, detection_type, Date.now()]
+      'INSERT INTO document_index (title, content, filePath, type, detection_type, timestamp, taken_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [title, content.trim(), filePath, type, detection_type, Date.now(), takenAt]
     );
     const idResult = db.executeSync('SELECT last_insert_rowid() as id');
     const idRows = idResult?.rows || [];
@@ -162,6 +166,16 @@ export const updateDocumentContent = (id: number, content: string): void => {
   getDb().executeSync('UPDATE document_index SET content = ? WHERE id = ?', [content, id]);
 };
 
+/** Records when a file's content dates from (photo taken, PDF changed), in ms. */
+export const setTakenAt = (filePath: string, takenAt: number | null | undefined): void => {
+  if (typeof takenAt !== 'number' || !Number.isFinite(takenAt)) return;
+  try {
+    getDb().executeSync('UPDATE document_index SET taken_at = ? WHERE filePath = ?', [takenAt, filePath]);
+  } catch (e) {
+    AppLogger.warn('DB', 'setTakenAt failed:', e);
+  }
+};
+
 /** Returns the total number of indexed documents */
 export const getIndexedCount = (): number => {
   try {
@@ -202,7 +216,7 @@ export const clearIndex = () => {
 export const getDocumentByPath = (filePath: string): DocumentRecord | null => {
   try {
     const result = getDb().executeSync(
-      `SELECT id, title, content, filePath, type, detection_type, timestamp
+      `SELECT id, title, content, filePath, type, detection_type, timestamp, taken_at
        FROM document_index
        WHERE filePath = ?
        LIMIT 1`,
@@ -222,7 +236,7 @@ export const getAllDocuments = (): DocumentRecord[] => {
     // NOTE: must be executeSync — the async execute() returns a Promise,
     // which processResults would read as "no rows" (empty vault on device).
     const result = db.executeSync(
-      `SELECT id, title, content, filePath, type, detection_type, timestamp
+      `SELECT id, title, content, filePath, type, detection_type, timestamp, taken_at
        FROM document_index
        WHERE type = 'DOCUMENT'
        ORDER BY timestamp DESC`

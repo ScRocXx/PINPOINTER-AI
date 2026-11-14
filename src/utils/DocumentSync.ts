@@ -7,7 +7,7 @@
  */
 import { Platform } from 'react-native';
 import RNFS from 'react-native-fs';
-import { isFileIndexed, noteFileSeen, markOcrDone, markStageFailed } from '../database';
+import { isFileIndexed, noteFileSeen, markOcrDone, markStageFailed, setTakenAt } from '../database';
 import { processPDF } from './DocumentPipeline';
 import { prepareImportedPdfs } from './PdfImport';
 import { AppLogger } from './AppLogger';
@@ -106,6 +106,8 @@ export const performDocumentSync = async (
             await processPDF(fileUri);
             // The pipeline logs and swallows save errors, so check the row landed.
             if (!isFileIndexed(fileUri)) throw new Error('PDF row was not written');
+            // "pichhle mahine ka bill": the paper dates from when the file last changed.
+            setTakenAt(fileUri, doc.mtime ? doc.mtime.getTime() : null);
             markOcrDone(fileUri, 'DOCUMENT');
             AppLogger.info('DocumentSync', `Pipeline complete for: ${doc.name}`);
         } catch (pipelineError) {

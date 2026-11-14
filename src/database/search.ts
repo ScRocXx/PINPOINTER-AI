@@ -6,6 +6,7 @@
 import { soundex } from '../utils/Soundex';
 import { searchWords, termsForQueryWord } from '../utils/SearchKeys';
 import { tolerantTermsForQueryWord } from '../utils/OcrTolerance';
+import { parseDateQuery, type DateQuery, type DateWindow } from '../utils/DateQuery';
 import { collectionForQuery } from '../utils/Collections';
 import { AppLogger } from '../utils/AppLogger';
 import { getDb, getReadDb, isFtsAvailable } from './connection';
@@ -67,7 +68,7 @@ export const mergeByRank = (textHits: DocumentRecord[], lookAlikes: DocumentReco
 };
 
 const BY_IDS_SQL = (count: number) =>
-  `SELECT id, title, content, filePath, type, detection_type, timestamp
+  `SELECT id, title, content, filePath, type, detection_type, timestamp, taken_at
      FROM document_index WHERE id IN (${Array.from({ length: count }, () => '?').join(', ')})`;
 
 /** The rows for `ids`, in the order of `ids`. */
@@ -77,15 +78,15 @@ const inIdOrder = (ids: number[], result: Parameters<typeof processResults>[0]):
 };
 
 /** The photos that look like the query vector, closest first. */
-const searchByLook = (queryVector: Float32Array): DocumentRecord[] => {
-  const ids = findLookAlikes(queryVector).map(l => l.documentId);
+const searchByLook = (queryVector: Float32Array, limit?: number): DocumentRecord[] => {
+  const ids = findLookAlikes(queryVector, limit).map(l => l.documentId);
   if (ids.length === 0) return [];
   return inIdOrder(ids, getDb().executeSync(BY_IDS_SQL(ids.length), ids));
 };
 
 /** searchByLook on the read connection, off the JS thread. */
-const searchByLookAsync = async (queryVector: Float32Array): Promise<DocumentRecord[]> => {
-  const ids = (await findLookAlikesAsync(queryVector)).map(l => l.documentId);
+const searchByLookAsync = async (queryVector: Float32Array, limit?: number): Promise<DocumentRecord[]> => {
+  const ids = (await findLookAlikesAsync(queryVector, limit)).map(l => l.documentId);
   if (ids.length === 0) return [];
   return inIdOrder(ids, await getReadDb().execute(BY_IDS_SQL(ids.length), ids));
 };
@@ -140,21 +141,63 @@ const RESULT_LIMIT = 50;
  * exactly or as a likely misreading. Only what the exact search didn't find,
  * so these always come after it.
  */
-const searchMisread = (db: ReturnType<typeof getDb>, words: string[], exact: DocumentRecord[]): DocumentRecord[] => {
-  const room = RESULT_LIMIT - exact.length;
+const searchMisread = (
+  db: ReturnType<typeof getDb>,
+  words: string[],
+  exact: DocumentRecord[],
+  limit = RESULT_LIMIT,
+): DocumentRecord[] => {
+  const room = limit - exact.length;
   if (room <= 0 || words.length === 0) return [];
   const found = new Set(exact.map(d => d.id));
   const result = db.executeSync(
-    `SELECT d.id, d.title, d.content, d.filePath, d.type, d.detection_type, d.timestamp
+    `SELECT d.id, d.title, d.content, d.filePath, d.type, d.detection_type, d.timestamp, d.taken_at
      FROM fts_index f
      JOIN document_index d ON d.id = f.rowid
      WHERE f.fts_index MATCH ?
      ORDER BY rank
-     LIMIT ${RESULT_LIMIT}`,
+     LIMIT ${limit}`,
     [words.map(tolerantFtsGroup).join(' AND ')],
   );
   return processResults(result).filter(d => !found.has(d.id)).slice(0, room);
 };
+
+// ─── Dates ("Diwali photos", "pichhle mahine ka bill") ──────────────────────
+
+/** Rows read for words + a date, before keeping those from that time. */
+const DATE_SEARCH_LIMIT = 500;
+/** Most photos and papers listed for a date alone. */
+const DATE_LIST_LIMIT = 100;
+/** Look-alikes read for a date search, before keeping those from that time. */
+const DATE_LOOK_LIMIT = 400;
+
+const inWindows = (doc: DocumentRecord, windows: ReadonlyArray<DateWindow>): boolean =>
+  typeof doc.takenAt === 'number' && windows.some(w => doc.takenAt! >= w.from && doc.takenAt! < w.to);
+
+/** Photos and papers from any of these times, newest first (rows without a date are left out). */
+export const listByDate = (windows: ReadonlyArray<DateWindow>, limit = DATE_LIST_LIMIT): DocumentRecord[] => {
+  if (windows.length === 0) return [];
+  try {
+    const result = getDb().executeSync(
+      `SELECT id, title, content, filePath, type, detection_type, timestamp, taken_at
+       FROM document_index
+       WHERE ${windows.map(() => '(taken_at >= ? AND taken_at < ?)').join(' OR ')}
+       ORDER BY taken_at DESC
+       LIMIT ?`,
+      [...windows.flatMap(w => [w.from, w.to]), limit],
+    );
+    return processResults(result);
+  } catch (e) {
+    AppLogger.warn('DB', 'listByDate failed:', e);
+    return [];
+  }
+};
+
+/** The word matches from that time, or everything from then when only a date was asked. */
+const dateTextHits = (dq: DateQuery): DocumentRecord[] =>
+  dq.rest.trim()
+    ? searchByWords(dq.rest, DATE_SEARCH_LIMIT).filter(d => inWindows(d, dq.windows)).slice(0, RESULT_LIMIT)
+    : listByDate(dq.windows);
 
 /**
  * Search documents by their words and, when `queryVector` is given, by what
@@ -169,11 +212,14 @@ const searchMisread = (db: ReturnType<typeof getDb>, words: string[], exact: Doc
  *  3. The two lists merged by rank (see mergeByRank).
  */
 export const searchDocuments = (query: string, queryVector?: Float32Array): DocumentRecord[] => {
-  const textHits = searchByWords(query);
+  const dq = parseDateQuery(query);
+  const textHits = dq ? dateTextHits(dq) : searchByWords(query);
   if (!queryVector || !query.trim()) return textHits;
   const t0 = Date.now();
   try {
-    const lookAlikes = searchByLook(queryVector);
+    const lookAlikes = dq
+      ? searchByLook(queryVector, DATE_LOOK_LIMIT).filter(d => inWindows(d, dq.windows))
+      : searchByLook(queryVector);
     AppLogger.info('DB', `Look-alike search took ${Date.now() - t0}ms. Found ${lookAlikes.length} photos.`);
     return lookAlikes.length > 0 ? mergeByRank(textHits, lookAlikes) : textHits;
   } catch (e) {
@@ -189,11 +235,14 @@ export const searchDocuments = (query: string, queryVector?: Float32Array): Docu
  * Same results as searchDocuments.
  */
 export const searchDocumentsAsync = async (query: string, queryVector?: Float32Array): Promise<DocumentRecord[]> => {
-  const textHits = searchByWords(query);
+  const dq = parseDateQuery(query);
+  const textHits = dq ? dateTextHits(dq) : searchByWords(query);
   if (!queryVector || !query.trim()) return textHits;
   const t0 = Date.now();
   try {
-    const lookAlikes = await searchByLookAsync(queryVector);
+    const lookAlikes = dq
+      ? (await searchByLookAsync(queryVector, DATE_LOOK_LIMIT)).filter(d => inWindows(d, dq.windows))
+      : await searchByLookAsync(queryVector);
     AppLogger.info('DB', `Look-alike search took ${Date.now() - t0}ms (off the JS thread). Found ${lookAlikes.length} photos.`);
     return lookAlikes.length > 0 ? mergeByRank(textHits, lookAlikes) : textHits;
   } catch (e) {
@@ -202,7 +251,7 @@ export const searchDocumentsAsync = async (query: string, queryVector?: Float32A
   }
 };
 
-const searchByWords = (query: string): DocumentRecord[] => {
+const searchByWords = (query: string, limit = RESULT_LIMIT): DocumentRecord[] => {
   const t0 = Date.now();
   try {
     const db = getDb();
@@ -223,12 +272,12 @@ const searchByWords = (query: string): DocumentRecord[] => {
         // Build FTS5 query: each word with wildcard, AND-joined
         const ftsTerms = collectionFts || words.map(ftsGroup).join(' AND ');
         const ftsResults = db.executeSync(
-          `SELECT d.id, d.title, d.content, d.filePath, d.type, d.detection_type, d.timestamp
+          `SELECT d.id, d.title, d.content, d.filePath, d.type, d.detection_type, d.timestamp, d.taken_at
            FROM fts_index f
            JOIN document_index d ON d.id = f.rowid
            WHERE f.fts_index MATCH ?
            ORDER BY rank
-           LIMIT 50`,
+           LIMIT ${limit}`,
           [ftsTerms]
         );
         results = processResults(ftsResults);
@@ -236,7 +285,7 @@ const searchByWords = (query: string): DocumentRecord[] => {
         // "मुगतान"), after the exact ones. A collection ("Medicine") too: a
         // paper that says "rnedicine" belongs in it.
         try {
-          results = [...results, ...searchMisread(db, words, results)];
+          results = [...results, ...searchMisread(db, words, results, limit)];
         } catch (err) {
           AppLogger.warn('DB', `Misread search failed for "${trimmed}":`, err);
         }
@@ -286,11 +335,11 @@ const searchByWords = (query: string): DocumentRecord[] => {
 
     const whereSQL = whereClauses.join(' AND ');
     const likeResults = db.executeSync(
-      `SELECT id, title, content, filePath, type, detection_type, timestamp
+      `SELECT id, title, content, filePath, type, detection_type, timestamp, taken_at
        FROM document_index
        WHERE ${whereSQL}
        ORDER BY timestamp DESC
-       LIMIT 50`,
+       LIMIT ${limit}`,
       params
     );
     results = processResults(likeResults);

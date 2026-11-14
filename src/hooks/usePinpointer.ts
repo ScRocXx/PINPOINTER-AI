@@ -24,7 +24,7 @@ export const usePinpointer = () => {
     // --- Sub-hooks ---
     const {
         searchText, setSearchText, debouncedSearchText,
-        searchResults, correctedFrom,
+        searchResults, correctedFrom, dateMeaning,
         isSearching, setIsSearching, isSearchPending,
         searchHistory,
         handleSelectHistory, handleDeleteHistory, handleClearHistory,
@@ -133,6 +133,8 @@ export const usePinpointer = () => {
         resultsQuery: debouncedSearchText,
         // What was typed, when the results are for a corrected query.
         correctedFrom,
+        // What the query's date words meant ("Diwali, every year").
+        dateMeaning,
         searchHistory, handleSelectHistory, handleDeleteHistory, handleClearHistory,
 
         // Image viewer

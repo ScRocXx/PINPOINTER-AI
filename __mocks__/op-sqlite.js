@@ -233,6 +233,23 @@ class MockDB {
     }
 
     // Paged walk over the index (pruning deleted files)
+    // Photos and papers from some time windows, newest first
+    if (/FROM document_index\s+WHERE \(taken_at >= \? AND taken_at < \?\)/i.test(q)) {
+      const limit = params[params.length - 1];
+      const windows = [];
+      for (let i = 0; i + 1 < params.length - 1; i += 2) windows.push([params[i], params[i + 1]]);
+      const rows = this.documents
+        .filter((r) => typeof r.taken_at === 'number' && windows.some(([a, b]) => r.taken_at >= a && r.taken_at < b))
+        .sort((a, b) => b.taken_at - a.taken_at)
+        .slice(0, limit);
+      return { rows: this._project(rows, this._selectList(q)) };
+    }
+    if (/^UPDATE document_index SET taken_at = \? WHERE filePath = \?/i.test(q)) {
+      const [takenAt, filePath] = params;
+      this.documents.filter((r) => r.filePath === filePath).forEach((r) => (r.taken_at = takenAt));
+      return { rows: [] };
+    }
+
     // fts5vocab over the search index: every token with how many rows contain it
     if (/^SELECT term, doc FROM temp\.fts_vocab ORDER BY doc DESC LIMIT \?/i.test(q)) {
       const [limit] = params;

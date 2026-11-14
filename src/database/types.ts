@@ -10,5 +10,8 @@ export interface DocumentRecord {
   filePath: string;
   type: 'IMAGE' | 'DOCUMENT';
   detection_type: 'TEXT' | 'OBJECT';
+  /** When it was indexed (ms). */
   timestamp: number;
+  /** When the photo was taken, or the PDF last changed (ms); null when unknown. */
+  takenAt?: number | null;
 }

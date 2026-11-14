@@ -24,7 +24,7 @@ This file is updated as each part lands. Status: **planned**, **in progress**,
 |---|---|---|---|
 | 1 | Misread-proof search | Papers are found even when OCR misread a letter or split a word | **done** |
 | 2 | Spelling rescue from your own words | "bijki bil" or "medicne" still finds the paper, with "Showing results for …" | **done** |
-| 3 | Memory anchors: dates and festivals | "Diwali photos", "papers from last month", "kal ki photo" | planned |
+| 3 | Memory anchors: dates and festivals | "Diwali photos", "papers from last month", "kal ki photo" | **done** |
 | 4 | Answer cards | A bill result shows "₹1,240 · due 5 April" without opening it | planned |
 | 5 | Words-first photo reader (native) | Indexing reads each photo once; screenshots' small text stays readable | planned |
 | 6 | Hindi voice tuned to your words (native) | Speak in Hindi; names and medicine words in your papers are understood | planned |
@@ -137,11 +137,48 @@ found):
 - The typos are simulated (neighbouring, missed, extra and swapped keys), not
   collected from elderly users yet.
 
-## 3. Memory anchors (planned)
+## 3. Memory anchors (done)
 
-The date a photo was taken is stored (today only the indexing time is). Search
-understands "today", "kal", "last month", "2023", and festivals (Diwali, Holi,
-Eid, Christmas and others) from a small table of their dates.
+**What people notice.** "Diwali photos", "दिवाली 2022", "pichhli rakhi",
+"kal ki photo", "pichhle mahine ka bill", "march 2024 bill", "2023 photos"
+all work. The results say when they are from ("When: Diwali, every year",
+"कब: पिछले महीने"). A date alone lists everything from those days, newest
+first; other words are looked for only within those days. For a festival,
+photos that look like it (CLIP: "diwali lamps and lights") rise to the top.
+
+**How.**
+
+- **When a photo was taken** is stored now (`document_index.taken_at`,
+  migration 3, with an index). Photos get the gallery's taken time; PDFs their
+  file date. Rows indexed before get the file time sync had recorded.
+- **`utils/DateQuery.ts`** reads the date words (English, Hinglish, Hindi):
+  today/aaj, kal, parso, this/last week, month and year, month names (March
+  and May only next to a year), years (alone only, so "bill 2023" still means
+  the words), and 15 festivals.
+- **Festivals are computed, not listed**, so the app never goes out of date:
+  - Moon phases: Meeus' algorithm (ch. 49).
+  - Hindu months: the lunar month is named by the sun's sidereal sign at its
+    new moon, worked out at that moment (Meeus ch. 25 minus the Lahiri
+    ayanamsa).
+  - The extra (adhik) months of 2020 and 2023: the last new moon in the sign
+    counts.
+  - Eid and Bakrid: the arithmetic Islamic calendar, a day wider.
+  - Tested against the real festival days of 2016–2025: Diwali, Holi, Raksha
+    Bandhan, Ganesh Chaturthi, Navratri, Dussehra, Karva Chauth, Chhath, Eid
+    and Bakrid all land inside their windows every year.
+- **`database/search.ts`**: `listByDate` (uses the index) for a date alone;
+  word and look-alike results filtered to the windows otherwise.
+  `useSearch` exposes `dateMeaning` and skips spelling rescue for dates
+  (nothing from then is not a typo).
+
+**Known limits, and what refines them next**
+
+- Photos and papers not indexed yet don't show in date searches; the Photos
+  tab's own date chips still show every photo. Next: fill a date search from
+  the phone's gallery (MediaStore can filter by date) when the index has few.
+- Festivals use Indian dates and IST; regional festivals beyond these 15 (Onam,
+  Pongal's days, Bihu, Durga Puja's days) are next, each tested like these.
+- "kal" is read as yesterday (nobody searches tomorrow's photos).
 
 ## 4. Answer cards (planned)
 

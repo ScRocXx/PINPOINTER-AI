@@ -333,6 +333,18 @@ describe('performQuickSync', () => {
 
 // ─── performFullGallerySync ─────────────────────────────────────────────────
 
+describe('when each photo was taken', () => {
+  test('stores the gallery\'s taken time (seconds) as ms, for date searches', async () => {
+    getPhotosMock.mockResolvedValue({
+      edges: [{ node: { image: { uri: uriFor(0) }, timestamp: 1699780000, modificationTimestamp: 1699790000 } }],
+      page_info: { has_next_page: false, end_cursor: undefined },
+    });
+    const indexSpy = jest.spyOn(DatabaseDocuments, 'indexDocument');
+    await performQuickSync(jest.fn(), undefined, { background: false });
+    expect(indexSpy.mock.calls[0][5]).toBe(1699780000000);
+  });
+});
+
 describe('stepping aside while the phone is in use', () => {
   test('the next photo waits while someone is scrolling, then indexing carries on', async () => {
     mockGallery(3);
@@ -468,7 +480,7 @@ describe('performFullGallerySync', () => {
 
     await runFullSync(jest.fn());
 
-    expect(indexSpy).toHaveBeenCalledWith(null, 'image', uriFor(0), 'IMAGE', 'OBJECT');
+    expect(indexSpy).toHaveBeenCalledWith(null, 'image', uriFor(0), 'IMAGE', 'OBJECT', null);
     expect(isFileIndexed(uriFor(0))).toBe(true);
   });
 

@@ -1,4 +1,4 @@
-import { formatDay, formatMonth, formatWhen } from '../dates';
+import { formatDateMeaning as fmt, formatDay, formatMonth, formatWhen } from '../dates';
 import { relativeTime, translate, StringKey, StringParams } from '../strings';
 
 const tEn = (key: StringKey, params?: StringParams) => translate('en', key, params);
@@ -54,5 +54,21 @@ describe('date words', () => {
       expect(when(at(5, 23), NOW)).toBe('6 days ago');
       expect(when(at(4, 23), NOW)).toBe('4 November');
     });
+  });
+});
+
+describe('formatDateMeaning', () => {
+  it('names festivals, days, months and years in plain words', () => {
+    expect(fmt(tEn, { kind: 'festival', festival: 'diwali' })).toBe('Diwali, every year');
+    expect(fmt(tEn, { kind: 'festival', festival: 'holi', year: 2023 })).toBe('Holi 2023');
+    expect(fmt(tEn, { kind: 'festival', festival: 'rakhi', latest: true })).toBe('Last Raksha Bandhan');
+    expect(fmt(tEn, { kind: 'relative', relative: 'lastMonth' })).toBe('Last month');
+    expect(fmt(tEn, { kind: 'month', month: 3, year: 2024 })).toMatch(/March 2024/);
+    expect(fmt(tEn, { kind: 'year', year: 2023 })).toBe('2023');
+  });
+
+  it('speaks Hindi', () => {
+    expect(fmt(tHi, { kind: 'festival', festival: 'diwali' })).toBe('दिवाली, हर साल');
+    expect(fmt(tHi, { kind: 'relative', relative: 'yesterday' })).toBe('कल');
   });
 });

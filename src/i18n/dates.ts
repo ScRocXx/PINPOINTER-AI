@@ -1,5 +1,6 @@
 import { StringKey, StringParams } from './strings';
 import { startOfDay } from '../utils/PhotoDates';
+import type { DateMeaning } from '../utils/DateQuery';
 
 type T = (key: StringKey, params?: StringParams) => string;
 
@@ -51,4 +52,21 @@ export const formatWhen = (
   if (days === 1) return t('time.yesterday');
   if (days < 7) return t('time.daysAgo', { n: days });
   return formatDay(t, ts, now);
+};
+
+/** What a search's date words meant: "Diwali, every year", "Last month", "March 2024". */
+export const formatDateMeaning = (t: T, meaning: DateMeaning): string => {
+  switch (meaning.kind) {
+    case 'festival': {
+      const name = t(`festival.${meaning.festival}` as StringKey);
+      if (meaning.year !== undefined) return t('when.withYear', { name, year: String(meaning.year) });
+      return t(meaning.latest ? 'when.latest' : 'when.everyYear', { name });
+    }
+    case 'relative':
+      return t(`when.${meaning.relative}` as StringKey);
+    case 'month':
+      return formatMonth(t, new Date(meaning.year, meaning.month - 1, 1).getTime());
+    case 'year':
+      return String(meaning.year);
+  }
 };

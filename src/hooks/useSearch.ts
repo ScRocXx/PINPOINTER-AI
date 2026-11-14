@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { searchDocuments, searchDocumentsAsync, DocumentRecord } from '../database';
 import { encodeText, warmUpText } from '../services/EmbeddingService';
 import { rescueQuery } from '../services/SpellingService';
+import { parseDateQuery, pictureTextFor, type DateMeaning } from '../utils/DateQuery';
 import { AppLogger } from '../utils/AppLogger';
 import { noteInteraction } from '../services/InteractionGate';
 import { clipTextForQuery } from '../utils/ConceptTable';
@@ -45,6 +46,8 @@ export const useSearch = (isDbReady: boolean) => {
     const [searchResults, setSearchResults] = useState<DocumentRecord[]>([]);
     // What was typed, when the results shown are for a corrected query.
     const [correctedFrom, setCorrectedFrom] = useState<string | null>(null);
+    // What the date words meant ("Diwali, every year"), when the query has some.
+    const [dateMeaning, setDateMeaning] = useState<DateMeaning | null>(null);
     const [isSearching, setIsSearching] = useState(false);
     const [isSearchPending, setIsSearchPending] = useState(false);
     const [searchHistory, setSearchHistory] = useState<SearchHistoryItem[]>([]);
@@ -78,6 +81,7 @@ export const useSearch = (isDbReady: boolean) => {
         if (!isDbReady || !searchText.trim()) {
             setSearchResults([]);
             setCorrectedFrom(null);
+            setDateMeaning(null);
             setIsSearchPending(false);
             return;
         }
@@ -89,9 +93,11 @@ export const useSearch = (isDbReady: boolean) => {
                 let query = searchText;
                 let textResults = searchDocuments(searchText);
                 let typed: string | null = null;
+                const dates = parseDateQuery(searchText);
                 // Nothing found by words: correct the typed words against the
                 // person's own index ("bijki bil" → "बिजली bill") and search that.
-                if (textResults.length === 0) {
+                // Not for a date ("Diwali photos"): nothing from then is not a typo.
+                if (textResults.length === 0 && !dates) {
                     const rescue = await rescueQuery(searchText);
                     if (!isCurrent) return;
                     const rescued = rescue ? searchDocuments(rescue.query) : [];
@@ -106,12 +112,16 @@ export const useSearch = (isDbReady: boolean) => {
                 setSearchResults(textResults);
                 setDebouncedSearchText(query);
                 setCorrectedFrom(typed);
+                setDateMeaning(dates?.meaning ?? null);
                 setIsSearchPending(false);
 
                 // Hindi and other Indian-script words never reach the
                 // English-only CLIP tokenizer: known concepts become English,
-                // unknown ones are dropped (null = skip semantic search).
-                const clipText = clipTextForQuery(query, queryWords(query));
+                // unknown ones are dropped (null = skip semantic search). A
+                // date query shows CLIP its other words, or what the festival
+                // looks like ("diwali lamps and lights").
+                const lookFor = dates ? pictureTextFor(dates) : query;
+                const clipText = lookFor ? clipTextForQuery(lookFor, queryWords(lookFor)) : null;
                 const queryVector = clipText ? await encodeText(clipText) : null;
                 if (!isCurrent || !queryVector) return;
                 // The look-alike scan reads every photo's vector: off the JS
@@ -173,7 +183,7 @@ export const useSearch = (isDbReady: boolean) => {
 
     return {
         searchText, setSearchText, debouncedSearchText,
-        searchResults, correctedFrom,
+        searchResults, correctedFrom, dateMeaning,
         isSearching, setIsSearching, isSearchPending,
         searchHistory,
         handleSelectHistory, handleDeleteHistory, handleClearHistory,

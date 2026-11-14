@@ -603,3 +603,36 @@ describe('useSearch — spelling rescue', () => {
         expect(result.current.debouncedSearchText).toBe('tikcet');
     });
 });
+
+describe('useSearch — dates', () => {
+    test('a festival search says when, skips spelling rescue, and shows CLIP what the festival looks like', async () => {
+        mockSearchDocuments.mockReturnValue([]);
+        mockEncodeText.mockResolvedValue(VECTOR);
+        const { result } = await renderHook(() => useSearch(true));
+        await flush();
+        await typeAndWait(result, 'diwali photos', 200);
+        await flush();
+        expect(result.current.dateMeaning).toMatchObject({ kind: 'festival', festival: 'diwali' });
+        expect(mockRescue).not.toHaveBeenCalled();
+        expect(mockEncodeText).toHaveBeenCalledWith('diwali lamps and lights');
+    });
+
+    test('a date with nothing else to look for sends nothing to CLIP', async () => {
+        mockSearchDocuments.mockReturnValue([doc(1, 'Photo')]);
+        const { result } = await renderHook(() => useSearch(true));
+        await flush();
+        await typeAndWait(result, 'kal ki photo', 200);
+        await flush();
+        expect(result.current.dateMeaning).toEqual({ kind: 'relative', relative: 'yesterday' });
+        expect(mockEncodeText).not.toHaveBeenCalled();
+    });
+
+    test('no date words, no date meaning', async () => {
+        mockSearchDocuments.mockReturnValue([doc(1, 'Bill')]);
+        const { result } = await renderHook(() => useSearch(true));
+        await flush();
+        await typeAndWait(result, 'bill', 200);
+        await flush();
+        expect(result.current.dateMeaning).toBeNull();
+    });
+});

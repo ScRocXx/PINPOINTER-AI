@@ -246,6 +246,25 @@ const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    version: 3,
+    name: 'when each photo was taken',
+    up: () => {
+      const db = getDb();
+      try {
+        db.executeSync('ALTER TABLE document_index ADD COLUMN taken_at INTEGER;');
+      } catch {
+        // Already there.
+      }
+      db.executeSync('CREATE INDEX IF NOT EXISTS document_taken_at ON document_index(taken_at);');
+      // Rows indexed before: the file time sync recorded is the best guess
+      // (photos: seconds from MediaStore; PDFs: ms from the file system).
+      db.executeSync(`UPDATE document_index SET taken_at = (
+          SELECT CASE WHEN f.kind = 'IMAGE' THEN f.mtime * 1000 ELSE f.mtime END
+          FROM files f WHERE f.uri = document_index.filePath)
+        WHERE taken_at IS NULL;`);
+    },
+  },
 ];
 
 /** The schema version this build expects. */

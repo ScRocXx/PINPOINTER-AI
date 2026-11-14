@@ -13,7 +13,8 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppText, Chip, EmptyState, IconButton, Tag, useToast } from '../../components/ui';
 import { DocumentRecord } from '../../database';
-import { useStrings } from '../../i18n';
+import { formatDateMeaning, useStrings } from '../../i18n';
+import type { DateMeaning } from '../../utils/DateQuery';
 import { Colors, Duration, Ease, GUTTER, Space, Touch } from '../../theme';
 import { useReducedMotion } from '../../hooks/useReducedMotion';
 import { usePinnedItems } from '../../hooks/usePinnedItems';
@@ -41,6 +42,8 @@ export interface SearchOverlayProps {
   resultsQuery?: string;
   /** What was typed, when the results are for a corrected query ("Showing results for …"). */
   correctedFrom?: string | null;
+  /** What the query's date words meant, for the "When: …" line. */
+  dateMeaning?: DateMeaning | null;
   isSearchPending: boolean;
   history: ReadonlyArray<SearchHistoryItem>;
   onSelectHistory: (query: string) => void;
@@ -122,6 +125,7 @@ const SearchContent: React.FC<SearchOverlayProps> = ({
   results,
   resultsQuery,
   correctedFrom,
+  dateMeaning,
   isSearchPending,
   history,
   onSelectHistory,
@@ -302,6 +306,11 @@ const SearchContent: React.FC<SearchOverlayProps> = ({
               >
                 {isSearchPending ? t('search.searching') : n === 1 ? t('search.foundOne') : t('search.found', { n })}
               </AppText>
+              {dateMeaning ? (
+                <AppText variant="bodyStrong" testID="search-when">
+                  {t('search.when', { when: formatDateMeaning(t, dateMeaning) })}
+                </AppText>
+              ) : null}
               {correctedFrom && rowsQuery ? (
                 <View style={styles.corrected} testID="search-corrected">
                   <AppText variant="bodyStrong">{t('search.showingFor', { q: rowsQuery })}</AppText>

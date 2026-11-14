@@ -19,6 +19,7 @@ export {
   listIndexedFiles,
   listContentAfter,
   updateDocumentContent,
+  setTakenAt,
 } from './documents';
 export { indexEmbedding, hasEmbedding, getEmbeddingCount, getImagesMissingEmbeddings } from './vectors';
 export type { MissingEmbedding } from './vectors';

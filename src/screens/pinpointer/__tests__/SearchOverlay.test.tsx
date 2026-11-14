@@ -111,6 +111,11 @@ describe('SearchOverlay', () => {
     expect(screen.getByText('You typed “medicne”')).toBeTruthy();
   });
 
+  it('says when the results are from', async () => {
+    await setup({ searchText: 'diwali photos', dateMeaning: { kind: 'festival', festival: 'diwali' }, results: [photo()] });
+    expect(screen.getByTestId('search-when')).toHaveTextContent('When: Diwali, every year');
+  });
+
   it('shows no correction line for words found as typed', async () => {
     await setup({ searchText: 'bill', results: [photo()] });
     expect(screen.queryByTestId('search-corrected')).toBeNull();

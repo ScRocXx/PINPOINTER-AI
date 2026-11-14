@@ -405,6 +405,39 @@ describe('searchDocuments — words OCR misread', () => {
   });
 });
 
+describe('searchDocuments — dates ("Diwali photos", "pichhle mahine ka bill")', () => {
+  const at = (y: number, m: number, d: number) => new Date(y, m - 1, d, 19).getTime();
+  const photo = (content: string, filePath: string, takenAt: number | null) =>
+    indexDocument(null, content, filePath, 'IMAGE', 'TEXT', takenAt);
+
+  beforeEach(() => {
+    photo('lamps rangoli', '/photos/diwali23.jpg', at(2023, 11, 12));
+    photo('sweets box', '/photos/diwali22.jpg', at(2022, 10, 24));
+    photo('electricity bill amount', '/photos/bill-nov.jpg', at(2023, 11, 13));
+    photo('electricity bill amount', '/photos/bill-jun.jpg', at(2023, 6, 2));
+    photo('random', '/photos/no-date.jpg', null);
+  });
+
+  test('a festival alone lists everything from its days, every year, newest first', () => {
+    expect(paths(searchDocuments('diwali photos'))).toEqual(['/photos/bill-nov.jpg', '/photos/diwali23.jpg', '/photos/diwali22.jpg']);
+    expect(paths(searchDocuments('दिवाली 2022'))).toEqual(['/photos/diwali22.jpg']);
+  });
+
+  test('other words are looked for only in that time', () => {
+    expect(paths(searchDocuments('diwali bill'))).toEqual(['/photos/bill-nov.jpg']);
+    expect(paths(searchDocuments('bill'))).toEqual(expect.arrayContaining(['/photos/bill-nov.jpg', '/photos/bill-jun.jpg']));
+  });
+
+  test('rows without a date are left out of date searches', () => {
+    expect(paths(searchDocuments('june 2023'))).toEqual(['/photos/bill-jun.jpg']);
+    expect(paths(searchDocuments('2023'))).not.toContain('/photos/no-date.jpg');
+  });
+
+  test('the async search does the same', async () => {
+    expect(paths(await searchDocumentsAsync('diwali bill'))).toEqual(['/photos/bill-nov.jpg']);
+  });
+});
+
 describe('searchDocuments — filler words', () => {
   test('"photo of goa" searches for goa, not for "photo" and "of"', () => {
     expect(paths(searchDocuments('photo of goa'))).toEqual(['/photos/goa.jpg']);

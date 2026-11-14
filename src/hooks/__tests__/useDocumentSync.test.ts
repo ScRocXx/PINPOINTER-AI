@@ -28,6 +28,7 @@ jest.mock('../../database', () => ({
   noteFileSeen: jest.fn(),
   markOcrDone: jest.fn(),
   markStageFailed: jest.fn(),
+  setTakenAt: jest.fn(),
 }));
 jest.mock('../../utils/DocumentPipeline', () => ({
   processPDF: jest.fn(),
