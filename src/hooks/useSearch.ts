@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { searchDocuments, DocumentRecord } from '../database';
 import { encodeText, warmUpText } from '../services/EmbeddingService';
 import { AppLogger } from '../utils/AppLogger';
+import { noteInteraction } from '../services/InteractionGate';
 import { clipTextForQuery } from '../utils/ConceptTable';
 import { queryWords } from '../utils/SearchKeys';
 import {
@@ -46,6 +47,11 @@ export const useSearch = (isDbReady: boolean) => {
     const [isSearchPending, setIsSearchPending] = useState(false);
     const [searchHistory, setSearchHistory] = useState<SearchHistoryItem[]>([]);
     const lastResultRef = useRef<{ query: string; count: number } | null>(null);
+
+    // Typing holds indexing back for a moment, like a touch (InteractionGate).
+    useEffect(() => {
+        if (searchText) noteInteraction();
+    }, [searchText]);
 
     // Load history on mount
     useEffect(() => {

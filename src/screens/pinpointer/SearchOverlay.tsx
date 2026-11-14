@@ -18,6 +18,7 @@ import { Colors, Duration, Ease, GUTTER, Space, Touch } from '../../theme';
 import { useReducedMotion } from '../../hooks/useReducedMotion';
 import { usePinnedItems } from '../../hooks/usePinnedItems';
 import { alsoSearchedAs } from '../../utils/MatchTerms';
+import { noteInteraction } from '../../services/InteractionGate';
 import { SearchHistoryItem } from '../../utils/SearchHistory';
 import { ListeningPanel } from './ListeningPanel';
 import { NothingFound } from './NothingFound';
@@ -282,6 +283,7 @@ const SearchContent: React.FC<SearchOverlayProps> = ({
         ) : null}
         <FlatList
           data={shown as DocumentRecord[]}
+          onScroll={noteInteraction}
           renderItem={renderItem}
           keyExtractor={keyOf}
           style={styles.fill}

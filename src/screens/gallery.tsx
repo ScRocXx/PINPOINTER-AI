@@ -37,6 +37,7 @@ import { PinpointerState, usePinpointerShared } from '../hooks/PinpointerContext
 import { usePinnedItems } from '../hooks/usePinnedItems';
 import { useScreenFocus } from '../hooks/useScreenFocus';
 import { addRecentPhoto } from '../utils/RecentPhotos';
+import { noteInteraction } from '../services/InteractionGate';
 import { AppLogger } from '../utils/AppLogger';
 import {
   DateFilter,
@@ -572,6 +573,8 @@ export const GalleryScreen: React.FC = () => {
     <Screen testID="gallery-screen">
       <SectionList
         sections={sections}
+        // Scrolling holds indexing back for a moment (see InteractionGate).
+        onScroll={noteInteraction}
         keyExtractor={row => row.map(p => p.uri).join('|')}
         renderItem={renderRow}
         renderSectionHeader={({ section }) =>

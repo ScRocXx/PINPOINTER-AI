@@ -41,6 +41,7 @@ import {
 } from '../../database';
 import { MAX_ATTEMPTS } from '../../database/fileState';
 import { AppLogger } from '../AppLogger';
+import { QUIET_AFTER_MS, __resetInteractionGate, noteInteraction } from '../../services/InteractionGate';
 
 jest.mock('../VisionPipeline', () => ({
   analyzeImage: jest.fn(),
@@ -121,6 +122,7 @@ beforeEach(() => {
   asyncStoreReset.__reset();
   clearIndex();
   __resetEncoderProven();
+  __resetInteractionGate();
   analyzeImageMock.mockImplementation(async (uri: string) => visionResult(uri));
   // default: empty gallery
   getPhotosMock.mockResolvedValue({
@@ -330,6 +332,35 @@ describe('performQuickSync', () => {
 });
 
 // ─── performFullGallerySync ─────────────────────────────────────────────────
+
+describe('stepping aside while the phone is in use', () => {
+  test('the next photo waits while someone is scrolling, then indexing carries on', async () => {
+    mockGallery(3);
+    noteInteraction();
+    const p = performQuickSync(jest.fn(), undefined, { background: false });
+
+    await jest.advanceTimersByTimeAsync(QUIET_AFTER_MS / 2);
+    expect(analyzeImageMock).not.toHaveBeenCalled();
+
+    await jest.advanceTimersByTimeAsync(QUIET_AFTER_MS);
+    await expect(p).resolves.toMatchObject({ processed: 3, wasCancelled: false });
+    expect(analyzeImageMock).toHaveBeenCalledTimes(3);
+  });
+
+  test('pausing while it waits stops deep sync and keeps the cursor', async () => {
+    mockGallery(25);
+    const cancel = { current: false };
+    noteInteraction();
+    const p = performFullGallerySync(jest.fn(), cancel);
+    p.catch(() => {});
+    await jest.advanceTimersByTimeAsync(100);
+    cancel.current = true;
+    await jest.advanceTimersByTimeAsync(1000);
+
+    await expect(p).resolves.toEqual({ processed: 0, wasCancelled: true });
+    expect(analyzeImageMock).not.toHaveBeenCalled();
+  });
+});
 
 describe('performFullGallerySync', () => {
   test('indexes all photos across multiple 10-photo batches', async () => {

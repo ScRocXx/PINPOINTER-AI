@@ -7,6 +7,7 @@ import {
 import { encodeImage } from '../services/EmbeddingService';
 import { buildIndexableContent } from './TextEnrichment';
 import { analyzeImage } from './VisionPipeline';
+import { isQuiet, waitForQuiet } from '../services/InteractionGate';
 import { AppLogger } from './AppLogger';
 
 /** Max photos processed in the quick sync pass (fast cap for UI loading). */
@@ -193,6 +194,9 @@ export const performQuickSync = async (
             if (totalProcessed >= QUICK_SYNC_LIMIT || cancelRef?.current) {
                 break;
             }
+            // Someone is scrolling or typing: let them have the phone first.
+            if (!isQuiet()) await waitForQuiet(() => !!cancelRef?.current);
+            if (cancelRef?.current) break;
 
             await indexPhoto(edge.node.image.uri, mtimeOf(edge));
 
@@ -244,6 +248,8 @@ export const performQuickSyncBackground = async (
             if (bgProcessed >= SILENT_BACKGROUND_LIMIT || cancelRef?.current) {
                 break;
             }
+            if (!isQuiet()) await waitForQuiet(() => !!cancelRef?.current);
+            if (cancelRef?.current) break;
             await indexPhoto(edge.node.image.uri, mtimeOf(edge));
             bgProcessed++;
         }
@@ -289,6 +295,14 @@ export const performFullGallerySync = async (
                 if (cancelRef?.current) {
                     await saveCursor(after);
                     return { processed: totalProcessed, wasCancelled: true };
+                }
+
+                if (!isQuiet()) {
+                    await waitForQuiet(() => !!cancelRef?.current);
+                    if (cancelRef?.current) {
+                        await saveCursor(after);
+                        return { processed: totalProcessed, wasCancelled: true };
+                    }
                 }
 
                 const uri = edge.node.image.uri;
@@ -344,6 +358,8 @@ export const backfillEmbeddings = async (
             const batch = getImagesMissingEmbeddings(BACKFILL_BATCH_SIZE, beforeId);
             if (batch.length === 0) break;
             for (const row of batch) {
+                if (cancelRef?.current) break;
+                if (!isQuiet()) await waitForQuiet(() => !!cancelRef?.current);
                 if (cancelRef?.current) break;
                 beforeId = row.id;
                 const outcome = await embedPhoto(row.filePath, row.id);

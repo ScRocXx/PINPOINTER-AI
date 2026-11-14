@@ -12,6 +12,7 @@ import {
   SearchField,
 } from '../../components/ui';
 import { StringKey, useStrings } from '../../i18n';
+import { noteInteraction } from '../../services/InteractionGate';
 import { Colors, GUTTER, Radius, Space } from '../../theme';
 import type { CollectionId } from '../../utils/Collections';
 import type { PinnedItem } from '../../utils/PinnedItems';
@@ -266,6 +267,8 @@ export const HomeView: React.FC<HomeViewProps> = ({
         contentContainerStyle={styles.page}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
+        onScroll={noteInteraction}
+        scrollEventThrottle={100}
         testID="home-scroll"
       >
         <Reveal index={0} style={styles.header}>

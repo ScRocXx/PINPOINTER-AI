@@ -11,6 +11,7 @@ import { isFileIndexed, noteFileSeen, markOcrDone, markStageFailed } from '../da
 import { processPDF } from './DocumentPipeline';
 import { prepareImportedPdfs } from './PdfImport';
 import { AppLogger } from './AppLogger';
+import { isQuiet, waitForQuiet } from '../services/InteractionGate';
 
 const MAX_DEPTH = 4;
 
@@ -94,6 +95,9 @@ export const performDocumentSync = async (
 
     let processed = 0;
     for (const doc of docsToProcess) {
+        if (cancelRef?.current) return { status: 'done', processed, total, wasCancelled: true };
+        // A PDF takes seconds of OCR: start the next one when nobody is using the phone.
+        if (!isQuiet()) await waitForQuiet(() => !!cancelRef?.current);
         if (cancelRef?.current) return { status: 'done', processed, total, wasCancelled: true };
         const fileUri = fileUriOf(doc);
         // No transaction here: the pipeline awaits OCR for seconds, and its

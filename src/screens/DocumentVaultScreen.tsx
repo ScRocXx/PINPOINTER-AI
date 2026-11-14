@@ -27,6 +27,7 @@ import { formatWhen, useStrings } from '../i18n';
 import { RootStackParamList } from '../navigation/types';
 import { getAllDocuments, searchDocuments } from '../database';
 import { PinpointerState, usePinpointerShared } from '../hooks/PinpointerContext';
+import { noteInteraction } from '../services/InteractionGate';
 import { usePinnedItems } from '../hooks/usePinnedItems';
 import { describePlaces, usePdfPlaces } from '../hooks/usePdfPlaces';
 import { useScreenFocus } from '../hooks/useScreenFocus';
@@ -216,7 +217,13 @@ export const DocumentVaultScreen: React.FC = () => {
 
   return (
     <Screen testID="papers-screen">
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" testID="papers-scroll">
+      <ScrollView
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled"
+        onScroll={noteInteraction}
+        scrollEventThrottle={100}
+        testID="papers-scroll"
+      >
         <ScreenHeader
           title={t('papers.title')}
           subtitle={total > 0 ? t('papers.count', { n: total }) : undefined}
