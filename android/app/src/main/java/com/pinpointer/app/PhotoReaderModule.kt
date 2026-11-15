@@ -23,8 +23,10 @@ import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.TextRecognizer
 import com.google.mlkit.vision.text.devanagari.DevanagariTextRecognizerOptions
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import java.io.File
 import java.io.FileInputStream
 import java.io.InputStream
+import java.security.MessageDigest
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import kotlin.math.max
@@ -63,6 +65,8 @@ class PhotoReaderModule(reactContext: ReactApplicationContext) : ReactContextBas
         private const val MAX_LINES = 300
         private const val MAX_LABELS = 7
         private const val LABEL_CONFIDENCE = 0.5f
+        /** Bytes read for a fingerprint: the header and the start of the image data. */
+        private const val FINGERPRINT_BYTES = 64 * 1024
     }
 
     private fun backgroundThread(name: String): ExecutorService = Executors.newSingleThreadExecutor { r ->
@@ -227,6 +231,64 @@ class PhotoReaderModule(reactContext: ReactApplicationContext) : ReactContextBas
                 promise.reject("READ_ERROR", "Reading the photo failed: ${e.message}", e)
             } finally {
                 bitmap?.recycle()
+            }
+        }
+    }
+
+    /**
+     * The file's size in bytes from the file system, or -1 when it can't be
+     * known. Not counted by skipping: FileInputStream.skip() moves past the
+     * end of a file without complaint, so a skip loop never ends.
+     */
+    private fun sizeOf(uri: String): Long =
+        if (uri.startsWith("content://")) {
+            val pfd = reactApplicationContext.contentResolver.openFileDescriptor(Uri.parse(uri), "r")
+            try {
+                pfd?.statSize ?: -1L
+            } finally {
+                pfd?.close()
+            }
+        } else {
+            File(uri.removePrefix("file://")).let { if (it.isFile) it.length() else -1L }
+        }
+
+    /**
+     * A fingerprint of the file's bytes: SHA-1 of its first 64 KB, plus its
+     * size. WhatsApp keeps byte-identical copies of a forwarded photo in
+     * several folders; equal fingerprints mean one can take the other's text
+     * and vector instead of being read again. Reads 64 KB, decodes nothing.
+     */
+    @ReactMethod
+    fun fingerprint(uri: String, promise: Promise) {
+        worker.execute {
+            try {
+                val size = sizeOf(uri)
+                if (size <= 0L) {
+                    promise.reject("IMAGE_ERROR", "Could not tell the file's size")
+                    return@execute
+                }
+                val digest = MessageDigest.getInstance("SHA-1")
+                val read = open(uri)?.use { input ->
+                    val buffer = ByteArray(8192)
+                    var left = FINGERPRINT_BYTES
+                    var total = 0
+                    while (left > 0) {
+                        val n = input.read(buffer, 0, minOf(buffer.size, left))
+                        if (n <= 0) break
+                        digest.update(buffer, 0, n)
+                        left -= n
+                        total += n
+                    }
+                    total
+                } ?: 0
+                if (read <= 0) {
+                    promise.reject("IMAGE_ERROR", "Could not read the file")
+                    return@execute
+                }
+                val hex = digest.digest().joinToString("") { "%02x".format(it) }
+                promise.resolve("$hex:$size")
+            } catch (e: Throwable) {
+                promise.reject("FINGERPRINT_ERROR", "Fingerprint failed: ${e.message}", e)
             }
         }
     }

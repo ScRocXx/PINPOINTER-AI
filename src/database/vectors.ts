@@ -177,6 +177,23 @@ export const indexEmbedding = (documentId: number, embedding: Float32Array): boo
   }
 };
 
+/** A document's stored vector, or null (to give a byte-identical copy the same one). */
+export const getEmbedding = (documentId: number): Float32Array | null => {
+  if (!isVecAvailable()) return null;
+  try {
+    const row = getDb().executeSync('SELECT embedding FROM vec_index WHERE document_id = ? LIMIT 1', [documentId])
+      ?.rows?.[0] as { embedding?: ArrayBuffer | ArrayBufferView } | undefined;
+    const blob = row?.embedding;
+    if (!blob) return null;
+    const bytes = blob instanceof ArrayBuffer ? new Uint8Array(blob) : new Uint8Array(blob.buffer, blob.byteOffset, blob.byteLength);
+    if (bytes.byteLength % 4 !== 0 || bytes.byteLength === 0) return null;
+    return new Float32Array(bytes.slice().buffer);
+  } catch (e) {
+    AppLogger.warn('DB', 'getEmbedding failed:', e);
+    return null;
+  }
+};
+
 /** Check if a document has an embedding stored */
 export const hasEmbedding = (documentId: number): boolean => {
   if (!isVecAvailable()) return false;

@@ -7,7 +7,7 @@ import { indexDocument } from '../documents';
 import { searchDocuments } from '../search';
 import { getCollectionPreview, getSimilarPhotos, getSimilarPhotosAsync } from '../collections';
 import { indexEmbedding } from '../vectors';
-import { countCheckedFiles, markOcrDone, markStageFailed, noteFileSeen } from '../fileState';
+import { countCheckedFiles, markOcrDone, markStageFailed, noteFileSeen, setFingerprint } from '../fileState';
 import { getCollection } from '../../utils/Collections';
 import { __resetAll } from '@op-engineering/op-sqlite';
 
@@ -70,6 +70,26 @@ describe('getCollectionPreview', () => {
     const copy = db.documents.find(d => d.filePath === '/photos/bses.jpg');
     db.documents.push({ ...copy, id: 999 });
     expect(getCollectionPreview(getCollection('bill')).count).toBe(1);
+  });
+
+  test('counts a WhatsApp copy (same bytes, another folder) once, and shows it once', () => {
+    indexDocument(null, 'INCOME TAX DEPARTMENT Permanent Account Number Card', '/whatsapp/pan.jpg', 'IMAGE', 'TEXT');
+    expect(getCollectionPreview(getCollection('id')).count).toBe(4); // not yet known to be copies
+    setFingerprint('/photos/pan.jpg', 'pan:2048');
+    setFingerprint('/whatsapp/pan.jpg', 'pan:2048');
+    const preview = getCollectionPreview(getCollection('id'));
+    expect(preview.count).toBe(3);
+    expect(preview.photos).toHaveLength(2);
+    expect(preview.photos).toContain('/photos/aadhaar.jpg');
+  });
+
+  test('copies count once on the LIKE path too', () => {
+    jest.spyOn(connection, 'isFtsAvailable').mockReturnValue(false);
+    indexDocument(null, 'Permanent Account Number Card copy', '/whatsapp/pan.jpg', 'IMAGE', 'TEXT');
+    expect(getCollectionPreview(getCollection('id')).count).toBe(4);
+    setFingerprint('/photos/pan.jpg', 'pan:2048');
+    setFingerprint('/whatsapp/pan.jpg', 'pan:2048');
+    expect(getCollectionPreview(getCollection('id')).count).toBe(3);
   });
 
   test('a database error gives an empty preview', () => {

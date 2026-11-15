@@ -7,6 +7,8 @@ import { soundex } from '../utils/Soundex';
 import { searchWords, termsForQueryWord } from '../utils/SearchKeys';
 import { tolerantTermsForQueryWord } from '../utils/OcrTolerance';
 import { parseDateQuery, type DateQuery, type DateWindow } from '../utils/DateQuery';
+import { collapseCopies } from '../utils/Duplicates';
+import { fingerprintsFor } from './fileState';
 import { collectionForQuery } from '../utils/Collections';
 import { AppLogger } from '../utils/AppLogger';
 import { getDb, getReadDb, isFtsAvailable } from './connection';
@@ -199,6 +201,10 @@ const dateTextHits = (dq: DateQuery): DocumentRecord[] =>
     ? searchByWords(dq.rest, DATE_SEARCH_LIMIT).filter(d => inWindows(d, dq.windows)).slice(0, RESULT_LIMIT)
     : listByDate(dq.windows);
 
+/** Results with byte-identical copies (WhatsApp keeps several) shown once. */
+const withoutCopies = (docs: DocumentRecord[]): DocumentRecord[] =>
+  collapseCopies(docs, fingerprintsFor(docs.map(d => d.filePath)));
+
 /**
  * Search documents by their words and, when `queryVector` is given, by what
  * the photos look like.
@@ -210,8 +216,12 @@ const dateTextHits = (dq: DateQuery): DocumentRecord[] =>
  *     (Aadhaar, PAN, voter ID...) instead of the words.
  *  2. Look: photos that stand out as close to the query vector.
  *  3. The two lists merged by rank (see mergeByRank).
+ *  4. Byte-identical copies shown once.
  */
-export const searchDocuments = (query: string, queryVector?: Float32Array): DocumentRecord[] => {
+export const searchDocuments = (query: string, queryVector?: Float32Array): DocumentRecord[] =>
+  withoutCopies(searchDocumentsWithCopies(query, queryVector));
+
+const searchDocumentsWithCopies = (query: string, queryVector?: Float32Array): DocumentRecord[] => {
   const dq = parseDateQuery(query);
   const textHits = dq ? dateTextHits(dq) : searchByWords(query);
   if (!queryVector || !query.trim()) return textHits;
@@ -234,7 +244,10 @@ export const searchDocuments = (query: string, queryVector?: Float32Array): Docu
  * every photo's vector, runs on the read connection off the JS thread.
  * Same results as searchDocuments.
  */
-export const searchDocumentsAsync = async (query: string, queryVector?: Float32Array): Promise<DocumentRecord[]> => {
+export const searchDocumentsAsync = async (query: string, queryVector?: Float32Array): Promise<DocumentRecord[]> =>
+  withoutCopies(await searchDocumentsAsyncWithCopies(query, queryVector));
+
+const searchDocumentsAsyncWithCopies = async (query: string, queryVector?: Float32Array): Promise<DocumentRecord[]> => {
   const dq = parseDateQuery(query);
   const textHits = dq ? dateTextHits(dq) : searchByWords(query);
   if (!queryVector || !query.trim()) return textHits;

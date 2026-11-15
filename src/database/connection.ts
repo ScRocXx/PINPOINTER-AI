@@ -265,6 +265,19 @@ const MIGRATIONS: Migration[] = [
         WHERE taken_at IS NULL;`);
     },
   },
+  {
+    version: 4,
+    name: 'file fingerprints for duplicates',
+    up: () => {
+      const db = getDb();
+      try {
+        db.executeSync('ALTER TABLE files ADD COLUMN fingerprint TEXT;');
+      } catch {
+        // Already there.
+      }
+      db.executeSync('CREATE INDEX IF NOT EXISTS files_fingerprint ON files(fingerprint);');
+    },
+  },
 ];
 
 /** The schema version this build expects. */

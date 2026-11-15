@@ -3,7 +3,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
     indexDocument, beginTransaction, commitTransaction, rollbackTransaction, indexEmbedding,
     getImagesMissingEmbeddings, getDocumentId, noteFileSeen, markOcrDone, markEmbedDone, markStageFailed,
+    setFingerprint, findTwin, getDocumentByPath, getEmbedding, getFileState,
 } from '../database';
+import { CURRENT_EMBED_MODEL } from '../database/fileState';
+import { fingerprintOf } from './Duplicates';
 import { encodeImage } from '../services/EmbeddingService';
 import { buildIndexableContent } from './TextEnrichment';
 import { analyzeImage } from './VisionPipeline';
@@ -107,6 +110,9 @@ export const indexPhoto = async (uri: string, mtime?: number, takenAt?: number):
         return work.embed ? embedPhoto(uri) : 'skipped';
     }
 
+    // A byte-identical copy of a photo already read: take its words and vector.
+    if (await copyFromTwin(uri, takenAt)) return 'indexed';
+
     let content: string;
     let detection: 'TEXT' | 'OBJECT';
     let embedding: Float32Array | null | undefined;
@@ -136,6 +142,39 @@ export const indexPhoto = async (uri: string, mtime?: number, takenAt?: number):
         markStageFailed(uri, 'ocr', e);
         AppLogger.warn('GallerySync', `Failed to save ${uri}`, e);
         return 'failed';
+    }
+};
+
+/**
+ * When `uri` has the same bytes as a photo already read (WhatsApp keeps copies
+ * in several folders), gives it that photo's words and vector and returns
+ * true; otherwise records its fingerprint and returns false.
+ */
+const copyFromTwin = async (uri: string, takenAt?: number): Promise<boolean> => {
+    const fingerprint = await fingerprintOf(uri);
+    if (!fingerprint) return false;
+    setFingerprint(uri, fingerprint);
+    const twinUri = findTwin(fingerprint, uri);
+    const twin = twinUri ? getDocumentByPath(twinUri) : null;
+    if (!twinUri || !twin) return false;
+    // The vector too, when it is from the current model (an older one is re-encoded by the backfill).
+    const twinState = getFileState(twinUri);
+    const twinId = getDocumentId(twinUri);
+    const vectorIsCurrent = twinState?.embed_status === 'done' && twinState.embed_model === CURRENT_EMBED_MODEL;
+    const vector = twinId != null && vectorIsCurrent ? getEmbedding(twinId) : null;
+    beginTransaction();
+    try {
+        const docId = indexDocument(twin.title ?? null, twin.content || 'image', uri, 'IMAGE', twin.detection_type, takenAt ?? null);
+        if (docId == null) throw new Error('indexDocument did not write a row');
+        markOcrDone(uri);
+        if (vector && indexEmbedding(docId, vector)) markEmbedDone(uri);
+        commitTransaction();
+        AppLogger.info('GallerySync', `Copy of an indexed photo, read once: ${uri}`);
+        return true;
+    } catch (e) {
+        rollbackTransaction();
+        AppLogger.warn('GallerySync', `Could not copy from ${twinUri}`, e);
+        return false;
     }
 };
 

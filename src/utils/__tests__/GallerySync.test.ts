@@ -11,6 +11,7 @@
  */
 import { CameraRoll } from '@react-native-camera-roll/camera-roll';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { NativeModules } from 'react-native';
 
 import {
   performQuickSync,
@@ -40,6 +41,8 @@ import {
   markEmbedDone,
 } from '../../database';
 import { MAX_ATTEMPTS } from '../../database/fileState';
+import { getDocumentByPath, getDocumentId } from '../../database/documents';
+import { getEmbedding } from '../../database/vectors';
 import { AppLogger } from '../AppLogger';
 import { QUIET_AFTER_MS, __resetInteractionGate, noteInteraction } from '../../services/InteractionGate';
 
@@ -342,6 +345,52 @@ describe('when each photo was taken', () => {
     const indexSpy = jest.spyOn(DatabaseDocuments, 'indexDocument');
     await performQuickSync(jest.fn(), undefined, { background: false });
     expect(indexSpy.mock.calls[0][5]).toBe(1699780000000);
+  });
+});
+
+describe('byte-identical copies (WhatsApp keeps several)', () => {
+  afterEach(() => {
+    delete NativeModules.PhotoReader;
+  });
+
+  test('a copy takes its twin\'s words and vector instead of being read again', async () => {
+    NativeModules.PhotoReader = { fingerprint: jest.fn(async () => 'abc:1234') };
+    const vector = new Float32Array(512).fill(0.5);
+    analyzeImageMock.mockImplementation(async (uri: string) => visionResult(uri, { embedding: vector }));
+    mockGallery(2);
+
+    await performQuickSync(jest.fn(), undefined, { background: false });
+
+    expect(analyzeImageMock).toHaveBeenCalledTimes(1);
+    expect(isFileIndexed(uriFor(0))).toBe(true);
+    expect(isFileIndexed(uriFor(1))).toBe(true);
+    const [first, copy] = [0, 1].map(i => getDocumentByPath(uriFor(i)));
+    expect(copy?.content).toBe(first?.content);
+    expect(getEmbedding(getDocumentId(uriFor(1))!)).toEqual(vector);
+    expect(getFileState(uriFor(1))).toMatchObject({ ocr_status: 'done', embed_status: 'done', fingerprint: 'abc:1234' });
+  });
+
+  test('a vector from an older model is not copied: the backfill encodes the copy', async () => {
+    NativeModules.PhotoReader = { fingerprint: jest.fn(async () => 'abc:1234') };
+    analyzeImageMock.mockImplementation(async (uri: string) => visionResult(uri, { embedding: new Float32Array(512).fill(0.5) }));
+    mockGallery(1);
+    await performQuickSync(jest.fn(), undefined, { background: false });
+    markEmbedDone(uriFor(0), 'old-model');
+
+    mockGallery(2);
+    await performQuickSync(jest.fn(), undefined, { background: false });
+
+    expect(analyzeImageMock).toHaveBeenCalledTimes(1);
+    expect(getFileState(uriFor(1))).toMatchObject({ ocr_status: 'done', embed_status: 'pending' });
+    expect(getEmbedding(getDocumentId(uriFor(1))!)).toBeNull();
+  });
+
+  test('different files are each read', async () => {
+    let n = 0;
+    NativeModules.PhotoReader = { fingerprint: jest.fn(async () => `fp${n++}:1`) };
+    mockGallery(2);
+    await performQuickSync(jest.fn(), undefined, { background: false });
+    expect(analyzeImageMock).toHaveBeenCalledTimes(2);
   });
 });
 

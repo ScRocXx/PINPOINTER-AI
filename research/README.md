@@ -28,7 +28,7 @@ This file is updated as each part lands. Status: **planned**, **in progress**,
 | 4 | Answer cards | A bill result shows "Amount ₹1,240 · Pay by 5 April" without opening it | **done** |
 | 5 | Words-first photo reader (native) | Indexing reads each photo once; screenshots' small text stays readable | **done** (needs a phone build) |
 | 6 | Hindi voice tuned to your words (native) | Speak in Hindi; names and medicine words in your papers are understood | planned |
-| 7 | Series and duplicates | WhatsApp copies read once; "latest electricity bill" | planned |
+| 7 | Series and duplicates | WhatsApp copies read once and shown once; "latest electricity bill" | 7a copies **done** (needs a phone build); 7b series planned |
 
 ## 1. Misread-proof search (done)
 
@@ -271,10 +271,51 @@ Hindi model (indic-lekhan, 28 MB) with the person's own words as sherpa-onnx
 hotwords changes who voice search serves, and the APK. Keeping both, or
 choosing by app language, is a product choice; see [`notes.md`](notes.md).
 
-## 7. Series and duplicates (planned)
+## 7. Series and duplicates
 
-WhatsApp copies (same file in several folders) read once; monthly bills
-grouped ("latest electricity bill").
+### 7a. WhatsApp copies: read once, shown once (done; needs a phone build)
+
+**What people notice.** A forwarded photo that sits in WhatsApp's received
+and sent folders and in Downloads used to be read, encoded and listed three
+times: three identical rows in a search, three of the same thumbnail on a
+Home tile, and a count that didn't match. Now each copy after the first is
+indexed in milliseconds, and results, tiles and counts show it once.
+
+**How.**
+
+- `PhotoReader.fingerprint(uri)`: SHA-1 of the file's first 64 KB plus its
+  size from the file system. It reads 64 KB and decodes nothing. Copies
+  WhatsApp makes are byte-identical, so they get the same fingerprint.
+  (Two different photos would need the same size *and* the same first 64 KB:
+  the header, the time it was taken and the start of the picture.)
+- Migration 4 adds `files.fingerprint` (indexed). `GallerySync.indexPhoto`
+  fingerprints each new photo first; when another file with the same
+  fingerprint is already read (`findTwin`), the new one gets a copy of its
+  stored words (already masked) and its vector in one transaction, and both
+  stages are marked done. OCR and CLIP don't run.
+- Search keeps each fingerprint once, where it ranks first
+  (`utils/Duplicates.collapseCopies`, one small lookup per search). Home's
+  "Find quickly" counts and thumbnails do the same in their own query (a
+  `LEFT JOIN files`), so a tile's count still matches its search.
+- Only true copies are merged. Two papers that merely say the same thing,
+  like this month's bill and last month's, both stay.
+- Without the native module (older builds, tests) nothing changes: no
+  fingerprint, every photo read as before.
+
+A bug caught before it shipped: the first version counted the file's size
+by skipping to the end. `FileInputStream.skip()` on Android happily moves past
+the end of a file, so that loop would never have ended and indexing would
+have stalled on the first photo. The size now comes from the file system.
+
+**Checked:** Jest (copy takes its twin's words and vector without OCR;
+different files are each read; fingerprints survive later state changes;
+search, tiles and counts show copies once; two look-alike bills both stay),
+tsc, lint, and the Kotlin compiles. Not yet: a phone run.
+
+### 7b. Series: "latest electricity bill" (planned)
+
+Monthly bills from the same company, grouped, so "latest electricity bill"
+or "last month's gas bill" answers with the newest one first.
 
 ## What stays the same
 

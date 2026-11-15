@@ -9,7 +9,7 @@
  * Raw stored bytes are read back through the mock's vec_index rows.
  */
 import {
-  findLookAlikes, findLookAlikesAsync, farDistanceOf, sampleStride, FAR_SAMPLE_SIZE, getEmbeddingCount, getImagesMissingEmbeddings, hasEmbedding, indexEmbedding,
+  getEmbedding, findLookAlikes, findLookAlikesAsync, farDistanceOf, sampleStride, FAR_SAMPLE_SIZE, getEmbeddingCount, getImagesMissingEmbeddings, hasEmbedding, indexEmbedding,
   standOutLimit, FAR_PERCENTILE, MAX_VECTOR_DISTANCE, MIN_PHOTOS_FOR_STAND_OUT, STAND_OUT_GAP,
 } from '../vectors';
 import { indexDocument } from '../documents';
@@ -418,5 +418,14 @@ describe('look-alikes off the JS thread, with a sampled yardstick', () => {
     const readDb = connectionModule.getReadDb();
     jest.spyOn(readDb, 'execute').mockImplementation((() => Promise.reject(new Error('disk I/O error'))) as never);
     await expect(findLookAlikesAsync(query)).resolves.toEqual([]);
+  });
+});
+
+describe('getEmbedding', () => {
+  test('reads a stored vector back exactly, and null when there is none', () => {
+    const v = makeEmbedding(3);
+    indexEmbedding(77, v);
+    expect(getEmbedding(77)).toEqual(v);
+    expect(getEmbedding(78)).toBeNull();
   });
 });

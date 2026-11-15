@@ -16,7 +16,7 @@ import { findLookAlikes, findLookAlikesAsync } from './vectors';
 export const COLLECTION_COUNT_CAP = 999;
 
 export interface CollectionPreview {
-  /** Distinct files (photos and papers) in the collection, up to the cap. */
+  /** Distinct files (photos and papers) in the collection, copies once, up to the cap. */
   count: number;
   /** True when there may be more than `count`. */
   capped: boolean;
@@ -30,6 +30,8 @@ interface PreviewRow {
   filePath: string;
   type: string;
   timestamp: number | null;
+  /** files.fingerprint: the same value for byte-identical copies. */
+  fingerprint?: string | null;
 }
 
 /**
@@ -47,28 +49,33 @@ export const getCollectionPreview = (collection: Collection, photoLimit = 3): Co
     const db = getDb();
     const result = isFtsAvailable()
       ? db.executeSync(
-          `SELECT d.filePath, d.type, d.timestamp
+          `SELECT d.filePath, d.type, d.timestamp, fs.fingerprint
            FROM fts_index f
            JOIN document_index d ON d.id = f.rowid
+           LEFT JOIN files fs ON fs.uri = d.filePath
            WHERE f.fts_index MATCH ?
            ORDER BY f.rowid DESC
            LIMIT ${limit}`,
           [terms.fts],
         )
       : db.executeSync(
-          `SELECT filePath, type, timestamp FROM document_index
-           WHERE ${terms.like.map(() => 'content LIKE ? COLLATE NOCASE').join(' OR ')}
-           ORDER BY id DESC
+          `SELECT d.filePath, d.type, d.timestamp, fs.fingerprint
+           FROM document_index d
+           LEFT JOIN files fs ON fs.uri = d.filePath
+           WHERE ${terms.like.map(() => 'd.content LIKE ? COLLATE NOCASE').join(' OR ')}
+           ORDER BY d.id DESC
            LIMIT ${limit}`,
           terms.like,
         );
     const rows = (result?.rows ?? []) as unknown as PreviewRow[];
 
+    // A byte-identical copy (WhatsApp keeps several) counts once, as search shows it.
     const seen = new Set<string>();
     const photos: PreviewRow[] = [];
     for (const row of rows) {
-      if (!row?.filePath || seen.has(row.filePath)) continue;
-      seen.add(row.filePath);
+      const key = row?.fingerprint || row?.filePath;
+      if (!row?.filePath || !key || seen.has(key)) continue;
+      seen.add(key);
       if (row.type === 'IMAGE') photos.push(row);
     }
     photos.sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0));

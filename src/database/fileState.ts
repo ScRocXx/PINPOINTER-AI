@@ -36,6 +36,8 @@ export interface FileState {
   embed_model: string | null;
   attempts: number;
   last_error: string | null;
+  /** SHA-1 of the first 64 KB + length (PhotoReader.fingerprint): byte-identical copies share it. */
+  fingerprint?: string | null;
 }
 
 /** Which stages a file still needs. */
@@ -54,10 +56,11 @@ export interface IndexingStats {
   embedFailed: number;
 }
 
-const COLUMNS = 'uri, kind, mtime, ocr_status, embed_status, embed_model, attempts, last_error, updated_at';
+// Every write lists every column: INSERT OR REPLACE would clear one left out.
+const COLUMNS = 'uri, kind, mtime, ocr_status, embed_status, embed_model, attempts, last_error, updated_at, fingerprint';
 const SELECT_ONE = `SELECT ${COLUMNS} FROM files WHERE uri = ?`;
-const UPSERT = `INSERT OR REPLACE INTO files (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
-const INSERT_IF_MISSING = `INSERT OR IGNORE INTO files (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+const UPSERT = `INSERT OR REPLACE INTO files (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+const INSERT_IF_MISSING = `INSERT OR IGNORE INTO files (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
 const MAX_ERROR_LENGTH = 200;
 
@@ -77,6 +80,7 @@ const write = (state: FileState, sql = UPSERT) => {
     state.attempts,
     state.last_error,
     Date.now(),
+    state.fingerprint ?? null,
   ]);
 };
 
@@ -180,6 +184,40 @@ const update = (uri: string, change: (s: FileState) => FileState, kind: FileKind
   } catch (e) {
     AppLogger.warn('DB', 'File state update failed:', e);
   }
+};
+
+/** Records a file's fingerprint (PhotoReader.fingerprint). */
+export const setFingerprint = (uri: string, fingerprint: string, kind: FileKind = 'IMAGE') =>
+  update(uri, (s) => ({ ...s, fingerprint }), kind);
+
+/** Another file with these exact bytes whose words are already read, or null. */
+export const findTwin = (fingerprint: string, exceptUri: string): string | null => {
+  try {
+    const row = getDb().executeSync(
+      "SELECT uri FROM files WHERE fingerprint = ? AND uri != ? AND ocr_status = 'done' LIMIT 1",
+      [fingerprint, exceptUri],
+    )?.rows?.[0] as { uri?: string } | undefined;
+    return typeof row?.uri === 'string' ? row.uri : null;
+  } catch (e) {
+    AppLogger.warn('DB', 'findTwin failed:', e);
+    return null;
+  }
+};
+
+/** The fingerprints known for these files (files without one are left out). */
+export const fingerprintsFor = (uris: ReadonlyArray<string>): Map<string, string> => {
+  const out = new Map<string, string>();
+  if (uris.length === 0) return out;
+  try {
+    const rows = (getDb().executeSync(
+      `SELECT uri, fingerprint FROM files WHERE fingerprint IS NOT NULL AND uri IN (${uris.map(() => '?').join(', ')})`,
+      [...uris],
+    )?.rows ?? []) as Array<{ uri?: string; fingerprint?: string }>;
+    for (const r of rows) if (r.uri && r.fingerprint) out.set(r.uri, r.fingerprint);
+  } catch (e) {
+    AppLogger.warn('DB', 'fingerprintsFor failed:', e);
+  }
+  return out;
 };
 
 /** OCR finished and the document_index row is written. */

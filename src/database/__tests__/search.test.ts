@@ -16,6 +16,7 @@
  */
 import * as connection from '../connection';
 import { indexDocument } from '../documents';
+import { setFingerprint } from '../fileState';
 import { getEmbeddingCount, indexEmbedding, MIN_PHOTOS_FOR_STAND_OUT } from '../vectors';
 import { soundex } from '../../utils/Soundex';
 import { extractSnippet, mergeByRank, searchDocuments, searchDocumentsAsync, MAX_VECTOR_DISTANCE, RANK_K, TEXT_WEIGHT } from '../search';
@@ -435,6 +436,18 @@ describe('searchDocuments — dates ("Diwali photos", "pichhle mahine ka bill")'
 
   test('the async search does the same', async () => {
     expect(paths(await searchDocumentsAsync('diwali bill'))).toEqual(['/photos/bill-nov.jpg']);
+  });
+});
+
+describe('searchDocuments — byte-identical copies', () => {
+  test('shows a photo once however many copies the phone keeps, and keeps look-alike bills', () => {
+    indexDocument(null, 'gas cylinder booking receipt', '/whatsapp/a.jpg', 'IMAGE', 'TEXT');
+    indexDocument(null, 'gas cylinder booking receipt', '/sent/a.jpg', 'IMAGE', 'TEXT');
+    indexDocument(null, 'gas cylinder booking receipt', '/camera/other.jpg', 'IMAGE', 'TEXT');
+    setFingerprint('/whatsapp/a.jpg', 'same:100');
+    setFingerprint('/sent/a.jpg', 'same:100');
+    setFingerprint('/camera/other.jpg', 'other:100');
+    expect(paths(searchDocuments('cylinder'))).toEqual(['/whatsapp/a.jpg', '/camera/other.jpg']);
   });
 });
 

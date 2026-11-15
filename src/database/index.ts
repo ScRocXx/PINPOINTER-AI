@@ -21,7 +21,7 @@ export {
   updateDocumentContent,
   setTakenAt,
 } from './documents';
-export { indexEmbedding, hasEmbedding, getEmbeddingCount, getImagesMissingEmbeddings } from './vectors';
+export { indexEmbedding, hasEmbedding, getEmbedding, getEmbeddingCount, getImagesMissingEmbeddings } from './vectors';
 export type { MissingEmbedding } from './vectors';
 export {
   noteFileSeen,
@@ -33,6 +33,9 @@ export {
   getIndexingStats,
   getReadyCounts,
   countCheckedFiles,
+  setFingerprint,
+  findTwin,
+  fingerprintsFor,
 } from './fileState';
 export type { FileKind, FileState, IndexingStats, PendingWork, ReadyCounts, Stage, StageStatus } from './fileState';
 export { beginTransaction, commitTransaction, rollbackTransaction } from './transactions';

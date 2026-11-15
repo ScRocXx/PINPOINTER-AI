@@ -233,6 +233,25 @@ class MockDB {
     }
 
     // Paged walk over the index (pruning deleted files)
+    // Duplicates: a file with the same bytes whose words are read
+    if (/^SELECT uri FROM files WHERE fingerprint = \? AND uri != \? AND ocr_status = 'done' LIMIT 1/i.test(q)) {
+      const [fp, except] = params;
+      const hit = [...this.files.values()].find((f) => f.fingerprint === fp && f.uri !== except && f.ocr_status === 'done');
+      return { rows: hit ? [{ uri: hit.uri }] : [] };
+    }
+    if (/^SELECT uri, fingerprint FROM files WHERE fingerprint IS NOT NULL AND uri IN \(/i.test(q)) {
+      const wanted = new Set(params);
+      const rows = [...this.files.values()]
+        .filter((f) => f.fingerprint && wanted.has(f.uri))
+        .map((f) => ({ uri: f.uri, fingerprint: f.fingerprint }));
+      return { rows };
+    }
+    if (/^SELECT embedding FROM vec_index WHERE document_id = \? LIMIT 1/i.test(q)) {
+      const [id] = params;
+      const hit = this.vectors.find((v) => v.document_id === id);
+      return { rows: hit ? [{ embedding: hit.embedding }] : [] };
+    }
+
     // Photos and papers from some time windows, newest first
     if (/FROM document_index\s+WHERE \(taken_at >= \? AND taken_at < \?\)/i.test(q)) {
       const limit = params[params.length - 1];
@@ -472,7 +491,13 @@ class MockDB {
     const { groups, isOr } = this._matchTerms(matchParam);
     let rows = this.documents.filter((d) => this._docMatchesTerms(d, groups, isOr));
     rows = rows.slice(0, 50);
-    return { rows: this._project(rows, this._selectList(q)) };
+    return { rows: this._withFingerprints(q, this._project(rows, this._selectList(q))) };
+  }
+
+  // `LEFT JOIN files fs ON fs.uri = d.filePath` + `fs.fingerprint`: fill it from the files table.
+  _withFingerprints(q, rows) {
+    if (!/LEFT JOIN files fs ON fs\.uri = d\.filePath/i.test(q)) return rows;
+    return rows.map((r) => ({ ...r, fingerprint: this.files.get(r.filePath)?.fingerprint ?? null }));
   }
 
   _likeSearch(q, params) {
@@ -492,7 +517,7 @@ class MockDB {
     });
     let rows = this.documents.filter((r) => groupTests.every((f) => f(r)));
     rows = rows.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)).slice(0, 50);
-    return { rows: this._project(rows, this._selectList(q)) };
+    return { rows: this._withFingerprints(q, this._project(rows, this._selectList(q))) };
   }
 }
 

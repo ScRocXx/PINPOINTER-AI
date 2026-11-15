@@ -17,6 +17,9 @@ import {
   markStageFailed,
   noteFileSeen,
   pendingWork,
+  setFingerprint,
+  findTwin,
+  fingerprintsFor,
   type FileState,
 } from '../fileState';
 import { clearIndex, indexDocument } from '../documents';
@@ -286,5 +289,46 @@ describe('getReadyCounts', () => {
       throw new Error('db locked');
     });
     expect(getReadyCounts()).toEqual({ photos: 0, papers: 0 });
+  });
+});
+
+describe('fingerprints (byte-identical copies)', () => {
+  test('a stored fingerprint survives later state changes', () => {
+    noteFileSeen(URI, 'IMAGE', 1000);
+    setFingerprint(URI, 'aa:10');
+    markOcrDone(URI);
+    markStageFailed(URI, 'embed', 'no model');
+    markEmbedDone(URI);
+    expect(getFileState(URI)?.fingerprint).toBe('aa:10');
+  });
+
+  test('findTwin finds another file with the same bytes, only once its words are read', () => {
+    noteFileSeen('file:///a.jpg', 'IMAGE');
+    setFingerprint('file:///a.jpg', 'aa:10');
+    noteFileSeen('file:///b.jpg', 'IMAGE');
+    setFingerprint('file:///b.jpg', 'aa:10');
+
+    expect(findTwin('aa:10', 'file:///b.jpg')).toBeNull(); // a.jpg not read yet
+    markOcrDone('file:///a.jpg');
+    expect(findTwin('aa:10', 'file:///b.jpg')).toBe('file:///a.jpg');
+    expect(findTwin('aa:10', 'file:///a.jpg')).toBeNull(); // never itself; b.jpg not read
+    expect(findTwin('bb:10', 'file:///b.jpg')).toBeNull();
+  });
+
+  test('fingerprintsFor returns only the files that have one', () => {
+    setFingerprint('file:///a.jpg', 'aa:10');
+    setFingerprint('file:///b.jpg', 'bb:10');
+    noteFileSeen('file:///c.jpg', 'IMAGE');
+    const map = fingerprintsFor(['file:///a.jpg', 'file:///c.jpg', 'file:///missing.jpg']);
+    expect([...map.entries()]).toEqual([['file:///a.jpg', 'aa:10']]);
+    expect(fingerprintsFor([]).size).toBe(0);
+  });
+
+  test('lookups fail safe when the database does', () => {
+    jest.spyOn(getDb(), 'executeSync').mockImplementation(() => {
+      throw new Error('db locked');
+    });
+    expect(findTwin('aa:10', URI)).toBeNull();
+    expect(fingerprintsFor([URI]).size).toBe(0);
   });
 });
