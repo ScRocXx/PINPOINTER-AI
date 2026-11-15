@@ -283,8 +283,10 @@ class MockDB {
     }
 
     // fts5vocab over the search index: every token with how many rows contain it
-    if (/^SELECT term, doc FROM temp\.fts_vocab ORDER BY doc DESC LIMIT \?/i.test(q)) {
-      const [limit] = params;
+    if (/^SELECT term, doc FROM temp\.fts_vocab (WHERE term >= \? AND term < \? AND doc >= \? )?ORDER BY doc DESC LIMIT \?/i.test(q)) {
+      const ranged = /WHERE term >= \?/i.test(q);
+      const [from, to, minDocs] = ranged ? params : [null, null, 0];
+      const limit = params[params.length - 1];
       const counts = new Map();
       for (const d of this.documents) {
         const toks = new Set(
@@ -297,6 +299,7 @@ class MockDB {
         toks.forEach((t) => counts.set(t, (counts.get(t) || 0) + 1));
       }
       const rows = [...counts]
+        .filter(([term, doc]) => !ranged || (term >= from && term < to && doc >= minDocs))
         .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))
         .slice(0, limit)
         .map(([term, doc]) => ({ term, doc }));

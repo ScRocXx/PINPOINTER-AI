@@ -14,16 +14,22 @@ import {
   __resetSpeechModel,
   ensureSpeechModel,
   getSpeechModelState,
+  isSpeechModelReady,
   noteVoiceSearchUsed,
   subscribeSpeechModel,
   warmUpForVoiceUsers,
 } from '../SpeechModel';
 import { voiceStatusOf } from '../ModelService';
+import { __resetVoiceHotwords } from '../VoiceHotwords';
 
 const initSTT = NativeModules.SherpaOnnxModule.initSTT as jest.Mock;
 
+const setHotwords = NativeModules.SherpaOnnxModule.setHotwords as jest.Mock;
+
 beforeEach(() => {
   __resetSpeechModel();
+  __resetVoiceHotwords();
+  setHotwords.mockClear();
   initSTT.mockReset();
   initSTT.mockResolvedValue(true);
   (AsyncStorage as unknown as { __reset: () => void }).__reset();
@@ -101,5 +107,56 @@ describe('voiceStatusOf', () => {
     expect(voiceStatusOf('ready')).toBe('ready');
     expect(voiceStatusOf('loading')).toBe('loading');
     expect(voiceStatusOf('failed')).toBe('off');
+  });
+});
+
+describe('the app language picks the model', () => {
+  test('English loads Whisper, Hindi loads the Hindi model', async () => {
+    expect(await ensureSpeechModel()).toBe(true);
+    expect(initSTT).toHaveBeenLastCalledWith('en');
+    expect(isSpeechModelReady('en')).toBe(true);
+    expect(isSpeechModelReady('hi')).toBe(false);
+
+    expect(await ensureSpeechModel('hi')).toBe(true);
+    expect(initSTT).toHaveBeenLastCalledWith('hi');
+    expect(isSpeechModelReady('hi')).toBe(true);
+    expect(isSpeechModelReady('en')).toBe(false);
+    expect(initSTT).toHaveBeenCalledTimes(2);
+  });
+
+  test('the same language is not loaded twice', async () => {
+    await ensureSpeechModel('hi');
+    await ensureSpeechModel('hi');
+    expect(initSTT).toHaveBeenCalledTimes(1);
+  });
+
+  test('asking for the other language while one loads waits for it, then loads the other', async () => {
+    let finish!: (v: boolean) => void;
+    initSTT.mockReturnValueOnce(new Promise<boolean>((resolve) => { finish = resolve; }));
+    const english = ensureSpeechModel('en');
+    const hindi = ensureSpeechModel('hi');
+    expect(initSTT).toHaveBeenCalledTimes(1);
+    finish(true);
+    expect(await english).toBe(true);
+    expect(await hindi).toBe(true);
+    expect(initSTT.mock.calls.map(c => c[0])).toEqual(['en', 'hi']);
+    expect(isSpeechModelReady('hi')).toBe(true);
+  });
+
+  test('the Hindi model gets the person\'s words after it loads; Whisper does not', async () => {
+    await ensureSpeechModel('en');
+    await Promise.resolve();
+    expect(setHotwords).not.toHaveBeenCalled();
+    await ensureSpeechModel('hi');
+    await new Promise(r => setImmediate(r));
+    expect(setHotwords).toHaveBeenCalledTimes(1);
+  });
+
+  test('people who used voice search get the model of their language ahead of time', async () => {
+    await AsyncStorage.setItem(VOICE_USED_KEY, '1');
+    expect(await warmUpForVoiceUsers('hi')).toBe(true);
+    await ensureSpeechModel('hi');
+    expect(initSTT).toHaveBeenCalledTimes(1);
+    expect(initSTT).toHaveBeenCalledWith('hi');
   });
 });

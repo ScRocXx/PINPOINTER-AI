@@ -12,6 +12,7 @@ jest.mock('../../utils/AppLogger', () => ({
 }));
 
 import { ModelServiceProvider, VOICE_WARMUP_DELAY_MS, useModelService } from '../ModelService';
+import { LanguageProvider } from '../../i18n/LanguageContext';
 import { VOICE_USED_KEY, __resetSpeechModel, ensureSpeechModel } from '../SpeechModel';
 
 const initSTT = NativeModules.SherpaOnnxModule.initSTT as jest.Mock;
@@ -68,6 +69,19 @@ describe('ModelServiceProvider', () => {
     await afterWarmupDelay();
     expect(initSTT).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId('probe').props.children).toBe('ready:true');
+  });
+
+  it('warms up the model of the app\'s language', async () => {
+    await AsyncStorage.setItem(VOICE_USED_KEY, '1');
+    await render(
+      <LanguageProvider initialLanguage="hi">
+        <ModelServiceProvider>
+          <Probe />
+        </ModelServiceProvider>
+      </LanguageProvider>,
+    );
+    await afterWarmupDelay();
+    expect(initSTT).toHaveBeenCalledWith('hi');
   });
 
   it('follows a load started elsewhere, such as the mic', async () => {

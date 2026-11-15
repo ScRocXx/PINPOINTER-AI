@@ -41,6 +41,7 @@ Object.assign(NativeModules, {
     startRecognition: jest.fn(async () => true),
     stopRecognition: jest.fn(async () => ({ text: '' })),
     cancelRecognition: jest.fn(async () => true),
+    setHotwords: jest.fn(async (words) => words.length),
   },
   StorageModule: {
     openPDF: jest.fn(),

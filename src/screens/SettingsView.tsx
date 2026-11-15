@@ -131,6 +131,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             testID="settings-version"
           />
         </Card>
+        <View style={[styles.gutter, styles.credits]} testID="settings-credits">
+          <AppText variant="label" color="textSecondary">
+            {t('settings.credits')}
+          </AppText>
+          <AppText variant="small" color="textMuted">
+            {t('settings.creditsBody')}
+          </AppText>
+        </View>
       </ScrollView>
       {sheet}
     </Screen>
@@ -140,6 +148,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 const styles = StyleSheet.create({
   content: { paddingBottom: Space.huge },
   gutter: { marginHorizontal: GUTTER },
+  credits: { marginTop: Space.lg, gap: Space.xs },
   privacy: { flexDirection: 'row', alignItems: 'flex-start', gap: Space.md },
   shield: {
     width: 44,

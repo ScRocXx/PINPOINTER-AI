@@ -53,6 +53,13 @@ beforeEach(() => {
 });
 
 describe('SettingsScreen', () => {
+  it('credits the speech models and the font', async () => {
+    await renderSettings();
+    expect(screen.getByText(en['settings.credits'])).toBeTruthy();
+    expect(screen.getByText(en['settings.creditsBody'])).toBeTruthy();
+    expect(en['settings.creditsBody']).toMatch(/indic-lekhan.*CC BY 4\.0/);
+  });
+
   it('shows privacy and the version in plain words', async () => {
     await renderSettings();
     expect(screen.getByRole('header', { name: en['settings.title'] })).toBeTruthy();

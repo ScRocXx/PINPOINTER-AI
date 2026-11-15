@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import {
   ensureSpeechModel,
   getSpeechModelState,
@@ -6,12 +6,14 @@ import {
   warmUpForVoiceUsers,
   type SpeechModelState,
 } from './SpeechModel';
+import { useStrings } from '../i18n/LanguageContext';
 
 /**
  * ModelService — the state of the on-device speech model, for the screens
  * that show it (Settings, the voice and photo search sheet).
  *
- * The Whisper model ships in the APK (download-models.js). It is loaded into
+ * The speech models ship in the APK (download-models.js): Whisper for English,
+ * a small Hindi model for Hindi. The one for the app's language is loaded into
  * memory when voice search is first used; people who have used voice search
  * before get it loaded shortly after start (see services/SpeechModel.ts).
  */
@@ -64,6 +66,9 @@ interface ModelServiceProviderProps {
 
 export const ModelServiceProvider: React.FC<ModelServiceProviderProps> = ({ children }) => {
   const [speech, setSpeech] = useState<SpeechModelState>(getSpeechModelState);
+  const { lang } = useStrings();
+  const langRef = useRef(lang);
+  langRef.current = lang;
 
   useEffect(() => {
     setSpeech(getSpeechModelState());
@@ -71,14 +76,14 @@ export const ModelServiceProvider: React.FC<ModelServiceProviderProps> = ({ chil
   }, []);
 
   const loadSTT = useCallback(async () => {
-    await ensureSpeechModel();
+    await ensureSpeechModel(langRef.current);
   }, []);
 
   // The model is not loaded at start any more. Only people who have used
   // voice search get it ahead of time, after the first screen has drawn.
   useEffect(() => {
     const timer = setTimeout(() => {
-      warmUpForVoiceUsers();
+      warmUpForVoiceUsers(langRef.current);
     }, VOICE_WARMUP_DELAY_MS);
     return () => clearTimeout(timer);
   }, []);

@@ -27,7 +27,7 @@ This file is updated as each part lands. Status: **planned**, **in progress**,
 | 3 | Memory anchors: dates and festivals | "Diwali photos", "papers from last month", "kal ki photo" | **done** |
 | 4 | Answer cards | A bill result shows "Amount ₹1,240 · Pay by 5 April" without opening it | **done** |
 | 5 | Words-first photo reader (native) | Indexing reads each photo once; screenshots' small text stays readable | **done** (needs a phone build) |
-| 6 | Hindi voice tuned to your words (native) | Speak in Hindi; names and medicine words in your papers are understood | planned |
+| 6 | Hindi voice tuned to your words (native) | In a Hindi app, speak Hindi; words from your own papers are listened for | **done** (needs a phone build) |
 | 7 | Series and duplicates | WhatsApp copies read once and shown once; "latest electricity bill" newest first | **done** (7a needs a phone build) |
 
 ## 1. Misread-proof search (done)
@@ -264,12 +264,67 @@ better).
 for the app's own code: the version the RN library already bundles, so the
 APK doesn't grow.
 
-## 6. Hindi voice tuned to your words (planned; needs your decision)
+## 6. Hindi voice tuned to your words (done; needs a phone build)
 
-Swapping Whisper base.en (English only, about 160 MB) for a small streaming
-Hindi model (indic-lekhan, 28 MB) with the person's own words as sherpa-onnx
-hotwords changes who voice search serves, and the APK. Keeping both, or
-choosing by app language, is a product choice; see [`notes.md`](notes.md).
+Decision: **both**. Voice search listens in the app's language: Whisper
+base.en for English (as before), and for Hindi a small streaming Hindi model,
+[indic-lekhan](https://huggingface.co/Henil1/indic-lekhan) (Zipformer
+transducer, 25.8M parameters, CC BY 4.0, trained on AI4Bharat IndicVoices,
+Kathbath and Shrutilipi). The APK grows by about 28.5 MB. Only one model is in
+memory at a time; switching the app's language loads the other on the next tap
+on the mic and frees the first.
+
+**What people notice.** In a Hindi app, the mic understands Hindi ("बिजली का
+बिल", "पिछले महीने का बिजली बिल"), and words from the person's own papers, like
+a company name, are listened for.
+
+**How.**
+
+- **The model.** The 640 ms INT8 export (Hindi word error 15.4% on the
+  author's 100 IndicVoices dev clips; their numbers, not ours). It is fed the
+  whole recording at the end, like Whisper, plus a second of silence, and its
+  `<hi>` tag is removed. `download-models.js` pins one revision and checks the
+  SHA-256 of every file, and writes the CC BY notice next to it; Settings →
+  About credits it. It is new (published days before this branch) by one
+  person: it needs real Hindi speech on a phone before release.
+- **Your words as hotwords.** Up to 200 Devanagari words from the person's
+  own index (in two papers or more, three letters or more), read from
+  fts5vocab on the read connection, go to the model with beam search
+  (`services/VoiceHotwords.ts`, at most every 30 minutes). The same words then
+  find the paper, and the typo rescue corrects what is still misheard.
+- **Hotwords that can actually fire.** sherpa-onnx splits a hotword by the
+  highest total score; this model's BPE splits words by merge order. With the
+  model's own scores 75.0% of 26,604 common Hindi words split the same way
+  (80.1% of the top 2,000); with "fewest pieces, then earliest merge" scores,
+  79.5% (88.9%). `bpe.vocab` ships with those scores
+  (`research/experiments/hotword-split.exp.py`).
+- **No crashes from the library.** sherpa-onnx exits the app on a vocabulary
+  line it can't read and on missing model files, and crashes on hotwords
+  without beam search and the vocabulary. The native side checks the files
+  first, checks the vocabulary, passes hotwords only when both are in place,
+  and keeps only Devanagari words (`SpeechText.kt`, with a JUnit test; the
+  app's first Android unit test).
+
+**Measured** (synthetic Hindi speech from the Piper Hindi voice, run with the
+app's exact settings, `research/experiments/hindi-voice.exp.py`; a check of
+the set-up and of what hotwords do, not of accuracy):
+
+| | Result |
+|---|---|
+| 16 everyday searches, beam search | 13 exactly right (greedy: 12); "दिवाली" came out "दीवाली", which search matches anyway |
+| "बीएसईएस का बिल" | "बी एस एस का बिल" without hotwords, right with them |
+| Hotword boost 1.5 to 3.0 | No right phrase changed (in a run with the voice's sampling noise on, 2.0 and up turned "आधार कार्ड" into "पधार कार्ड": the default 1.5 is kept) |
+| How many hotwords | 50 and 200 changed nothing; at 500 one phrase got worse ("पर्ची" → "पारची"): the cap is 200 |
+| Speed on this server CPU, 2 threads | well under a tenth of the audio's length per decode; a phone will be several times slower |
+
+**Checked:** the Kotlin compiles against sherpa-onnx 1.13.4 (the pinned AAR),
+react-android 0.83.1 and AndroidX core; `SpeechTextTest` passes on a JVM; the
+download step ran end to end (files verified, `bpe.vocab` identical to the
+tested one, a second run downloads nothing). Not yet: `assembleDebug`, and
+real Hindi speech on a phone (accuracy, speed with beam search, memory).
+
+Fixed on the way: the download script followed only absolute redirects;
+Hugging Face sends small files with a relative one.
 
 ## 7. Series and duplicates
 

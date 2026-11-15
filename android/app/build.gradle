@@ -196,6 +196,9 @@ dependencies {
     // 4. sherpa-onnx for on-device speech-to-text, without its own libonnxruntime.so
     implementation files(slimSherpaAar)
 
+    // JVM unit tests (src/test, ./gradlew testDebugUnitTest): never in the APK.
+    testImplementation 'junit:junit:4.13.2'
+
 
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")

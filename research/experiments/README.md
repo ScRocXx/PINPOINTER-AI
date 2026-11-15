@@ -11,6 +11,8 @@ their numbers to `results/`.
 | `typos.exp.ts` | If a person makes one typo (phone keyboard), does search still find the paper? Today vs correcting the query against the person's own indexed words. | `results/typos.json` |
 | `app-search.exp.ts` | The misreadings of `ocr-misreads.exp.ts`, searched with the shipped code (`OcrTolerance.ts`, search tail, query terms). | `results/app-search.json` |
 | `app-typos.exp.ts` | The typos of `typos.exp.ts`, corrected with the shipped code (`SpellingRescue.ts`, vocabulary as `fts5vocab` reads it), only when nothing is found. | `results/app-typos.json` |
+| `hotword-split.exp.py` | Does sherpa-onnx split a hotword into the pieces the Hindi model emits? Its splitter (best total score) against the model's BPE, on 26,604 common Hindi words, for three ways of scoring `bpe.vocab`. | `results/hotword-split.json` |
+| `hindi-voice.exp.py` | Hindi voice search end to end with the app's exact recogniser settings, on synthetic Hindi speech (Piper Hindi voice, no sampling noise): greedy vs beam vs beam with hotwords, hotword boosts, and how many hotwords are safe for everyday queries. | `results/hindi-voice.json` |
 
 ## Run
 
@@ -22,6 +24,11 @@ research/experiments/.venv/bin/python research/experiments/make-vocab.py   # wri
 npx jest --testMatch '**/research/experiments/ocr-misreads.exp.ts'   # about 6 minutes
 npx jest --testMatch '**/research/experiments/typos.exp.ts'          # about 4 minutes
 ```
+
+The two Python scripts need `pip install sentencepiece` (split) or
+`pip install sherpa-onnx==1.13.4 numpy` (voice), the model folder
+`download-models.js` makes, and for the voice script the
+`vits-piper-hi_IN-pratham-medium` release of sherpa-onnx; see their headers.
 
 `EXP_OUT=/some/file.json` writes the results elsewhere; `EXP_VOCAB` points at
 another vocabulary file. Both scripts use a fixed random seed, so a rerun gives

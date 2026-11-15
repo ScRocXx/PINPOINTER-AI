@@ -44,6 +44,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AppLogger } from '../../utils/AppLogger';
 import { VOICE_USED_KEY, __resetSpeechModel, ensureSpeechModel } from '../../services/SpeechModel';
 import { useVoiceRecording } from '../useVoiceRecording';
+import { LanguageProvider, useStrings } from '../../i18n/LanguageContext';
+import React from 'react';
 
 const { SherpaOnnxModule } = NativeModules;
 const startRecognition = SherpaOnnxModule.startRecognition as jest.Mock;
@@ -574,6 +576,30 @@ describe('useVoiceRecording — startListening', () => {
         expect(initSTT).not.toHaveBeenCalled();
         expect(result.current.isModelLoading).toBe(false);
         expect(startRecognition).toHaveBeenCalledTimes(1);
+    });
+
+    test('in a Hindi app the mic loads the Hindi model; back in English, Whisper', async () => {
+        setOS('android');
+        mockPermission(PermissionsAndroid.RESULTS.GRANTED);
+        mockVibrate();
+        const wrapper = ({ children }: { children: React.ReactNode }) => (
+            <LanguageProvider initialLanguage="hi">{children}</LanguageProvider>
+        );
+        const { result } = await renderHook(() => ({ voice: useVoiceRecording(jest.fn()), strings: useStrings() }), { wrapper });
+
+        await act(async () => {
+            await result.current.voice.startListening();
+        });
+        expect(initSTT).toHaveBeenLastCalledWith('hi');
+
+        await act(async () => {
+            result.current.strings.setLang('en');
+        });
+        await act(async () => {
+            await result.current.voice.startListening();
+        });
+        expect(initSTT).toHaveBeenLastCalledWith('en');
+        expect(initSTT).toHaveBeenCalledTimes(2);
     });
 
     test('remembers that voice search was used, for the next app start', async () => {

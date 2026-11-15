@@ -22,8 +22,7 @@ export const __resetVocabularyTable = () => {
   created = false;
 };
 
-/** The most common terms of the search index (words and `q…` key tokens), most common first. */
-export const loadVocabulary = async (limit: number): Promise<VocabularyRow[]> => {
+const readVocabulary = async (sql: string, params: unknown[]): Promise<VocabularyRow[]> => {
   if (!isFtsAvailable()) return [];
   try {
     const db = getReadDb();
@@ -31,7 +30,7 @@ export const loadVocabulary = async (limit: number): Promise<VocabularyRow[]> =>
       await db.execute("CREATE VIRTUAL TABLE IF NOT EXISTS temp.fts_vocab USING fts5vocab(main, 'fts_index', 'row')");
       created = true;
     }
-    const result = await db.execute('SELECT term, doc FROM temp.fts_vocab ORDER BY doc DESC LIMIT ?', [limit]);
+    const result = await db.execute(sql, params as never);
     return ((result?.rows ?? []) as unknown as Array<{ term: string; doc: number }>)
       .filter(r => typeof r.term === 'string')
       .map(r => ({ term: r.term, docs: Number(r.doc) || 0 }));
@@ -41,6 +40,22 @@ export const loadVocabulary = async (limit: number): Promise<VocabularyRow[]> =>
     return [];
   }
 };
+
+/** The most common terms of the search index (words and `q…` key tokens), most common first. */
+export const loadVocabulary = (limit: number): Promise<VocabularyRow[]> =>
+  readVocabulary('SELECT term, doc FROM temp.fts_vocab ORDER BY doc DESC LIMIT ?', [limit]);
+
+/**
+ * The most common terms from `from` (inclusive) to `to` (exclusive), in at
+ * least `minDocs` rows: for one script, like Devanagari (U+0900 to U+0980).
+ */
+export const loadVocabularyRange = (from: string, to: string, minDocs: number, limit: number): Promise<VocabularyRow[]> =>
+  readVocabulary('SELECT term, doc FROM temp.fts_vocab WHERE term >= ? AND term < ? AND doc >= ? ORDER BY doc DESC LIMIT ?', [
+    from,
+    to,
+    minDocs,
+    limit,
+  ]);
 
 /** The stored text of one indexed row that contains `token`, or null. */
 export const textWithToken = async (token: string): Promise<string | null> => {
