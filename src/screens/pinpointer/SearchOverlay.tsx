@@ -44,6 +44,8 @@ export interface SearchOverlayProps {
   correctedFrom?: string | null;
   /** What the query's date words meant, for the "When: …" line. */
   dateMeaning?: DateMeaning | null;
+  /** "latest bill": the results are newest first. */
+  newestFirst?: boolean;
   isSearchPending: boolean;
   history: ReadonlyArray<SearchHistoryItem>;
   onSelectHistory: (query: string) => void;
@@ -126,6 +128,7 @@ const SearchContent: React.FC<SearchOverlayProps> = ({
   resultsQuery,
   correctedFrom,
   dateMeaning,
+  newestFirst = false,
   isSearchPending,
   history,
   onSelectHistory,
@@ -309,6 +312,11 @@ const SearchContent: React.FC<SearchOverlayProps> = ({
               {dateMeaning ? (
                 <AppText variant="bodyStrong" testID="search-when">
                   {t('search.when', { when: formatDateMeaning(t, dateMeaning) })}
+                </AppText>
+              ) : null}
+              {newestFirst ? (
+                <AppText variant="bodyStrong" testID="search-newest">
+                  {t('search.newestFirst')}
                 </AppText>
               ) : null}
               {correctedFrom && rowsQuery ? (

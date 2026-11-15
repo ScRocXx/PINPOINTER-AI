@@ -24,7 +24,7 @@ export const usePinpointer = () => {
     // --- Sub-hooks ---
     const {
         searchText, setSearchText, debouncedSearchText,
-        searchResults, correctedFrom, dateMeaning,
+        searchResults, correctedFrom, dateMeaning, newestFirst,
         isSearching, setIsSearching, isSearchPending,
         searchHistory,
         handleSelectHistory, handleDeleteHistory, handleClearHistory,
@@ -135,6 +135,8 @@ export const usePinpointer = () => {
         correctedFrom,
         // What the query's date words meant ("Diwali, every year").
         dateMeaning,
+        // "latest bill", "pichla bill": the results are newest first.
+        newestFirst,
         searchHistory, handleSelectHistory, handleDeleteHistory, handleClearHistory,
 
         // Image viewer

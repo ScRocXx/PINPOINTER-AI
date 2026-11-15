@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { searchDocuments, searchDocumentsAsync, DocumentRecord } from '../database';
+import { searchDocuments, searchDocumentsAsync, understandQuery, DocumentRecord } from '../database';
 import { encodeText, warmUpText } from '../services/EmbeddingService';
 import { rescueQuery } from '../services/SpellingService';
 import { parseDateQuery, pictureTextFor, type DateMeaning } from '../utils/DateQuery';
@@ -48,6 +48,7 @@ export const useSearch = (isDbReady: boolean) => {
     const [correctedFrom, setCorrectedFrom] = useState<string | null>(null);
     // What the date words meant ("Diwali, every year"), when the query has some.
     const [dateMeaning, setDateMeaning] = useState<DateMeaning | null>(null);
+    const [newestFirst, setNewestFirst] = useState(false);
     const [isSearching, setIsSearching] = useState(false);
     const [isSearchPending, setIsSearchPending] = useState(false);
     const [searchHistory, setSearchHistory] = useState<SearchHistoryItem[]>([]);
@@ -82,6 +83,7 @@ export const useSearch = (isDbReady: boolean) => {
             setSearchResults([]);
             setCorrectedFrom(null);
             setDateMeaning(null);
+            setNewestFirst(false);
             setIsSearchPending(false);
             return;
         }
@@ -111,16 +113,23 @@ export const useSearch = (isDbReady: boolean) => {
                 lastResultRef.current = { query: searchText, count: textResults.length };
                 setSearchResults(textResults);
                 setDebouncedSearchText(query);
+                // What the results' query asks besides its words: a time, the newest first.
+                const meaning = understandQuery(query);
                 setCorrectedFrom(typed);
-                setDateMeaning(dates?.meaning ?? null);
+                setDateMeaning(meaning.dates?.meaning ?? null);
+                setNewestFirst(meaning.recency !== null);
                 setIsSearchPending(false);
 
                 // Hindi and other Indian-script words never reach the
                 // English-only CLIP tokenizer: known concepts become English,
                 // unknown ones are dropped (null = skip semantic search). A
                 // date query shows CLIP its other words, or what the festival
-                // looks like ("diwali lamps and lights").
-                const lookFor = dates ? pictureTextFor(dates) : query;
+                // looks like ("diwali lamps and lights"). "Latest" words are
+                // left out: they are an order, not something a photo shows.
+                const words = meaning.recency ? meaning.recency.rest : null;
+                const lookFor = meaning.dates
+                    ? pictureTextFor({ ...meaning.dates, rest: words ?? meaning.dates.rest })
+                    : words ?? query;
                 const clipText = lookFor ? clipTextForQuery(lookFor, queryWords(lookFor)) : null;
                 const queryVector = clipText ? await encodeText(clipText) : null;
                 if (!isCurrent || !queryVector) return;
@@ -183,7 +192,7 @@ export const useSearch = (isDbReady: boolean) => {
 
     return {
         searchText, setSearchText, debouncedSearchText,
-        searchResults, correctedFrom, dateMeaning,
+        searchResults, correctedFrom, dateMeaning, newestFirst,
         isSearching, setIsSearching, isSearchPending,
         searchHistory,
         handleSelectHistory, handleDeleteHistory, handleClearHistory,

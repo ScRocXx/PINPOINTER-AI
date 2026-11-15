@@ -19,7 +19,7 @@ import { indexDocument } from '../documents';
 import { setFingerprint } from '../fileState';
 import { getEmbeddingCount, indexEmbedding, MIN_PHOTOS_FOR_STAND_OUT } from '../vectors';
 import { soundex } from '../../utils/Soundex';
-import { extractSnippet, mergeByRank, searchDocuments, searchDocumentsAsync, MAX_VECTOR_DISTANCE, RANK_K, TEXT_WEIGHT } from '../search';
+import { extractSnippet, mergeByRank, searchDocuments, searchDocumentsAsync, understandQuery, MAX_VECTOR_DISTANCE, RANK_K, TEXT_WEIGHT } from '../search';
 import type { DocumentRecord } from '../types';
 
 // Top-level import: jest's moduleNameMapper routes this to the SAME mock
@@ -436,6 +436,61 @@ describe('searchDocuments — dates ("Diwali photos", "pichhle mahine ka bill")'
 
   test('the async search does the same', async () => {
     expect(paths(await searchDocumentsAsync('diwali bill'))).toEqual(['/photos/bill-nov.jpg']);
+  });
+});
+
+describe('searchDocuments — newest first ("latest electricity bill", "pichla bill")', () => {
+  const at = (y: number, m: number, d: number) => new Date(y, m - 1, d, 12).getTime();
+  const bill = (text: string, filePath: string, takenAt: number | null = null) =>
+    indexDocument(null, text, filePath, 'DOCUMENT', 'TEXT', takenAt);
+  const LATEST = ['/docs/bses-oct.pdf', '/docs/shop-sep.pdf', '/docs/bses-sep.pdf', '/docs/bses-aug.pdf'];
+
+  beforeEach(() => {
+    // Not indexed in date order, so word order isn't date order.
+    bill('BSES electricity bill Consumer No: 150123456 Bill Date: 05/08/2025', '/docs/bses-aug.pdf');
+    bill('BSES electricity bill Consumer No: 150123456 Bill Date: 05/10/2025', '/docs/bses-oct.pdf');
+    bill('BSES electricity bill Consumer No: 150123456 Bill Date: 05/09/2025', '/docs/bses-sep.pdf');
+    bill('Shop electricity bill Consumer No: 999888777 Bill Date: 07/09/2025', '/docs/shop-sep.pdf');
+    bill('The New India Assurance policy schedule', '/docs/nia.pdf', at(2024, 3, 1));
+  });
+
+  test('"latest" is an order, not a word: each connection\'s newest bill first, then the older ones', () => {
+    expect(paths(searchDocuments('latest electricity bill'))).toEqual(LATEST);
+    // "bill" also finds the March invoice (a synonym): the newest of its own kind, so among the first.
+    expect(paths(searchDocuments('pichla bill'))).toEqual([
+      '/docs/bses-oct.pdf', '/docs/shop-sep.pdf', '/docs/invoice.pdf', '/docs/bses-sep.pdf', '/docs/bses-aug.pdf',
+    ]);
+    expect(paths(searchDocuments('सबसे नया electricity bill'))).toEqual(LATEST);
+  });
+
+  test('without "latest" the words keep their own order', () => {
+    expect(paths(searchDocuments('electricity bill'))).toEqual([
+      '/docs/bses-aug.pdf', '/docs/bses-oct.pdf', '/docs/bses-sep.pdf', '/docs/shop-sep.pdf',
+    ]);
+  });
+
+  test('"new" stays a word when a paper says it ("New India Assurance")', () => {
+    expect(understandQuery('new india assurance').recency).toBeNull();
+    expect(paths(searchDocuments('new india assurance'))).toEqual(['/docs/nia.pdf']);
+    // No paper says "naya": newest first.
+    expect(understandQuery('naya electricity bill').recency).not.toBeNull();
+    expect(paths(searchDocuments('naya electricity bill'))).toEqual(LATEST);
+  });
+
+  test('"latest photos" and "naye papers" list the newest of that kind', () => {
+    expect(paths(searchDocuments('latest photos'))).toEqual(['/photos/goa.jpg']);
+    // By the printed dates, not the order the PDFs arrived in.
+    const papers = paths(searchDocuments('naye papers'));
+    expect(papers.slice(0, 2)).toEqual(['/docs/bses-oct.pdf', '/docs/shop-sep.pdf']);
+    expect(papers.slice(-2)).toEqual(['/docs/bses-sep.pdf', '/docs/bses-aug.pdf']);
+    expect(papers).not.toContain('/photos/goa.jpg');
+  });
+
+  test('look-alike photos come after the word matches, newest first too', async () => {
+    for (let i = 0; i < MIN_PHOTOS_FOR_STAND_OUT + 4; i++) addPhoto(`far${i}`, 0.05, 2 + i);
+    const lookOnly = addPhoto('lookonly', 0.4, 100);
+    expect(paths(searchDocuments('latest electricity bill', QUERY))).toEqual([...LATEST, lookOnly]);
+    expect(paths(await searchDocumentsAsync('latest electricity bill', QUERY))).toEqual([...LATEST, lookOnly]);
   });
 });
 

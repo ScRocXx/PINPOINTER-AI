@@ -39,6 +39,7 @@ export {
 } from './fileState';
 export type { FileKind, FileState, IndexingStats, PendingWork, ReadyCounts, Stage, StageStatus } from './fileState';
 export { beginTransaction, commitTransaction, rollbackTransaction } from './transactions';
-export { searchDocuments, searchDocumentsAsync, extractSnippet } from './search';
+export { searchDocuments, searchDocumentsAsync, extractSnippet, understandQuery, listNewest } from './search';
+export type { QueryMeaning } from './search';
 export { getCollectionPreview, getSimilarPhotos, getSimilarPhotosAsync } from './collections';
 export type { CollectionPreview } from './collections';

@@ -60,6 +60,8 @@ const EXPECTED_EXPORTS = [
   'rollbackTransaction',
   'searchDocuments',
   'searchDocumentsAsync',
+  'understandQuery',
+  'listNewest',
   'setupDatabase',
   'getSimilarPhotos',
   'getSimilarPhotosAsync',

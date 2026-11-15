@@ -8,6 +8,7 @@ import { searchWords, termsForQueryWord } from '../utils/SearchKeys';
 import { tolerantTermsForQueryWord } from '../utils/OcrTolerance';
 import { parseDateQuery, type DateQuery, type DateWindow } from '../utils/DateQuery';
 import { collapseCopies } from '../utils/Duplicates';
+import { newestFirst, parseRecency, saysAnyOf, type Recency } from '../utils/PaperSeries';
 import { fingerprintsFor } from './fileState';
 import { collectionForQuery } from '../utils/Collections';
 import { AppLogger } from '../utils/AppLogger';
@@ -195,11 +196,75 @@ export const listByDate = (windows: ReadonlyArray<DateWindow>, limit = DATE_LIST
   }
 };
 
+/** The newest photos and papers (or one kind only), by when they were taken. */
+export const listNewest = (limit = DATE_LIST_LIMIT, type?: 'IMAGE' | 'DOCUMENT'): DocumentRecord[] => {
+  try {
+    const result = getDb().executeSync(
+      `SELECT id, title, content, filePath, type, detection_type, timestamp, taken_at
+       FROM document_index
+       ${type ? 'WHERE type = ? ' : ''}ORDER BY taken_at DESC, id DESC
+       LIMIT ?`,
+      type ? [type, limit] : [limit],
+    );
+    return processResults(result);
+  } catch (e) {
+    AppLogger.warn('DB', 'listNewest failed:', e);
+    return [];
+  }
+};
+
 /** The word matches from that time, or everything from then when only a date was asked. */
 const dateTextHits = (dq: DateQuery): DocumentRecord[] =>
   dq.rest.trim()
     ? searchByWords(dq.rest, DATE_SEARCH_LIMIT).filter(d => inWindows(d, dq.windows)).slice(0, RESULT_LIMIT)
     : listByDate(dq.windows);
+
+// ─── "Latest" ("latest electricity bill", "pichla bill", "सबसे नया बिल") ─────
+
+/** What a query asks besides its words: a time, and the newest first. */
+export interface QueryMeaning {
+  dates: DateQuery | null;
+  recency: Recency | null;
+}
+
+/**
+ * A query's date words ("Diwali", "last month"), then its "latest" words.
+ * Words that also mean something else ("new", "naya", "last") count only
+ * when no paper found for the query says them: "New India Assurance" and
+ * "last date" stay word searches.
+ */
+export const understandQuery = (query: string): QueryMeaning => {
+  const dates = parseDateQuery(query);
+  const words = dates ? dates.rest : query;
+  let recency = parseRecency(words);
+  if (recency?.weakOnly) {
+    const said = recency.words;
+    if (searchByWords(words).some(d => saysAnyOf(d, said))) recency = null;
+  }
+  return { dates, recency };
+};
+
+/** The word results, with the query's time and "latest" words understood. */
+const textHitsFor = (query: string, { dates, recency }: QueryMeaning): DocumentRecord[] => {
+  if (!recency) return dates ? dateTextHits(dates) : searchByWords(query);
+  if (recency.rest.trim()) {
+    const found = searchByWords(recency.rest, DATE_SEARCH_LIMIT);
+    return newestFirst(dates ? found.filter(d => inWindows(d, dates.windows)) : found).slice(0, RESULT_LIMIT);
+  }
+  const only = recency.only;
+  const listed = dates
+    ? listByDate(dates.windows, DATE_SEARCH_LIMIT).filter(d => !only || d.type === only)
+    : listNewest(DATE_LIST_LIMIT, only);
+  return newestFirst(listed).slice(0, DATE_LIST_LIMIT);
+};
+
+/** Word and look-alike results: merged by rank, or for "latest" the words first and each part newest first. */
+const combine = (textHits: DocumentRecord[], lookAlikes: DocumentRecord[], recency: Recency | null): DocumentRecord[] => {
+  if (lookAlikes.length === 0) return textHits;
+  if (!recency) return mergeByRank(textHits, lookAlikes);
+  const found = new Set(textHits.map(d => d.id));
+  return [...textHits, ...newestFirst(lookAlikes.filter(d => !found.has(d.id)))];
+};
 
 /** Results with byte-identical copies (WhatsApp keeps several) shown once. */
 const withoutCopies = (docs: DocumentRecord[]): DocumentRecord[] =>
@@ -215,15 +280,18 @@ const withoutCopies = (docs: DocumentRecord[]): DocumentRecord[] =>
  *     collection ("ID cards", "पहचान पत्र") finds every concept in it
  *     (Aadhaar, PAN, voter ID...) instead of the words.
  *  2. Look: photos that stand out as close to the query vector.
- *  3. The two lists merged by rank (see mergeByRank).
+ *  3. The two lists merged by rank (see mergeByRank). "Latest" words
+ *     ("latest bill", "pichla bill") put each list newest first instead
+ *     (utils/PaperSeries), words before look-alikes.
  *  4. Byte-identical copies shown once.
  */
 export const searchDocuments = (query: string, queryVector?: Float32Array): DocumentRecord[] =>
   withoutCopies(searchDocumentsWithCopies(query, queryVector));
 
 const searchDocumentsWithCopies = (query: string, queryVector?: Float32Array): DocumentRecord[] => {
-  const dq = parseDateQuery(query);
-  const textHits = dq ? dateTextHits(dq) : searchByWords(query);
+  const meaning = understandQuery(query);
+  const dq = meaning.dates;
+  const textHits = textHitsFor(query, meaning);
   if (!queryVector || !query.trim()) return textHits;
   const t0 = Date.now();
   try {
@@ -231,7 +299,7 @@ const searchDocumentsWithCopies = (query: string, queryVector?: Float32Array): D
       ? searchByLook(queryVector, DATE_LOOK_LIMIT).filter(d => inWindows(d, dq.windows))
       : searchByLook(queryVector);
     AppLogger.info('DB', `Look-alike search took ${Date.now() - t0}ms. Found ${lookAlikes.length} photos.`);
-    return lookAlikes.length > 0 ? mergeByRank(textHits, lookAlikes) : textHits;
+    return combine(textHits, lookAlikes, meaning.recency);
   } catch (e) {
     AppLogger.warn('DB', 'Look-alike search failed, showing word matches only:', e);
     return textHits;
@@ -248,8 +316,9 @@ export const searchDocumentsAsync = async (query: string, queryVector?: Float32A
   withoutCopies(await searchDocumentsAsyncWithCopies(query, queryVector));
 
 const searchDocumentsAsyncWithCopies = async (query: string, queryVector?: Float32Array): Promise<DocumentRecord[]> => {
-  const dq = parseDateQuery(query);
-  const textHits = dq ? dateTextHits(dq) : searchByWords(query);
+  const meaning = understandQuery(query);
+  const dq = meaning.dates;
+  const textHits = textHitsFor(query, meaning);
   if (!queryVector || !query.trim()) return textHits;
   const t0 = Date.now();
   try {
@@ -257,7 +326,7 @@ const searchDocumentsAsyncWithCopies = async (query: string, queryVector?: Float
       ? (await searchByLookAsync(queryVector, DATE_LOOK_LIMIT)).filter(d => inWindows(d, dq.windows))
       : await searchByLookAsync(queryVector);
     AppLogger.info('DB', `Look-alike search took ${Date.now() - t0}ms (off the JS thread). Found ${lookAlikes.length} photos.`);
-    return lookAlikes.length > 0 ? mergeByRank(textHits, lookAlikes) : textHits;
+    return combine(textHits, lookAlikes, meaning.recency);
   } catch (e) {
     AppLogger.warn('DB', 'Look-alike search failed, showing word matches only:', e);
     return textHits;

@@ -34,6 +34,13 @@ jest.mock('../../database', () => ({
     // so each test sets one mock for both steps.
     searchDocumentsAsync: jest.fn(async (q: string, v?: Float32Array) =>
         (jest.requireMock('../../database') as { searchDocuments: (q: string, v?: Float32Array) => unknown }).searchDocuments(q, v)),
+    // The real reading of date and "latest" words (without the database check for "new"/"last").
+    understandQuery: jest.fn((q: string) => {
+        const { parseDateQuery } = jest.requireActual('../../utils/DateQuery');
+        const { parseRecency } = jest.requireActual('../../utils/PaperSeries');
+        const dates = parseDateQuery(q);
+        return { dates, recency: parseRecency(dates ? dates.rest : q) };
+    }),
 }));
 
 jest.mock('../../services/EmbeddingService', () => ({
@@ -634,5 +641,45 @@ describe('useSearch — dates', () => {
         await typeAndWait(result, 'bill', 200);
         await flush();
         expect(result.current.dateMeaning).toBeNull();
+    });
+});
+
+describe('useSearch — newest first', () => {
+    test('"latest electricity bill" says newest first and shows CLIP only "electricity bill"', async () => {
+        mockSearchDocuments.mockReturnValue([doc(1, 'Bill')]);
+        mockEncodeText.mockResolvedValue(VECTOR);
+        const { result } = await renderHook(() => useSearch(true));
+        await flush();
+        await typeAndWait(result, 'latest electricity bill', 200);
+        await flush();
+        expect(result.current.newestFirst).toBe(true);
+        expect(result.current.dateMeaning).toBeNull();
+        expect(mockEncodeText).toHaveBeenCalledWith(expect.stringContaining('electricity bill'));
+        expect(mockEncodeText).not.toHaveBeenCalledWith(expect.stringContaining('latest'));
+    });
+
+    test('"latest photos" has nothing for CLIP to look for', async () => {
+        mockSearchDocuments.mockReturnValue([doc(1, 'Photo')]);
+        const { result } = await renderHook(() => useSearch(true));
+        await flush();
+        await typeAndWait(result, 'latest photos', 200);
+        await flush();
+        expect(result.current.newestFirst).toBe(true);
+        expect(mockEncodeText).not.toHaveBeenCalled();
+    });
+
+    test('an ordinary search is not newest first, and clearing the box resets it', async () => {
+        mockSearchDocuments.mockReturnValue([doc(1, 'Bill')]);
+        const { result } = await renderHook(() => useSearch(true));
+        await flush();
+        await typeAndWait(result, 'pichla bill', 200);
+        await flush();
+        expect(result.current.newestFirst).toBe(true);
+        await typeAndWait(result, 'bill', 200);
+        await flush();
+        expect(result.current.newestFirst).toBe(false);
+        await typeAndWait(result, '', 200);
+        await flush();
+        expect(result.current.newestFirst).toBe(false);
     });
 });

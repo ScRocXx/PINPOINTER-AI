@@ -28,7 +28,7 @@ This file is updated as each part lands. Status: **planned**, **in progress**,
 | 4 | Answer cards | A bill result shows "Amount ₹1,240 · Pay by 5 April" without opening it | **done** |
 | 5 | Words-first photo reader (native) | Indexing reads each photo once; screenshots' small text stays readable | **done** (needs a phone build) |
 | 6 | Hindi voice tuned to your words (native) | Speak in Hindi; names and medicine words in your papers are understood | planned |
-| 7 | Series and duplicates | WhatsApp copies read once and shown once; "latest electricity bill" | 7a copies **done** (needs a phone build); 7b series planned |
+| 7 | Series and duplicates | WhatsApp copies read once and shown once; "latest electricity bill" newest first | **done** (7a needs a phone build) |
 
 ## 1. Misread-proof search (done)
 
@@ -312,10 +312,52 @@ different files are each read; fingerprints survive later state changes;
 search, tiles and counts show copies once; two look-alike bills both stay),
 tsc, lint, and the Kotlin compiles. Not yet: a phone run.
 
-### 7b. Series: "latest electricity bill" (planned)
+### 7b. "Latest electricity bill": newest first (done)
 
-Monthly bills from the same company, grouped, so "latest electricity bill"
-or "last month's gas bill" answers with the newest one first.
+**What people notice.** "latest electricity bill", "pichla bill",
+"सबसे नया बिजली बिल", "naye papers" or "latest photos" now answer with the
+newest one at the top and a "Newest first" line. Before, "latest" was a word
+every result had to contain; papers almost never print it, so these searches
+found nothing.
+
+**How** (`utils/PaperSeries.ts`, pure, on the stored masked text):
+
+- **"Latest" words are an order, not words.** Words that only mean newest
+  ("latest", "recent", "pichla", "aakhri", "पिछला", "आखिरी", "ताज़ा") always
+  count. Words that also mean other things ("new", "naya", "last", "नया")
+  count only when no paper found for the query says them, so "New India
+  Assurance" and "last date" stay word searches. "Most", "sabse", "सबसे" go
+  with them. Nothing left but "photos" or "papers" lists the newest of that
+  kind.
+- **The paper's own date.** A labelled bill / invoice / statement / issue
+  date ("बिल दिनांक" too), else the bill month ("Bill Month: OCT-2025"), else
+  the due date, else the billing period. An unlabelled date is not trusted,
+  and a printed date more than 120 days after the photo (a misread year) is
+  dropped. Without one: when the photo was taken, then when it was indexed.
+- **Series.** The account number printed on every bill of a connection
+  (consumer no., CA no., K no., policy no., card no., उपभोक्ता संख्या...)
+  groups papers. The newest of each series comes first, then the older ones,
+  so the shop's September bill shows right after the home's October bill,
+  and a yearly policy doesn't sink under eleven older electricity bills.
+  Masked numbers still group ("******3210" is the same on every bill), and
+  OCR's O/0 and I/l/1 slips are folded so one misread digit doesn't split a
+  series.
+- **In search.** `understandQuery` reads date words, then "latest" words;
+  both search paths use it. Word results are re-ordered (up to 500 read, as
+  for date searches); look-alike photos come after them, newest first too.
+  CLIP is shown the query without the "latest" words. The typo rescue
+  leaves them alone (it would have "corrected" "latest" to a word like
+  "latex" from the person's own papers).
+
+**Checked:** Jest (the words, printed dates in English and Hindi, account
+numbers including masked and spaced ones, series order with two connections,
+"New India Assurance" kept as words, the hook, the screen line, the typo
+rescue), tsc, lint, and a preview screenshot in English and Hindi.
+
+**Known limits.** Series need a labelled account number; bills without one
+are ordered by date alone. A date query plus "latest" ("latest bill from
+September") still picks the time by when the photo was taken, not by the
+printed date.
 
 ## What stays the same
 

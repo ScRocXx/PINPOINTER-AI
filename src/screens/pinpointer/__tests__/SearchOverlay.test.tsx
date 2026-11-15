@@ -116,6 +116,16 @@ describe('SearchOverlay', () => {
     expect(screen.getByTestId('search-when')).toHaveTextContent('When: Diwali, every year');
   });
 
+  it('says when the results are newest first, and only then', async () => {
+    await setup({ searchText: 'latest bill', newestFirst: true, results: [photo()] });
+    expect(screen.getByTestId('search-newest')).toHaveTextContent('Newest first');
+  });
+
+  it('has no newest-first line for an ordinary search', async () => {
+    await setup({ searchText: 'bill', results: [photo()] });
+    expect(screen.queryByTestId('search-newest')).toBeNull();
+  });
+
   it('shows the answer a paper holds, without opening it', async () => {
     const bill = paper({ id: 7, content: 'Amount Payable Rs. 1,240 Due Date 05/04/2099', filePath: 'file:///docs/b7.pdf' });
     await setup({ searchText: 'bill', results: [bill] });

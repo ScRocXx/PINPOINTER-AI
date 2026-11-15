@@ -49,6 +49,14 @@ test('keeps filler words and leaves known words alone', async () => {
     await expect(rescueQuery('   ')).resolves.toBeNull();
 });
 
+test('leaves "latest" words alone: they are an order, not a typo', async () => {
+    // "latex" is two letters from "latest": without the rule, "latest" would be "corrected" to it.
+    indexDocument(null, 'latex gloves receipt', '/photos/gloves.jpg', 'IMAGE', 'TEXT');
+    await expect(rescueQuery('latest electrcity bill')).resolves.toMatchObject({ query: 'latest electricity bill' });
+    await expect(rescueQuery('latest')).resolves.toBeNull();
+    await expect(rescueQuery('pichla')).resolves.toBeNull();
+});
+
 test('reads the vocabulary once, and frees it after a quiet while', async () => {
     jest.useFakeTimers();
     const load = jest.spyOn(vocabulary, 'loadVocabulary');

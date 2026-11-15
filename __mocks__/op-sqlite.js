@@ -252,6 +252,19 @@ class MockDB {
       return { rows: hit ? [{ embedding: hit.embedding }] : [] };
     }
 
+    // The newest photos and papers (listNewest), optionally one type
+    if (/FROM document_index\s+(WHERE type = \? )?ORDER BY taken_at DESC, id DESC\s+LIMIT \?/i.test(q)) {
+      const typed = /WHERE type = \?/i.test(q);
+      const type = typed ? params[0] : null;
+      const limit = params[params.length - 1];
+      const key = (r) => (typeof r.taken_at === 'number' ? r.taken_at : -Infinity);
+      const rows = this.documents
+        .filter((r) => !type || r.type === type)
+        .sort((a, b) => key(b) - key(a) || b.id - a.id)
+        .slice(0, limit);
+      return { rows: this._project(rows, this._selectList(q)) };
+    }
+
     // Photos and papers from some time windows, newest first
     if (/FROM document_index\s+WHERE \(taken_at >= \? AND taken_at < \?\)/i.test(q)) {
       const limit = params[params.length - 1];

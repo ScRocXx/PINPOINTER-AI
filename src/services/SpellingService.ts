@@ -11,6 +11,7 @@ import { loadVocabulary, textWithToken } from '../database/vocabulary';
 import { bhashaKey, tokenizeWords } from '../utils/IndicText';
 import { queryWords, searchWords, visibleContent } from '../utils/SearchKeys';
 import { buildVocabulary, correctionsFor, type Vocabulary } from '../utils/SpellingRescue';
+import { isRecencyWord } from '../utils/PaperSeries';
 import { AppLogger } from '../utils/AppLogger';
 
 /** Most terms kept in memory (words and sound keys, most common first). */
@@ -74,7 +75,8 @@ export interface Rescue {
  * correction, or null when nothing could be corrected.
  */
 export const rescueQuery = async (query: string): Promise<Rescue | null> => {
-    const wanted = searchWords(query);
+    // "latest", "pichla": not typos, and not in any paper (search reads them as "newest first").
+    const wanted = searchWords(query).filter(w => !isRecencyWord(w));
     if (wanted.length === 0) return null;
     try {
         const vocab = await getVocabulary();

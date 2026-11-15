@@ -40,7 +40,7 @@ const MONTHS: Record<string, number> = {
     'जनवरी': 1, 'फरवरी': 2, 'फ़रवरी': 2, 'मार्च': 3, 'अप्रैल': 4, 'मई': 5, 'जून': 6, 'जुलाई': 7, 'अगस्त': 8,
     'सितंबर': 9, 'सितम्बर': 9, 'अक्टूबर': 10, 'अक्तूबर': 10, 'नवंबर': 11, 'नवम्बर': 11, 'दिसंबर': 12, 'दिसम्बर': 12,
 };
-const MONTH_WORD = '(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\\.?|जनवरी|फ़?फरवरी|फ़रवरी|मार्च|अप्रैल|मई|जून|जुलाई|अगस्त|सितम्बर|सितंबर|अक्टूबर|अक्तूबर|नवम्बर|नवंबर|दिसम्बर|दिसंबर';
+export const MONTH_WORD = '(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\\.?|जनवरी|फ़?फरवरी|फ़रवरी|मार्च|अप्रैल|मई|जून|जुलाई|अगस्त|सितम्बर|सितंबर|अक्टूबर|अक्तूबर|नवम्बर|नवंबर|दिसम्बर|दिसंबर';
 
 const fullYear = (y: number): number => (y < 100 ? 2000 + y : y);
 
@@ -50,7 +50,7 @@ const validDate = (y: number, m: number, d: number): FactDate | null => {
     return t.getMonth() === m - 1 ? { y, m, d } : null;
 };
 
-const monthOf = (word: string): number | undefined => {
+export const monthOf = (word: string): number | undefined => {
     const w = word.toLowerCase().replace(/\.$/, '');
     return MONTHS[w] ?? MONTHS[w.slice(0, 3)];
 };
@@ -81,7 +81,7 @@ export const firstDate = (text: string): FactDate | null => {
 };
 
 /** The date that follows one of `labels` closely (within a short stretch of text). */
-const dateAfter = (text: string, labels: RegExp, reach = 40): FactDate | null => {
+export const dateAfter = (text: string, labels: RegExp, reach = 40): FactDate | null => {
     for (const m of text.matchAll(labels)) {
         const after = text.slice((m.index ?? 0) + m[0].length, (m.index ?? 0) + m[0].length + reach);
         const date = firstDate(after);
@@ -90,7 +90,7 @@ const dateAfter = (text: string, labels: RegExp, reach = 40): FactDate | null =>
     return null;
 };
 
-const DUE_LABELS = /(due\s*date|due\s*on|due\s*by|pay\s*by|payment\s*due|last\s*date(\s*of\s*payment)?|अंतिम\s*तिथि|अन्तिम\s*तिथि|देय\s*तिथि|अंतिम\s*दिनांक|भुगतान\s*की\s*अंतिम\s*तिथि)/giu;
+export const DUE_LABELS = /(due\s*date|due\s*on|due\s*by|pay\s*by|payment\s*due|last\s*date(\s*of\s*payment)?|अंतिम\s*तिथि|अन्तिम\s*तिथि|देय\s*तिथि|अंतिम\s*दिनांक|भुगतान\s*की\s*अंतिम\s*तिथि)/giu;
 const VALID_LABELS = /(valid\s*(till|upto|up\s*to|until|thru|through)|expiry(\s*date)?|expires(\s*on)?|date\s*of\s*expiry|exp\.?\s*date|वैधता|समाप्ति(\s*तिथि)?|मान्य)/giu;
 
 /** "Valid till 12/2025": the end of that month. */
