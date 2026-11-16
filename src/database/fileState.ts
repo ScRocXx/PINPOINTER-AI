@@ -46,16 +46,6 @@ export interface PendingWork {
   embed: boolean;
 }
 
-/** Counts for a progress or health display. */
-export interface IndexingStats {
-  total: number;
-  ocrDone: number;
-  ocrFailed: number;
-  embedDone: number;
-  embedPending: number;
-  embedFailed: number;
-}
-
 // Every write lists every column: INSERT OR REPLACE would clear one left out.
 const COLUMNS = 'uri, kind, mtime, ocr_status, embed_status, embed_model, attempts, last_error, updated_at, fingerprint';
 const SELECT_ONE = `SELECT ${COLUMNS} FROM files WHERE uri = ?`;
@@ -228,10 +218,6 @@ export const markOcrDone = (uri: string, kind: FileKind = 'IMAGE') =>
 export const markEmbedDone = (uri: string, model: string = CURRENT_EMBED_MODEL) =>
   update(uri, (s) => ({ ...s, embed_status: 'done', embed_model: model, attempts: 0, last_error: null }));
 
-/** This file will never get an embedding (PDFs, or semantic search turned off). */
-export const markEmbedSkipped = (uri: string, kind: FileKind = 'IMAGE') =>
-  update(uri, (s) => ({ ...s, embed_status: 'skipped' }), kind);
-
 /** A stage failed for this file. After MAX_ATTEMPTS failures it is no longer retried. */
 export const markStageFailed = (uri: string, stage: Stage, error: unknown, kind: FileKind = 'IMAGE') =>
   update(
@@ -244,28 +230,6 @@ export const markStageFailed = (uri: string, stage: Stage, error: unknown, kind:
     }),
     kind,
   );
-
-/** Counts by stage, for showing progress and spotting broken models. */
-export const getIndexingStats = (): IndexingStats => {
-  const stats: IndexingStats = { total: 0, ocrDone: 0, ocrFailed: 0, embedDone: 0, embedPending: 0, embedFailed: 0 };
-  try {
-    const rows = getDb().executeSync(
-      'SELECT ocr_status, embed_status, COUNT(*) AS cnt FROM files GROUP BY ocr_status, embed_status',
-    )?.rows ?? [];
-    for (const raw of rows) {
-      const r = raw as unknown as { ocr_status: StageStatus; embed_status: StageStatus; cnt: number };
-      stats.total += r.cnt;
-      if (r.ocr_status === 'done') stats.ocrDone += r.cnt;
-      if (r.ocr_status === 'failed') stats.ocrFailed += r.cnt;
-      if (r.embed_status === 'done') stats.embedDone += r.cnt;
-      if (r.embed_status === 'pending') stats.embedPending += r.cnt;
-      if (r.embed_status === 'failed') stats.embedFailed += r.cnt;
-    }
-  } catch (e) {
-    AppLogger.warn('DB', 'getIndexingStats failed:', e);
-  }
-  return stats;
-};
 
 /** How many photos and papers have been looked at (read, or given up on). */
 export interface ReadyCounts {

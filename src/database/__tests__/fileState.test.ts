@@ -9,10 +9,8 @@ import {
   CURRENT_EMBED_MODEL,
   MAX_ATTEMPTS,
   getFileState,
-  getIndexingStats,
   getReadyCounts,
   markEmbedDone,
-  markEmbedSkipped,
   markOcrDone,
   markStageFailed,
   noteFileSeen,
@@ -182,13 +180,6 @@ describe('retries and model upgrades', () => {
     expect(noteFileSeen(URI, 'IMAGE')).toEqual({ ocr: false, embed: true });
   });
 
-  test('skipped embeddings are never pending', () => {
-    noteFileSeen(URI, 'IMAGE');
-    markOcrDone(URI);
-    markEmbedSkipped(URI);
-    expect(noteFileSeen(URI, 'IMAGE')).toEqual({ ocr: false, embed: false });
-  });
-
   test('pendingWork: embedding waits for OCR', () => {
     const base: FileState = {
       uri: URI, kind: 'IMAGE', mtime: null, ocr_status: 'failed', embed_status: 'pending',
@@ -233,36 +224,13 @@ describe('getImagesMissingEmbeddings with file state', () => {
   });
 });
 
-describe('getIndexingStats and clearIndex', () => {
-  test('counts files by stage', () => {
-    noteFileSeen('file:///1.jpg', 'IMAGE');
-    noteFileSeen('file:///2.jpg', 'IMAGE');
-    markOcrDone('file:///2.jpg');
-    markEmbedDone('file:///2.jpg');
-    noteFileSeen('file:///3.jpg', 'IMAGE');
-    markStageFailed('file:///3.jpg', 'ocr', 'x');
-    noteFileSeen('file:///4.jpg', 'IMAGE');
-    markOcrDone('file:///4.jpg');
-    markStageFailed('file:///4.jpg', 'embed', 'x');
-
-    expect(getIndexingStats()).toEqual({
-      total: 4, ocrDone: 2, ocrFailed: 1, embedDone: 1, embedPending: 2, embedFailed: 1,
-    });
-  });
-
-  test('returns zeros when the query fails', () => {
-    jest.spyOn(getDb(), 'executeSync').mockImplementation(() => {
-      throw new Error('db locked');
-    });
-    expect(getIndexingStats().total).toBe(0);
-  });
-
-  test('clearIndex forgets per-file progress', () => {
+describe('clearIndex', () => {
+  test('forgets per-file progress', () => {
     noteFileSeen(URI, 'IMAGE');
     markOcrDone(URI);
     clearIndex();
     expect(getFileState(URI)).toBeNull();
-    expect(getIndexingStats().total).toBe(0);
+    expect(getReadyCounts()).toEqual({ photos: 0, papers: 0 });
   });
 });
 

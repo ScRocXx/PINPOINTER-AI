@@ -4,11 +4,9 @@ import { SearchField } from '../../components/ui';
 import { useStrings } from '../../i18n';
 
 export interface SearchBarProps {
-  /** true: the editable field at the top of search; false: a big button that opens search (Home). */
-  isTop: boolean;
   searchText: string;
   onChangeText: (text: string) => void;
-  /** Called when the field is focused, or tapped on Home (opens search). */
+  /** Called when the field is focused. */
   onFocus: () => void;
   autoFocus: boolean;
   isRecording: boolean;
@@ -23,12 +21,12 @@ export interface SearchBarProps {
 }
 
 /**
- * The search field with the beam mic, from the UI kit. While listening the
- * ring stays on and the mic becomes a stop button; the search screen shows
- * the big listening panel underneath.
+ * The search screen's field with the beam mic, from the UI kit. While
+ * listening the ring stays on and the mic becomes a stop button; the search
+ * screen shows the big listening panel underneath. (Home has its own big
+ * search button in HomeView.)
  */
 export const SearchBar: React.FC<SearchBarProps> = ({
-  isTop,
   searchText,
   onChangeText,
   onFocus,
@@ -45,24 +43,6 @@ export const SearchBar: React.FC<SearchBarProps> = ({
   const { t } = useStrings();
   const busy = isTranscribing || isModelLoading;
   const onVoice = isRecording ? onStopListening : busy ? undefined : onStartListening;
-
-  if (!isTop) {
-    // The mic on Home opens search too: the listening panel lives there.
-    const onHomeVoice = () => {
-      if (!isRecording) onFocus();
-      onVoice?.();
-    };
-    return (
-      <SearchField
-        placeholder={t('search.placeholder')}
-        onPressFake={onFocus}
-        onVoicePress={onHomeVoice}
-        listening={isRecording}
-        containerStyle={style}
-        testID="search-bar-home"
-      />
-    );
-  }
 
   return (
     <SearchField

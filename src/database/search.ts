@@ -1,7 +1,7 @@
 /**
  * Search: FTS5 full-text search with LIKE fallback (synonyms, phonetic
- * matching, relevance ranking), photos that look like the query (CLIP), the
- * merge of the two, and snippet extraction.
+ * matching, relevance ranking), photos that look like the query (CLIP), and
+ * the merge of the two. (Snippets come from utils/MatchTerms.)
  */
 import { soundex } from '../utils/Soundex';
 import { searchWords, termsForQueryWord } from '../utils/SearchKeys';
@@ -484,38 +484,4 @@ const rankResults = (results: DocumentRecord[], query: string, words: string[]):
 
   scored.sort((a, b) => b.score - a.score);
   return scored.map(s => s.doc);
-};
-
-/**
- * Extract a text snippet (~80 chars) around the first match of the query keyword.
- * Used by the UI to show WHERE the match was found.
- */
-export const extractSnippet = (content: string, query: string, snippetLen = 80): string => {
-  if (!content || !query) return '';
-  const lower = content.toLowerCase();
-  const words = query.toLowerCase().split(/\s+/).filter(w => w.length > 0);
-
-  // Find the position of the first matching word
-  let matchPos = -1;
-  let matchWord = '';
-  for (const w of words) {
-    const pos = lower.indexOf(w);
-    if (pos !== -1 && (matchPos === -1 || pos < matchPos)) {
-      matchPos = pos;
-      matchWord = w;
-    }
-  }
-
-  if (matchPos === -1) return content.substring(0, snippetLen) + (content.length > snippetLen ? '...' : '');
-
-  // Extract a window around the match
-  const halfLen = Math.floor(snippetLen / 2);
-  let start = Math.max(0, matchPos - halfLen);
-  let end = Math.min(content.length, matchPos + matchWord.length + halfLen);
-
-  let snippet = content.substring(start, end).replace(/\n/g, ' ').trim();
-  if (start > 0) snippet = '...' + snippet;
-  if (end < content.length) snippet += '...';
-
-  return snippet;
 };

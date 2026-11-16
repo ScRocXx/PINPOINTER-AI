@@ -38,8 +38,6 @@ export const en = {
   'common.gallery': 'Gallery',
   'common.remove': 'Remove',
   'common.onThisPhone': 'On this phone',
-  'common.more': 'More options',
-  'common.loading': 'Loading',
   'common.appName': 'Pinpointer',
 
   // Home
@@ -88,9 +86,7 @@ export const en = {
   'progress.allPapersReady': 'All {total} papers ready',
   'progress.checked': 'Checked {when}',
   'progress.checkAgain': 'Check again',
-  'progress.findNewPhotos': 'Find new photos',
   'progress.findNewPapers': 'Find new papers',
-  'progress.paused': 'Paused',
   'progress.pause': 'Pause',
   'progress.resume': 'Resume',
   'progress.keepsGoing': 'Keeps going while charging',
@@ -127,7 +123,6 @@ export const en = {
   'search.showMore': 'Show {n} more',
   'search.textMatch': 'Words match',
   'search.looksLike': 'Looks similar',
-  'search.foundHere': 'Found “{q}” here',
   'search.photo': 'Photo',
   'search.paper': 'Paper',
   'search.close': 'Close search',
@@ -272,8 +267,6 @@ export const en = {
   'papers.add': 'Add a folder or PDF',
   'papers.emptyTitle': 'No papers yet',
   'papers.emptyBody': 'Pinpointer looks for PDFs in Downloads and Documents, and in folders you choose.',
-  'papers.pages': '{n} pages',
-  'papers.onePage': '1 page',
   'papers.cat.id': 'ID cards',
   'papers.cat.bills': 'Bills',
   'papers.cat.bank': 'Bank',
@@ -311,8 +304,6 @@ export const en = {
   'papers.folderAdded': 'Added “{name}”. Looking for papers now.',
   'papers.pdfsAdded': '{n} PDFs added',
   'papers.onePdfAdded': '1 PDF added',
-  'papers.more': 'More for {title}',
-  'papers.open': 'Open',
   'papers.openFailed': 'This paper could not be opened.',
 
   // Where Pinpointer looks for PDFs
@@ -466,7 +457,6 @@ export const en = {
   'lang.hi': 'हिन्दी',
 
   // Errors
-  'error.generic': 'Something went wrong. Please try again.',
   'error.fileGone': 'This file is no longer on your phone.',
 } as const;
 
@@ -494,8 +484,6 @@ export const hi: Record<StringKey, string> = {
   'common.gallery': 'गैलरी',
   'common.remove': 'हटाएँ',
   'common.onThisPhone': 'इसी फ़ोन पर',
-  'common.more': 'और विकल्प',
-  'common.loading': 'लोड हो रहा है',
   'common.appName': 'Pinpointer',
 
   'home.greetingMorning': 'सुप्रभात',
@@ -541,9 +529,7 @@ export const hi: Record<StringKey, string> = {
   'progress.allPapersReady': 'सभी {total} कागज़ तैयार',
   'progress.checked': '{when} जाँचा गया',
   'progress.checkAgain': 'फिर से जाँचें',
-  'progress.findNewPhotos': 'नई फ़ोटो ढूँढें',
   'progress.findNewPapers': 'नए कागज़ ढूँढें',
-  'progress.paused': 'रुका हुआ',
   'progress.pause': 'रोकें',
   'progress.resume': 'फिर शुरू करें',
   'progress.keepsGoing': 'चार्जिंग के समय चलता रहता है',
@@ -578,7 +564,6 @@ export const hi: Record<StringKey, string> = {
   'search.showMore': '{n} और दिखाएँ',
   'search.textMatch': 'शब्द मिले',
   'search.looksLike': 'मिलती-जुलती',
-  'search.foundHere': '“{q}” यहाँ मिला',
   'search.photo': 'फ़ोटो',
   'search.paper': 'कागज़',
   'search.close': 'खोज बंद करें',
@@ -719,8 +704,6 @@ export const hi: Record<StringKey, string> = {
   'papers.add': 'फ़ोल्डर या PDF जोड़ें',
   'papers.emptyTitle': 'अभी कोई कागज़ नहीं',
   'papers.emptyBody': 'Pinpointer डाउनलोड और डॉक्यूमेंट्स में, और आपके चुने फ़ोल्डरों में PDF ढूँढता है।',
-  'papers.pages': '{n} पेज',
-  'papers.onePage': '1 पेज',
   'papers.cat.id': 'पहचान पत्र',
   'papers.cat.bills': 'बिल',
   'papers.cat.bank': 'बैंक',
@@ -758,8 +741,6 @@ export const hi: Record<StringKey, string> = {
   'papers.folderAdded': '“{name}” जुड़ गया। कागज़ ढूँढ रहे हैं।',
   'papers.pdfsAdded': '{n} PDF जुड़ गईं',
   'papers.onePdfAdded': '1 PDF जुड़ गई',
-  'papers.more': '{title} के लिए और विकल्प',
-  'papers.open': 'खोलें',
   'papers.openFailed': 'यह कागज़ खुल नहीं सका।',
 
   'folders.subtitle': 'Pinpointer सिर्फ़ इन जगहों पर PDF पढ़ता है।',
@@ -905,7 +886,6 @@ export const hi: Record<StringKey, string> = {
   'lang.en': 'English',
   'lang.hi': 'हिन्दी',
 
-  'error.generic': 'कुछ गड़बड़ हो गई। कृपया फिर से कोशिश करें।',
   'error.fileGone': 'यह फ़ाइल अब आपके फ़ोन पर नहीं है।',
 };
 

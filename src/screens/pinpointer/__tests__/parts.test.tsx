@@ -1,5 +1,5 @@
 import React from 'react';
-import { AccessibilityInfo, Alert, NativeEventEmitter, View } from 'react-native';
+import { AccessibilityInfo, Alert, NativeEventEmitter } from 'react-native';
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import type { DocumentRecord } from '../../../database';
 import { ListeningPanel } from '../ListeningPanel';
@@ -270,7 +270,6 @@ describe('NothingFound', () => {
 
 describe('SearchBar', () => {
   const props = (over: Partial<SearchBarProps> = {}): SearchBarProps => ({
-    isTop: true,
     searchText: '',
     onChangeText: jest.fn(),
     onFocus: jest.fn(),
@@ -281,17 +280,6 @@ describe('SearchBar', () => {
     onStartListening: jest.fn(),
     onStopListening: jest.fn(),
     ...over,
-  });
-
-  it('on Home is one big button; its mic opens search and starts listening', async () => {
-    const p = props({ isTop: false });
-    await render(<View><SearchBar {...p} /></View>);
-    expect(screen.queryByTestId('search-bar-home-input')).toBeNull();
-    await fireEvent.press(screen.getByTestId('search-bar-home-open'));
-    expect(p.onFocus).toHaveBeenCalledTimes(1);
-    await fireEvent.press(screen.getByRole('button', { name: 'Search by voice' }));
-    expect(p.onFocus).toHaveBeenCalledTimes(2);
-    expect(p.onStartListening).toHaveBeenCalledTimes(1);
   });
 
   it('in search types, and the mic becomes a stop button while listening', async () => {

@@ -99,7 +99,7 @@ Lightning-fast, fully offline search engine:
 ### 🎙️ **Voice Intelligence**
 
 - 🗣️ **Voice Search**: Speak your query and it is transcribed on the device (no internet required)
-- 🧠 Powered by Whisper base.en through sherpa-onnx (English speech for now)
+- 🧠 Powered by sherpa-onnx: Whisper base.en for English, indic-lekhan for Hindi
 - ✅ Fully offline, hands-free search
 
 ---
@@ -141,7 +141,7 @@ Lightning-fast, fully offline search engine:
 | **ML/AI** | Google ML Kit, MobileCLIP2-S0 (int8) on ONNX Runtime |
 | **OCR** | ML Kit Latin + Devanagari |
 | **Search** | FTS5 + vector search, Soundex and Indian-language sound keys |
-| **Speech** | On-device speech-to-text with sherpa-onnx (Whisper base.en) |
+| **Speech** | On-device speech-to-text with sherpa-onnx (Whisper base.en, indic-lekhan for Hindi) |
 
 ---
 

@@ -18,7 +18,6 @@ import {
   performFullGallerySync,
   loadSavedCursor,
   clearSyncCursor,
-  getGallerySyncLimit,
   getGalleryTotalCount,
   backfillEmbeddings,
   indexPhoto,
@@ -643,10 +642,6 @@ describe('cursor helpers', () => {
 });
 
 describe('sync limits', () => {
-  test('getGallerySyncLimit returns -1 (unlimited)', async () => {
-    await expect(getGallerySyncLimit()).resolves.toBe(-1);
-  });
-
   test('getGalleryTotalCount adds up the photo albums', async () => {
     (CameraRoll.getAlbums as jest.Mock).mockResolvedValueOnce([
       { id: '1', title: 'Camera', count: 2100, type: 'Album' },

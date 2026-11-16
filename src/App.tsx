@@ -104,14 +104,9 @@ const App: React.FC = () => {
           <Stack.Navigator
             // A new install starts with the welcome; otherwise the tabs (Home first)
             initialRouteName={firstRun === 'show' ? 'FirstRun' : 'Main'}
+            // No screen shows the stack's own header: each draws its own.
             screenOptions={{
-              headerStyle: {
-                backgroundColor: AppColors.primaryDark,
-                elevation: 0,
-                shadowOpacity: 0,
-              },
-              headerTintColor: AppColors.textPrimary,
-              headerTitleStyle: { fontWeight: '700', fontSize: 18 },
+              headerShown: false,
               cardStyle: { backgroundColor: AppColors.primaryDark },
               ...TransitionPresets.SlideFromRightIOS,
             }}
@@ -120,15 +115,15 @@ const App: React.FC = () => {
             <Stack.Screen
               name="FirstRun"
               component={FirstRunScreen}
-              options={{ headerShown: false, gestureEnabled: false, cardStyle: { backgroundColor: Colors.canvas } }}
+              options={{ gestureEnabled: false, cardStyle: { backgroundColor: Colors.canvas } }}
             />
 
             {/* Home, Photos, Papers, Settings */}
-            <Stack.Screen name="Main" component={MainTabs} options={{ headerShown: false }} />
+            <Stack.Screen name="Main" component={MainTabs} />
 
             {/* Opened on top of the tabs */}
-            <Stack.Screen name="SmartClipboard" component={SmartClipboardScreen} options={{ headerShown: false }} />
-            <Stack.Screen name="PdfFolders" component={PdfFoldersScreen} options={{ headerShown: false }} />
+            <Stack.Screen name="SmartClipboard" component={SmartClipboardScreen} />
+            <Stack.Screen name="PdfFolders" component={PdfFoldersScreen} />
           </Stack.Navigator>
         </NavigationContainer>
         )}

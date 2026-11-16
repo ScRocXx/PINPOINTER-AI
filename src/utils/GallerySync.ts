@@ -190,8 +190,6 @@ const embedPhoto = async (uri: string, knownDocId?: number): Promise<PhotoOutcom
     return recordEmbedding(uri, docId, embedding) ? 'embedded' : 'failed';
 };
 
-/** Maximum photos the gallery sync will process (-1 = stub, not yet implemented). */
-export const getGallerySyncLimit = async (): Promise<number> => -1;
 /**
  * How many photos Pinpointer can see, for "120 of 2,400" progress. Android
  * groups every photo into one album (its folder), so the album counts add up

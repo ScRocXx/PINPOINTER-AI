@@ -3,7 +3,7 @@ import { NavigatorScreenParams } from '@react-navigation/native';
 /** The four bottom tabs (inside the stack's `Main` route). */
 export type MainTabParamList = {
   /** Home and search. */
-  Pinpointer: { startUniversalSync?: boolean } | undefined;
+  Pinpointer: undefined;
   /** All photos. */
   Gallery: undefined;
   /** Papers (PDFs). */

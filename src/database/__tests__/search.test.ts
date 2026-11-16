@@ -19,7 +19,7 @@ import { indexDocument } from '../documents';
 import { setFingerprint } from '../fileState';
 import { getEmbeddingCount, indexEmbedding, MIN_PHOTOS_FOR_STAND_OUT } from '../vectors';
 import { soundex } from '../../utils/Soundex';
-import { extractSnippet, mergeByRank, searchDocuments, searchDocumentsAsync, understandQuery, MAX_VECTOR_DISTANCE, RANK_K, TEXT_WEIGHT } from '../search';
+import { mergeByRank, searchDocuments, searchDocumentsAsync, understandQuery, MAX_VECTOR_DISTANCE, RANK_K, TEXT_WEIGHT } from '../search';
 import type { DocumentRecord } from '../types';
 
 // Top-level import: jest's moduleNameMapper routes this to the SAME mock
@@ -576,73 +576,5 @@ describe('test isolation — mock state resets between tests', () => {
     // Would fail if __resetAll() cleared a different mock instance than the
     // one the database modules use (the jest.requireMock double-eval trap).
     expect(getEmbeddingCount()).toBe(0);
-  });
-});
-
-describe('extractSnippet', () => {
-  test('match in the middle → windowed with ... on both sides', () => {
-    const content = 'x'.repeat(100) + 'needle' + 'y'.repeat(100);
-    const expected = '...' + 'x'.repeat(40) + 'needle' + 'y'.repeat(40) + '...';
-    expect(extractSnippet(content, 'needle')).toBe(expected);
-  });
-
-  test('match at the start → no leading ...', () => {
-    const content = 'needle ' + 'z'.repeat(100);
-    const expected = 'needle ' + 'z'.repeat(39) + '...';
-    const res = extractSnippet(content, 'needle');
-    expect(res).toBe(expected);
-    expect(res.startsWith('...')).toBe(false);
-  });
-
-  test('match near the end → leading ... only', () => {
-    const content = 'x'.repeat(200) + 'needle';
-    const expected = '...' + 'x'.repeat(40) + 'needle';
-    const res = extractSnippet(content, 'needle');
-    expect(res).toBe(expected);
-    expect(res.endsWith('...')).toBe(false);
-  });
-
-  test('no match in long content → first 80 chars + ...', () => {
-    const content = 'a'.repeat(100);
-    expect(extractSnippet(content, 'zzz')).toBe('a'.repeat(80) + '...');
-  });
-
-  test('no match in short content → content as-is, no ...', () => {
-    expect(extractSnippet('short text', 'zzz')).toBe('short text');
-  });
-
-  test('empty content or query → empty string', () => {
-    expect(extractSnippet('', 'needle')).toBe('');
-    expect(extractSnippet('some content', '')).toBe('');
-    expect(extractSnippet('', '')).toBe('');
-  });
-
-  test('custom snippetLen is respected', () => {
-    const content = 'x'.repeat(100) + 'needle' + 'y'.repeat(100);
-    const expected = '...' + 'x'.repeat(10) + 'needle' + 'y'.repeat(10) + '...';
-    expect(extractSnippet(content, 'needle', 20)).toBe(expected);
-  });
-
-  test('newlines in the window are replaced with spaces', () => {
-    const content = 'line one\nline two needle here\nline three';
-    expect(extractSnippet(content, 'needle')).toBe('line one line two needle here line three');
-  });
-
-  test('multi-word query centers on the earliest matching word', () => {
-    // Long enough that the 80-char window truncates the tail.
-    const content = 'the second word appears before the first word here ' + 'z'.repeat(100);
-    const res = extractSnippet(content, 'second first');
-    expect(res.startsWith('the second')).toBe(true);
-    expect(res.startsWith('...')).toBe(false);
-    expect(res.endsWith('...')).toBe(true);
-    expect(res).toContain('second');
-  });
-
-  test('matching is case-insensitive', () => {
-    expect(extractSnippet('The Quick Brown Fox', 'QUICK')).toBe('The Quick Brown Fox');
-  });
-
-  test('whole short content with a match returns the content unchanged', () => {
-    expect(extractSnippet('hello world', 'world')).toBe('hello world');
   });
 });

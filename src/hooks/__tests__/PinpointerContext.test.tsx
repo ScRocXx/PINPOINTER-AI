@@ -23,7 +23,7 @@ const mockUsePinpointer = usePinpointer as jest.Mock;
 describe('PinpointerContext', () => {
     const mockValue = {
         searchText: 'shared',
-        handleScan: jest.fn(),
+        handleDeepSync: jest.fn(),
         isSyncing: true,
     } as unknown as ReturnType<typeof usePinpointer>;
 

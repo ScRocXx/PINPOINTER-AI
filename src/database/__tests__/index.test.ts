@@ -28,7 +28,6 @@ const EXPECTED_EXPORTS = [
   'closeDatabase',
   'commitTransaction',
   'countCheckedFiles',
-  'extractSnippet',
   'getAllDocuments',
   'getDocumentByPath',
   'getDocumentId',
@@ -37,7 +36,6 @@ const EXPECTED_EXPORTS = [
   'getFileState',
   'getImagesMissingEmbeddings',
   'getIndexedCount',
-  'getIndexingStats',
   'getReadyCounts',
   'hasEmbedding',
   'indexDocument',
@@ -52,7 +50,6 @@ const EXPECTED_EXPORTS = [
   'fingerprintsFor',
   'getEmbedding',
   'markEmbedDone',
-  'markEmbedSkipped',
   'markOcrDone',
   'markStageFailed',
   'noteFileSeen',
@@ -134,9 +131,6 @@ describe('end-to-end smoke through the barrel', () => {
     expect(hits.length).toBeGreaterThan(0);
     const record: DocumentRecord = hits[0];
     expect(record.filePath).toBe('/compat/smoke.jpg');
-
-    const snippet = Database.extractSnippet(record.content, 'searchable');
-    expect(snippet).toContain('searchable');
 
     Database.clearIndex();
     expect(Database.getIndexedCount()).toBe(0);

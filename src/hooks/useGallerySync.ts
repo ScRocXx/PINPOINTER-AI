@@ -20,7 +20,6 @@ export const useGallerySync = () => {
     const [isPaused, setIsPaused] = useState(false);
     const [isDeepSync, setIsDeepSync] = useState(false);
     const [syncCount, setSyncCount] = useState(0);
-    const [totalImages] = useState(0);
     const [lastSyncTime, setLastSyncTime] = useState<number | null>(null);
 
     // Give already-indexed photos that lack a CLIP embedding one, in the
@@ -131,7 +130,7 @@ export const useGallerySync = () => {
     }, [runSync]);
 
     return {
-        isSyncing, isPaused, isDeepSync, syncCount, totalImages, lastSyncTime,
+        isSyncing, isPaused, isDeepSync, syncCount, lastSyncTime,
         handleQuickSync, handleDeepSync, handlePauseSync, handleResumeSync,
         loadPersistedCount,
     };

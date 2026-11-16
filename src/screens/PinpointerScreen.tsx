@@ -1,6 +1,5 @@
 import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
-import { ModelDownloadSheet } from '../components';
-import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
+import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../navigation/types';
 import type { MainTabNavigationOptions } from '../navigation/MainTabs';
@@ -13,6 +12,7 @@ import {
     View,
     TextInput,
     Keyboard,
+    StyleSheet,
     Vibration,
     BackHandler,
 } from 'react-native';
@@ -20,7 +20,6 @@ import { usePinpointerShared } from '../hooks/PinpointerContext';
 import { Home } from './pinpointer/Home';
 import { SearchBar } from './pinpointer/SearchBar';
 import { SearchOverlay } from './pinpointer/SearchOverlay';
-import { styles } from './pinpointer/styles';
 
 /**
  * Main Pinpointer screen: universal search over indexed photos and documents.
@@ -40,14 +39,11 @@ export const PinpointerScreen: React.FC = () => {
         isSearching, setIsSearching, isSearchPending,
         isRecording, isTranscribing, isModelLoading,
         startListening, stopListening, cancelListening,
-        isSyncing, isPaused, syncCount, totalImages,
+        isSyncing, isPaused, syncCount,
         handleDeepSync, handleDocumentSync,
         searchHistory, handleSelectHistory, handleDeleteHistory, handleClearHistory,
     } = usePinpointerShared();
 
-    const route = useRoute<RouteProp<RootStackParamList, 'Pinpointer'>>();
-
-    const [showModelSheet, setShowModelSheet] = useState(false);
     // The photos as they were when one was tapped, so a re-rank underneath
     // doesn't move the viewer to another photo.
     const [viewer, setViewer] = useState<{ items: ViewerItem[]; index: number; query: string } | null>(null);
@@ -88,16 +84,6 @@ export const PinpointerScreen: React.FC = () => {
 
         return () => backHandler.remove();
     }, [isSearching, isRecording, isTranscribing, cancelListening, setIsSearching, setSearchText]);
-
-    // Another screen can ask for a look through all photos (startUniversalSync)
-    useEffect(() => {
-        if (route.params?.startUniversalSync) {
-            // Automatically launch the heavy gallery sync
-            handleDeepSync();
-            // Clear parameter so it doesn't re-trigger on subsequent un-related mounts
-            navigation.setParams({ startUniversalSync: false });
-        }
-    }, [route.params?.startUniversalSync, handleDeepSync, navigation]);
 
     const handleBackPress = () => {
         if (isRecording || isTranscribing) cancelListening();
@@ -156,9 +142,8 @@ export const PinpointerScreen: React.FC = () => {
         handleDocumentSync();
     };
 
-    const renderSearchBar = (isTop: boolean) => (
+    const searchBar = (
         <SearchBar
-            isTop={isTop}
             searchText={searchText}
             onChangeText={setSearchText}
             onFocus={handleSearchFocus}
@@ -168,7 +153,7 @@ export const PinpointerScreen: React.FC = () => {
             isModelLoading={isModelLoading}
             onStartListening={startListening}
             onStopListening={stopListening}
-            active={isTop && isSearchPending}
+            active={isSearchPending}
             inputRef={searchInputRef}
         />
     );
@@ -207,8 +192,8 @@ export const PinpointerScreen: React.FC = () => {
                     isTranscribing={isTranscribing}
                     onStopListening={stopListening}
                     onCancelListening={cancelListening}
-                    indexing={isSyncing && !isPaused ? { done: syncCount, total: totalImages || undefined } : null}
-                    searchBar={renderSearchBar(true)}
+                    indexing={isSyncing && !isPaused ? { done: syncCount } : null}
+                    searchBar={searchBar}
                 />
             </View>
 
@@ -229,12 +214,11 @@ export const PinpointerScreen: React.FC = () => {
                 highlightTerms={viewerTerms}
                 testID="search-photo-viewer"
             />
-
-            {/* MODEL DOWNLOAD SHEET */}
-            <ModelDownloadSheet
-                visible={showModelSheet}
-                onClose={() => setShowModelSheet(false)}
-            />
         </View>
     );
 };
+
+const styles = StyleSheet.create({
+    container: { flex: 1 },
+    flex1: { flex: 1 },
+});

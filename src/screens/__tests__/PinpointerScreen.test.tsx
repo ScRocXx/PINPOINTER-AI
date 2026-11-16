@@ -19,7 +19,6 @@ jest.mock('../../hooks/PinpointerContext', () => ({
 
 jest.mock('@react-navigation/native', () => ({
   useNavigation: jest.fn(),
-  useRoute: jest.fn(),
 }));
 
 // Home's own data (tiles from the database, photo totals from MediaStore)
@@ -48,12 +47,6 @@ jest.mock('../../utils/DocumentClassifier', () => ({
   classifyDocument: jest.fn(() => ({ emoji: '📄', category: 'OTHER', confidence: 1 })),
 }));
 
-// ModelDownloadSheet calls useModelService() unconditionally, which throws
-// outside a ModelServiceProvider — replace just that component.
-jest.mock('../../components/ModelDownloadSheet', () => ({
-  ModelDownloadSheet: () => null,
-}));
-
 import React from 'react';
 import { AccessibilityInfo, Alert, NativeModules } from 'react-native';
 import {
@@ -69,7 +62,7 @@ import RNFS from 'react-native-fs';
 
 import { PinpointerScreen } from '../PinpointerScreen';
 import { usePinpointerShared } from '../../hooks/PinpointerContext';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { useNavigation } from '@react-navigation/native';
 import { addRecentPhoto } from '../../utils/RecentPhotos';
 import { forgetIfGone } from '../../utils/MissingFiles';
 import { useHomeOverview } from '../../hooks/useHomeOverview';
@@ -94,7 +87,6 @@ interface ScreenState {
   isPaused: boolean;
   isDeepSync: boolean;
   syncCount: number;
-  totalImages: number;
   lastSyncTime: number | null;
   isSyncingDocs: boolean;
   docSyncCount: number;
@@ -115,7 +107,6 @@ const baseState = (): ScreenState => ({
   isPaused: false,
   isDeepSync: false,
   syncCount: 0,
-  totalImages: 0,
   lastSyncTime: null,
   isSyncingDocs: false,
   docSyncCount: 0,
@@ -143,7 +134,7 @@ const baseOverview = (): HomeOverview => ({
   photosChecked: null,
   recent: [],
 });
-let mockNav: { navigate: jest.Mock; setParams: jest.Mock };
+let mockNav: { navigate: jest.Mock };
 
 const makeActions = (): Record<string, jest.Mock> => ({
   setSearchText: jest.fn((v: string) => { state.searchText = v; }),
@@ -151,7 +142,6 @@ const makeActions = (): Record<string, jest.Mock> => ({
   startListening: jest.fn(),
   stopListening: jest.fn(),
   cancelListening: jest.fn(),
-  handleScan: jest.fn(),
   handleQuickSync: jest.fn(),
   handleDeepSync: jest.fn(),
   handlePauseSync: jest.fn(),
@@ -176,7 +166,6 @@ const makeCtx = () => ({
   startListening: actions.startListening,
   stopListening: actions.stopListening,
   cancelListening: actions.cancelListening,
-  handleScan: actions.handleScan,
   handleQuickSync: actions.handleQuickSync,
   handleDeepSync: actions.handleDeepSync,
   handlePauseSync: actions.handlePauseSync,
@@ -185,7 +174,6 @@ const makeCtx = () => ({
   isPaused: state.isPaused,
   isDeepSync: state.isDeepSync,
   syncCount: state.syncCount,
-  totalImages: state.totalImages,
   lastSyncTime: state.lastSyncTime,
   isSyncingDocs: state.isSyncingDocs,
   docSyncCount: state.docSyncCount,
@@ -249,7 +237,7 @@ beforeEach(() => {
 
   state = baseState();
   actions = makeActions();
-  mockNav = { navigate: jest.fn(), setParams: jest.fn() };
+  mockNav = { navigate: jest.fn() };
 
   (usePinpointerShared as jest.Mock).mockImplementation(() => makeCtx());
   overview = baseOverview();
@@ -258,7 +246,6 @@ beforeEach(() => {
   (useHomeOverview as jest.Mock).mockImplementation(() => overview);
   (usePinnedItems as jest.Mock).mockImplementation(() => ({ items: pinned, isPinned: () => false, toggle: toggleStar }));
   (useNavigation as jest.Mock).mockReturnValue(mockNav);
-  (useRoute as jest.Mock).mockReturnValue({ params: {} });
   (RNFS.exists as jest.Mock).mockResolvedValue(true);
   (addRecentPhoto as jest.Mock).mockResolvedValue(undefined);
 });
@@ -541,9 +528,8 @@ describe('PinpointerScreen — empty results', () => {
     state.searchText = 'zzz';
     state.isSyncing = true;
     state.syncCount = 10;
-    state.totalImages = 300;
     await renderScreen();
-    expect(screen.getByText(/still getting your photos ready \(10 of 300\)/)).toBeTruthy();
+    expect(screen.getByText(/still getting your photos ready/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Look through all photos' })).toBeNull();
   });
 
@@ -735,14 +721,7 @@ describe('PinpointerScreen — voice search in search', () => {
 });
 
 describe('PinpointerScreen — navigation', () => {
-  test('startUniversalSync route param triggers a deep sync once', async () => {
-    (useRoute as jest.Mock).mockReturnValue({ params: { startUniversalSync: true } });
-    await renderScreen();
-    expect(actions.handleDeepSync).toHaveBeenCalled();
-    expect(mockNav.setParams).toHaveBeenCalledWith({ startUniversalSync: false });
-  });
-
-  test('no route param means no automatic deep sync', async () => {
+  test('opening the screen does not start a look through all photos', async () => {
     await renderScreen();
     expect(actions.handleDeepSync).not.toHaveBeenCalled();
   });

@@ -111,7 +111,6 @@ describe('useGallerySync', () => {
       expect(result.current.isPaused).toBe(false);
       expect(result.current.isDeepSync).toBe(false);
       expect(result.current.syncCount).toBe(0);
-      expect(result.current.totalImages).toBe(0);
       expect(result.current.lastSyncTime).toBeNull();
     });
 
