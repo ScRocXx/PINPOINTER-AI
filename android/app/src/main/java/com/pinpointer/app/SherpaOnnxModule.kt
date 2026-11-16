@@ -20,7 +20,7 @@ import kotlin.concurrent.thread
  *  - Hindi: indic-lekhan, a small streaming Zipformer transducer (about 28 MB,
  *    CC BY 4.0, see models/hindi/NOTICE.txt). It is fed the whole recording at
  *    the end, like Whisper, and listens for the Hindi words of the person's own
- *    papers (hotwords, `setHotwords`).
+ *    papers and for the app's built-in search words (hotwords, `setHotwords`).
  * Only one model is in memory at a time: `initSTT` with the other language
  * frees the first.
  */
@@ -43,9 +43,9 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) : ReactContextBase
         private const val HINDI_VOCAB = "models/hindi/bpe.vocab"
 
         /**
-         * Boost per hotword token: sherpa-onnx's default. On synthetic Hindi
-         * speech with the voice's sampling noise on, 2.0 and up turned a correct
-         * "आधार कार्ड" into "पधार कार्ड"; 1.5 never changed a right phrase.
+         * Default boost per hotword token (sherpa-onnx's own default). Every
+         * hotword carries its own score (SpeechText.hotwordsLine), so this is
+         * only a fallback.
          */
         private const val HOTWORDS_SCORE = 1.5f
         /** How often the live mic level is sent to JS ("onSpeechVolume"). */
@@ -246,20 +246,21 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) : ReactContextBase
     }
 
     /**
-     * The Hindi words of the person's own papers, for the Hindi model to
-     * listen for. Anything that isn't a short Devanagari word is dropped
-     * (SpeechText.hotwordsLine).
-     * Resolves how many were kept.
+     * The words the Hindi model listens for: the Hindi words of the person's
+     * own papers, and the app's built-in search words at a gentler boost.
+     * Anything that isn't a short Devanagari word is dropped
+     * (SpeechText.hotwordsLine). Resolves how many were kept.
      */
     @ReactMethod
-    fun setHotwords(words: ReadableArray, promise: Promise) {
+    fun setHotwords(own: ReadableArray, builtIn: ReadableArray?, promise: Promise) {
         try {
-            val list = (0 until words.size()).mapNotNull { i ->
-                if (words.getType(i) == ReadableType.String) words.getString(i) else null
-            }
-            val line = SpeechText.hotwordsLine(list)
+            fun strings(array: ReadableArray?): List<String> =
+                if (array == null) emptyList() else (0 until array.size()).mapNotNull { i ->
+                    if (array.getType(i) == ReadableType.String) array.getString(i) else null
+                }
+            val line = SpeechText.hotwordsLine(strings(own), strings(builtIn))
             hotwords = line
-            promise.resolve(if (line.isEmpty()) 0 else line.count { it == '/' } + 1)
+            promise.resolve(SpeechText.hotwordCount(line))
         } catch (e: Exception) {
             promise.reject("HOTWORDS_ERROR", "Could not set hotwords: ${e.message}", e)
         }

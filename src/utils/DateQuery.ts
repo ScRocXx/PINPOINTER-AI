@@ -243,6 +243,9 @@ const FESTIVAL_WORDS: Record<FestivalId, string[]> = {
     independence: ['independence day', '15 august', 'स्वतंत्रता दिवस'],
 };
 
+/** Every name a festival is searched by, in any script ("diwali", "दिवाली", "रक्षा बंधन"). */
+export const festivalNames = (): string[] => Object.values(FESTIVAL_WORDS).flat();
+
 type Relative = 'today' | 'yesterday' | 'dayBefore' | 'thisWeek' | 'lastWeek' | 'thisMonth' | 'lastMonth' | 'thisYear' | 'lastYear';
 
 const RELATIVE_WORDS: Record<Relative, string[]> = {

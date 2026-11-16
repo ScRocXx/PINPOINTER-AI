@@ -16,14 +16,25 @@ class SpeechTextTest {
             " बिजली ", "दवाई", "बिजली", "bill", "बीएसईएस:2.0", "रमेश/कुमार", "#रमेश", "१२३", "राशन  कार्ड", "", "आधार।",
             "क".repeat(41),
         ))
-        assertEquals("बिजली/दवाई/राशन कार्ड", line)
+        assertEquals("बिजली :1.5/दवाई :1.5/राशन कार्ड :1.5", line)
+        assertEquals(3, SpeechText.hotwordCount(line))
+    }
+
+    @Test
+    fun builtInWordsGetTheGentlerBoostEvenWhenThePersonHasThemToo() {
+        val line = SpeechText.hotwordsLine(listOf("एलआईसी", "आधार"), listOf("आधार", "गैस", "gas", "गैस"))
+        assertEquals("एलआईसी :1.5/आधार :1.0/गैस :1.0", line)
     }
 
     @Test
     fun hotwordsAreCapped() {
-        val words = (0 until 500).map { i -> "क" + "ख".repeat(i % 20) + ('ग' + i % 20) + "घ".repeat(i / 20) }
-        assertTrue(SpeechText.hotwordsLine(words).split('/').size <= SpeechText.MAX_HOTWORDS)
+        val own = (0 until 300).map { i -> "क" + "ख".repeat(i % 20) + ('ग' + i % 20) + "घ".repeat(i / 20) }
+        val builtIn = (0 until 300).map { i -> "च" + "छ".repeat(i % 20) + ('ज' + i % 20) + "झ".repeat(i / 20) }
+        val words = SpeechText.hotwordsLine(own, builtIn).split('/')
+        assertEquals(SpeechText.MAX_HOTWORDS, words.size)
+        assertEquals(SpeechText.MAX_OWN_HOTWORDS, words.count { it.endsWith(":1.5") })
         assertEquals("", SpeechText.hotwordsLine(emptyList()))
+        assertEquals(0, SpeechText.hotwordCount(""))
     }
 
     @Test
