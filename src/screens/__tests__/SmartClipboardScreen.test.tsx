@@ -94,7 +94,7 @@ describe('SmartClipboardScreen', () => {
     await render(<SmartClipboardScreen />);
     await scan();
     expect(camera).toHaveBeenCalledWith(expect.objectContaining({ mediaType: 'photo', saveToPhotos: false }));
-    expect(analyze).toHaveBeenCalledWith(PHOTO);
+    expect(analyze).toHaveBeenCalledWith(PHOTO, { embed: false });
     expect(screen.getByRole('header', { name: t('scan.textFound') })).toBeTruthy();
     expect(screen.getByTestId('scan-text').props.value).toBe(BILL);
     expect(screen.getByText(t('scan.words', { n: 5 }))).toBeTruthy();
@@ -194,7 +194,7 @@ describe('SmartClipboardScreen', () => {
     analyze.mockResolvedValueOnce(vision());
     await fireEvent.press(screen.getByTestId('scan-retry'));
     await waitFor(() => expect(screen.getByTestId('scan-text-card')).toBeTruthy());
-    expect(analyze).toHaveBeenLastCalledWith(PHOTO);
+    expect(analyze).toHaveBeenLastCalledWith(PHOTO, { embed: false });
   });
 
   it('does nothing when the camera is cancelled', async () => {
@@ -215,7 +215,7 @@ describe('SmartClipboardScreen', () => {
     await waitFor(() => expect(screen.getByTestId('scan-text').props.value).toBe('Ticket'), {
       timeout: AUTO_SCAN_DELAY_MS + 1500,
     });
-    expect(analyze).toHaveBeenCalledWith('content://media/42');
+    expect(analyze).toHaveBeenCalledWith('content://media/42', { embed: false });
     expect(analyze).toHaveBeenCalledTimes(1);
   });
 

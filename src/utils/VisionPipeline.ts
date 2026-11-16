@@ -24,8 +24,17 @@ export interface VisionResult {
     search_index: string[];
     /** Audit field — tells whether object detection ran or was bypassed */
     optimized_status: string;
-    /** 512-dim MobileCLIP embedding vector (null if encoding failed) */
+    /** 512-dim MobileCLIP embedding vector (null if encoding failed, or not asked for) */
     embedding: Float32Array | null;
+}
+
+export interface AnalyzeOptions {
+    /**
+     * Also make the CLIP vector (default). Only gallery sync stores one: PDF
+     * pages and Scan pass false, so they don't load and run the image encoder
+     * for a vector nobody keeps.
+     */
+    embed?: boolean;
 }
 
 const MIN_TEXT_LENGTH = 3;
@@ -125,23 +134,27 @@ const runLabeling = async (uri: string): Promise<string[]> => {
 
 
 /**
- * Everything after the words are read: the CLIP vector, then text or, for a
- * photo without clean text, labels. `uri` is the image both read from.
+ * Everything after the words are read: the CLIP vector (when asked for), then
+ * text or, for a photo without clean text, labels. `uri` is the image both
+ * read from.
  */
 const finishAnalysis = async (
     uri: string,
     latin: string,
     hindi: string,
     readLabels: () => Promise<string[]>,
+    embed: boolean,
 ): Promise<VisionResult> => {
     const combinedText = [latin, hindi].filter(Boolean).join(' ').trim();
 
     // ── Step 4: Generate semantic embedding ────────────────────────────
     let embedding: Float32Array | null = null;
-    try {
-        embedding = await encodeImage(uri);
-    } catch {
-        // Non-fatal — image still searchable via text/labels
+    if (embed) {
+        try {
+            embedding = await encodeImage(uri);
+        } catch {
+            // Non-fatal — image still searchable via text/labels
+        }
     }
 
     // ── Step 2: Early exit if CLEAN text found ──────────────────────────────
@@ -200,13 +213,14 @@ const finishAnalysis = async (
  *  - search_index:   [original, transliteration, soundex, ...] for multilingual search
  *  - content:        flat joined string for SQLite LIKE queries
  *  - optimized_status: audit string
+ *  - embedding:      the CLIP vector, unless `embed: false`
  */
-export const analyzeImage = async (originalUri: string): Promise<VisionResult> => {
+export const analyzeImage = async (originalUri: string, { embed = true }: AnalyzeOptions = {}): Promise<VisionResult> => {
     // One decode, readable screenshots, background threads (native).
     const native = await readWithPhotoReader(originalUri);
     // Its labels came from the same bitmap; asking ML Kit's file loader for
     // them would decode the full original.
-    if (native) return finishAnalysis(originalUri, native.latin, native.hindi, async () => native.labels);
+    if (native) return finishAnalysis(originalUri, native.latin, native.hindi, async () => native.labels, embed);
 
     let processUri = originalUri;
 
@@ -233,7 +247,7 @@ export const analyzeImage = async (originalUri: string): Promise<VisionResult> =
     try {
         // ── Step 1: OCR ────────────────────────────────────────────────────────────
         const { latin, hindi } = await runOCR(processUri);
-        return await finishAnalysis(processUri, latin, hindi, () => runLabeling(processUri));
+        return await finishAnalysis(processUri, latin, hindi, () => runLabeling(processUri), embed);
     } finally {
         // H5 fix: delete ImageResizer temp file to prevent unbounded cache growth
         if (processUri !== originalUri) {

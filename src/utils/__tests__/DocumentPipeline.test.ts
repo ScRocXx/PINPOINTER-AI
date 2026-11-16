@@ -287,9 +287,10 @@ describe('Scanned PDF — rasterize + OCR path', () => {
         await processPDF(PDF_PATH);
 
         expect(analyzeImage).toHaveBeenCalledTimes(3);
-        expect(analyzeImage).toHaveBeenNthCalledWith(1, 'file:///tmp/p1.jpg');
-        expect(analyzeImage).toHaveBeenNthCalledWith(2, 'file:///tmp/p2.jpg');
-        expect(analyzeImage).toHaveBeenNthCalledWith(3, 'file:///tmp/p3.jpg');
+        // Words only: a PDF page never gets a CLIP vector.
+        expect(analyzeImage).toHaveBeenNthCalledWith(1, 'file:///tmp/p1.jpg', { embed: false });
+        expect(analyzeImage).toHaveBeenNthCalledWith(2, 'file:///tmp/p2.jpg', { embed: false });
+        expect(analyzeImage).toHaveBeenNthCalledWith(3, 'file:///tmp/p3.jpg', { embed: false });
     });
 
     test('combines per-page OCR content and reports OCR_COMPLETE', async () => {

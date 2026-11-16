@@ -184,7 +184,8 @@ const rasterizeAndOCR = async (
         for (let i = 0; i < imagePaths.length; i++) {
             try {
                 const imageUri = `file://${imagePaths[i]}`;
-                const result = await analyzeImage(imageUri);
+                // Words only: PDFs have no vector, so don't run CLIP on the page.
+                const result = await analyzeImage(imageUri, { embed: false });
 
                 if (result.content) {
                     // Truncate per-page content to prevent DB bloat

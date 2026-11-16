@@ -406,6 +406,16 @@ describe('VisionPipeline — analyzeImage', () => {
             expect(result.search_index).toEqual(['Hello', 'World', 'H400', 'W643']);
         });
 
+        test('embed: false reads the words and never runs CLIP (PDF pages, Scan)', async () => {
+            setOCR('Hello World');
+            const result = await analyzeImage(IMG, { embed: false });
+
+            expect(result.detection_type).toBe('TEXT');
+            expect(result.raw_text).toBe('Hello World');
+            expect(result.embedding).toBeNull();
+            expect(encodeImageNative).not.toHaveBeenCalled();
+        });
+
         test('ImageResizer rejects → soft fail: continues with original URI', async () => {
             resizeMock.mockRejectedValue(new Error('OOM'));
             setOCR('Hello World');
@@ -538,6 +548,14 @@ describe('analyzeImage — one decode with the native PhotoReader', () => {
         expect(readText).toHaveBeenCalledWith(IMG, expect.objectContaining({ scripts: ['latin', 'devanagari'], labelBelowChars: 20 }));
         expect(encodeImageNative).toHaveBeenCalledWith(IMG);
         expect(result.detection_type).toBe('TEXT');
+        expect(result.raw_text).toBe('Electricity bill amount 1240');
+    });
+
+    it('skips CLIP with embed: false', async () => {
+        readText.mockResolvedValue({ results: [{ script: 'latin', text: 'Electricity bill amount 1240' }] });
+        const result = await analyzeImage(IMG, { embed: false });
+        expect(encodeImageNative).not.toHaveBeenCalled();
+        expect(result.embedding).toBeNull();
         expect(result.raw_text).toBe('Electricity bill amount 1240');
     });
 
