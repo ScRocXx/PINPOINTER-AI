@@ -60,7 +60,6 @@ const EXPECTED_EXPORTS = [
   'understandQuery',
   'listNewest',
   'setupDatabase',
-  'getSimilarPhotos',
   'getSimilarPhotosAsync',
 ].sort();
 

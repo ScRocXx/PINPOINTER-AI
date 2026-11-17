@@ -5,7 +5,7 @@
 import * as connection from '../connection';
 import { indexDocument } from '../documents';
 import { searchDocuments } from '../search';
-import { getCollectionPreview, getSimilarPhotos, getSimilarPhotosAsync } from '../collections';
+import { getCollectionPreview, getSimilarPhotosAsync } from '../collections';
 import { indexEmbedding } from '../vectors';
 import { countCheckedFiles, markOcrDone, markStageFailed, noteFileSeen, setFingerprint } from '../fileState';
 import { getCollection } from '../../utils/Collections';
@@ -108,39 +108,6 @@ describe('getCollectionPreview', () => {
   });
 });
 
-describe('getSimilarPhotos', () => {
-  test('is empty without the vector index', () => {
-    jest.spyOn(connection, 'isVecAvailable').mockReturnValue(false);
-    expect(getSimilarPhotos(new Float32Array(512))).toEqual([]);
-  });
-
-  test('returns photo paths, closest first, only those that stand out', () => {
-    const unit = (cosine: number, axis: number): Float32Array => {
-      const v = new Float32Array(512);
-      v[0] = cosine;
-      v[axis] = Math.sqrt(1 - cosine * cosine);
-      return v;
-    };
-    const query = unit(1, 1);
-    const add = (path: string, type: 'IMAGE' | 'DOCUMENT', cosine: number, axis: number) =>
-      indexEmbedding(indexDocument(null, 'words', path, type, 'TEXT')!, unit(cosine, axis));
-    for (let i = 0; i < 24; i++) add(`/photos/far${i}.jpg`, 'IMAGE', 0.05, 2 + i);
-    add('/photos/b.jpg', 'IMAGE', 0.3, 100);
-    add('/photos/a.jpg', 'IMAGE', 0.4, 101);
-    add('/docs/paper.pdf', 'DOCUMENT', 0.5, 102); // close, but not a photo
-    expect(getSimilarPhotos(query, 9)).toEqual(['/photos/a.jpg', '/photos/b.jpg']);
-    expect(getSimilarPhotos(query, 1)).toEqual([]); // the one nearest row is the paper
-  });
-
-  test('a vector query error gives no photos', () => {
-    jest.spyOn(connection, 'isVecAvailable').mockReturnValue(true);
-    jest.spyOn(connection.getDb(), 'executeSync').mockImplementation(() => {
-      throw new Error('no vec0');
-    });
-    expect(getSimilarPhotos(new Float32Array(512))).toEqual([]);
-  });
-});
-
 describe('getSimilarPhotosAsync', () => {
   const unit = (cosine: number, axis: number): Float32Array => {
     const v = new Float32Array(512);
@@ -149,16 +116,16 @@ describe('getSimilarPhotosAsync', () => {
     return v;
   };
 
-  test('gives the same photos as getSimilarPhotos', async () => {
+  test('returns photo paths, closest first, only those that stand out', async () => {
     const query = unit(1, 1);
     const add = (path: string, type: 'IMAGE' | 'DOCUMENT', cosine: number, axis: number) =>
       indexEmbedding(indexDocument(null, 'words', path, type, 'TEXT')!, unit(cosine, axis));
     for (let i = 0; i < 24; i++) add(`/photos/far${i}.jpg`, 'IMAGE', 0.05, 2 + i);
     add('/photos/b.jpg', 'IMAGE', 0.3, 100);
     add('/photos/a.jpg', 'IMAGE', 0.4, 101);
-    add('/docs/paper.pdf', 'DOCUMENT', 0.5, 102);
+    add('/docs/paper.pdf', 'DOCUMENT', 0.5, 102); // close, but not a photo
     await expect(getSimilarPhotosAsync(query, 9)).resolves.toEqual(['/photos/a.jpg', '/photos/b.jpg']);
-    await expect(getSimilarPhotosAsync(query, 1)).resolves.toEqual(getSimilarPhotos(query, 1));
+    await expect(getSimilarPhotosAsync(query, 1)).resolves.toEqual([]); // the one nearest row is the paper
   });
 
   test('is empty without the vector index or when the read connection fails', async () => {

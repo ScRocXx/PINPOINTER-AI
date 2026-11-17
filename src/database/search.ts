@@ -15,7 +15,7 @@ import { AppLogger } from '../utils/AppLogger';
 import { getDb, getReadDb, isFtsAvailable } from './connection';
 import { processResults } from './documents';
 import { collectionTerms } from './collectionTerms';
-import { findLookAlikes, findLookAlikesAsync } from './vectors';
+import { findLookAlikesAsync } from './vectors';
 import type { DocumentRecord } from './types';
 
 // ─── Synonym Map for Indian Documents ───────────────────────────────────────
@@ -80,14 +80,7 @@ const inIdOrder = (ids: number[], result: Parameters<typeof processResults>[0]):
   return ids.map(id => byId.get(id)).filter((doc): doc is DocumentRecord => !!doc);
 };
 
-/** The photos that look like the query vector, closest first. */
-const searchByLook = (queryVector: Float32Array, limit?: number): DocumentRecord[] => {
-  const ids = findLookAlikes(queryVector, limit).map(l => l.documentId);
-  if (ids.length === 0) return [];
-  return inIdOrder(ids, getDb().executeSync(BY_IDS_SQL(ids.length), ids));
-};
-
-/** searchByLook on the read connection, off the JS thread. */
+/** The photos that look like the query vector, closest first (read connection, off the JS thread). */
 const searchByLookAsync = async (queryVector: Float32Array, limit?: number): Promise<DocumentRecord[]> => {
   const ids = (await findLookAlikesAsync(queryVector, limit)).map(l => l.documentId);
   if (ids.length === 0) return [];
@@ -271,46 +264,31 @@ const withoutCopies = (docs: DocumentRecord[]): DocumentRecord[] =>
   collapseCopies(docs, fingerprintsFor(docs.map(d => d.filePath)));
 
 /**
- * Search documents by their words and, when `queryVector` is given, by what
- * the photos look like.
+ * Search documents by their words: FTS5 if available, else LIKE. Title and
+ * content, every word of the query must match (filler words like "of" are
+ * left out), synonym expansion for common Indian document terms. A query
+ * that names a Home collection ("ID cards", "पहचान पत्र") finds every concept
+ * in it (Aadhaar, PAN, voter ID...) instead of the words. Dates and "latest"
+ * words are understood (see textHitsFor); byte-identical copies show once.
  *
- *  1. Words: FTS5 if available, else LIKE. Title and content, every word of
- *     the query must match (filler words like "of" are left out), synonym
- *     expansion for common Indian document terms. A query that names a Home
- *     collection ("ID cards", "पहचान पत्र") finds every concept in it
- *     (Aadhaar, PAN, voter ID...) instead of the words.
- *  2. Look: photos that stand out as close to the query vector.
+ * Sync and quick (an FTS query capped at 50 rows, a few ms): what search
+ * shows right away. Look-alikes are added by searchDocumentsAsync.
+ */
+export const searchDocuments = (query: string): DocumentRecord[] =>
+  withoutCopies(textHitsFor(query, understandQuery(query)));
+
+/**
+ * searchDocuments plus, when `queryVector` is given, the photos that look
+ * like the query:
+ *
+ *  1. Words, as in searchDocuments.
+ *  2. Look: photos that stand out as close to the query vector. This scan
+ *     reads every photo's vector, so it runs on the read connection, off the
+ *     JS thread.
  *  3. The two lists merged by rank (see mergeByRank). "Latest" words
  *     ("latest bill", "pichla bill") put each list newest first instead
  *     (utils/PaperSeries), words before look-alikes.
  *  4. Byte-identical copies shown once.
- */
-export const searchDocuments = (query: string, queryVector?: Float32Array): DocumentRecord[] =>
-  withoutCopies(searchDocumentsWithCopies(query, queryVector));
-
-const searchDocumentsWithCopies = (query: string, queryVector?: Float32Array): DocumentRecord[] => {
-  const meaning = understandQuery(query);
-  const dq = meaning.dates;
-  const textHits = textHitsFor(query, meaning);
-  if (!queryVector || !query.trim()) return textHits;
-  const t0 = Date.now();
-  try {
-    const lookAlikes = dq
-      ? searchByLook(queryVector, DATE_LOOK_LIMIT).filter(d => inWindows(d, dq.windows))
-      : searchByLook(queryVector);
-    AppLogger.info('DB', `Look-alike search took ${Date.now() - t0}ms. Found ${lookAlikes.length} photos.`);
-    return combine(textHits, lookAlikes, meaning.recency);
-  } catch (e) {
-    AppLogger.warn('DB', 'Look-alike search failed, showing word matches only:', e);
-    return textHits;
-  }
-};
-
-/**
- * searchDocuments for screens: the words are matched right away (an FTS
- * query capped at 50 rows, a few ms), and the look-alike scan, which reads
- * every photo's vector, runs on the read connection off the JS thread.
- * Same results as searchDocuments.
  */
 export const searchDocumentsAsync = async (query: string, queryVector?: Float32Array): Promise<DocumentRecord[]> =>
   withoutCopies(await searchDocumentsAsyncWithCopies(query, queryVector));

@@ -103,40 +103,15 @@ const blobOf = (queryVector: Float32Array): Uint8Array =>
 
 const knnLimit = (limit: number) => Math.max(1, Math.floor(limit));
 
-const lookAlikeLimit = (blob: Uint8Array): number => {
-  const count = getEmbeddingCount();
-  if (count < MIN_PHOTOS_FOR_STAND_OUT) return MAX_VECTOR_DISTANCE;
-  try {
-    return limitFrom(getDb().executeSync(SAMPLE_SQL, [blob, sampleStride(count)]));
-  } catch (e) {
-    AppLogger.warn('DB', 'Could not read the far photo distance, using the fixed limit:', e);
-    return MAX_VECTOR_DISTANCE;
-  }
-};
-
 /**
  * The photos that look like `queryVector`, closest first, at most `limit`.
  * Only photos that stand out for this query are returned (see above), so a
  * query nothing matches returns an empty list instead of the nearest photos.
  *
- * Runs on the JS thread; screens use findLookAlikesAsync.
- */
-export const findLookAlikes = (queryVector: Float32Array, limit = 50): LookAlike[] => {
-  if (!isVecAvailable()) return [];
-  try {
-    const blob = blobOf(queryVector);
-    const maxDistance = lookAlikeLimit(blob);
-    return lookAlikesFrom(getDb().executeSync(KNN_SQL, [blob, knnLimit(limit)]), maxDistance);
-  } catch (e) {
-    AppLogger.warn('DB', 'findLookAlikes failed:', e);
-    return [];
-  }
-};
-
-/**
- * findLookAlikes on the read connection, off the JS thread. The KNN scan
- * reads every stored vector; on a slow phone with thousands of photos that
- * is long enough to freeze scrolling and typing if it ran on the JS thread.
+ * Runs on the read connection, off the JS thread: the KNN scan reads every
+ * stored vector, and on a slow phone with thousands of photos that is long
+ * enough to freeze scrolling and typing if it ran on the JS thread. (There is
+ * no sync version, so nothing can run it there by mistake.)
  */
 export const findLookAlikesAsync = async (queryVector: Float32Array, limit = 50): Promise<LookAlike[]> => {
   if (!isVecAvailable()) return [];

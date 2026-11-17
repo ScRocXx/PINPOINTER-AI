@@ -10,7 +10,7 @@ import { AppLogger } from '../utils/AppLogger';
 import type { Collection } from '../utils/Collections';
 import { collectionTerms } from './collectionTerms';
 import { getDb, getReadDb, isFtsAvailable, isVecAvailable } from './connection';
-import { findLookAlikes, findLookAlikesAsync } from './vectors';
+import { findLookAlikesAsync } from './vectors';
 
 /** Collections are counted up to this many files; more shows as "999+". */
 export const COLLECTION_COUNT_CAP = 999;
@@ -102,23 +102,11 @@ const pathsInIdOrder = (ids: number[], result: { rows?: Array<Record<string, unk
 };
 
 /**
- * Photos whose CLIP vector is close to `queryVector`, closest first. Empty
- * when the vector index isn't available. Same rule as search: only photos
- * that stand out for this query.
+ * Photos whose CLIP vector is close to `queryVector`, closest first (Home's
+ * Family tile). Empty when the vector index isn't available. Same rule as
+ * search: only photos that stand out for this query. On the read connection,
+ * off the JS thread.
  */
-export const getSimilarPhotos = (queryVector: Float32Array, limit = 12): string[] => {
-  if (!isVecAvailable()) return [];
-  try {
-    const ids = findLookAlikes(queryVector, limit).map(l => l.documentId);
-    if (ids.length === 0) return [];
-    return pathsInIdOrder(ids, getDb().executeSync(PATHS_BY_IDS_SQL(ids.length), ids));
-  } catch (e) {
-    AppLogger.warn('DB', 'getSimilarPhotos failed:', e);
-    return [];
-  }
-};
-
-/** getSimilarPhotos on the read connection, off the JS thread (Home's Family tile). */
 export const getSimilarPhotosAsync = async (queryVector: Float32Array, limit = 12): Promise<string[]> => {
   if (!isVecAvailable()) return [];
   try {

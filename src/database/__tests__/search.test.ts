@@ -263,76 +263,70 @@ const addPhoto = (name: string, cosine: number, axis: number): string => {
   return path;
 };
 
-describe('searchDocuments — photos that look like the query', () => {
-  test('with no photo vectors, a query vector changes nothing', () => {
-    expect(paths(searchDocuments('aadhaar', QUERY))).toEqual(paths(searchDocuments('aadhaar')));
-    expect(searchDocuments('zzz-no-match-qqq', QUERY)).toEqual([]);
+describe('searchDocumentsAsync — photos that look like the query', () => {
+  test('with no photo vectors, a query vector changes nothing', async () => {
+    expect(paths(await searchDocumentsAsync('aadhaar', QUERY))).toEqual(paths(searchDocuments('aadhaar')));
+    expect(await searchDocumentsAsync('zzz-no-match-qqq', QUERY)).toEqual([]);
   });
 
-  test('photos that stand out from the rest are found without any matching word, closest first', () => {
+  test('photos that stand out from the rest are found without any matching word, closest first', async () => {
     for (let i = 0; i < MIN_PHOTOS_FOR_STAND_OUT + 4; i++) addPhoto(`far${i}`, 0.05, 2 + i);
     const close = addPhoto('close', 0.3, 100);
     const closest = addPhoto('closest', 0.4, 101);
-    expect(paths(searchDocuments('zzzlook', QUERY))).toEqual([closest, close]);
+    expect(paths(await searchDocumentsAsync('zzzlook', QUERY))).toEqual([closest, close]);
   });
 
-  test('when every photo is about as close as the others, none is shown', () => {
+  test('when every photo is about as close as the others, none is shown', async () => {
     // Nonsense text sits close to all photos alike: each one here is inside
     // the old fixed limit, and none stands out.
     for (let i = 0; i < MIN_PHOTOS_FOR_STAND_OUT + 4; i++) addPhoto(`same${i}`, 0.25 + i * 0.001, 2 + i);
     expect(Math.sqrt(2 - 2 * 0.25)).toBeLessThan(MAX_VECTOR_DISTANCE);
-    expect(searchDocuments('hzjsbsjd', QUERY)).toEqual([]);
+    expect(await searchDocumentsAsync('hzjsbsjd', QUERY)).toEqual([]);
   });
 
-  test('a gallery where most photos match still finds them', () => {
+  test('a gallery where most photos match still finds them', async () => {
     const matches: string[] = [];
     for (let i = 0; i < 20; i++) matches.push(addPhoto(`family${i}`, 0.32 - i * 0.001, 2 + i));
     for (let i = 0; i < 6; i++) addPhoto(`other${i}`, 0.05, 40 + i);
-    expect(paths(searchDocuments('zzzlook', QUERY))).toEqual(matches);
+    expect(paths(await searchDocumentsAsync('zzzlook', QUERY))).toEqual(matches);
   });
 
-  test('a very small gallery falls back to the fixed limit', () => {
+  test('a very small gallery falls back to the fixed limit', async () => {
     const close = addPhoto('close', 0.3, 2);
     addPhoto('far', 0.05, 3);
-    expect(paths(searchDocuments('zzzlook', QUERY))).toEqual([close]);
+    expect(paths(await searchDocumentsAsync('zzzlook', QUERY))).toEqual([close]);
   });
 
-  test('a photo that matches the words and the look comes first', () => {
+  test('a photo that matches the words and the look comes first', async () => {
     for (let i = 0; i < MIN_PHOTOS_FOR_STAND_OUT + 4; i++) addPhoto(`far${i}`, 0.05, 2 + i);
     const lookOnly = addPhoto('lookonly', 0.4, 100);
     const goaId = connection.getDb().executeSync('SELECT id FROM document_index WHERE filePath = ? LIMIT 1', ['/photos/goa.jpg']);
     indexEmbedding((goaId.rows[0] as { id: number }).id, atCosine(0.3, 101));
     // "trip" is only in the goa photo's text; "lookonly" is closer by look.
-    expect(paths(searchDocuments('trip', QUERY))).toEqual(['/photos/goa.jpg', lookOnly]);
+    expect(paths(await searchDocumentsAsync('trip', QUERY))).toEqual(['/photos/goa.jpg', lookOnly]);
   });
 
-  test('every word must match, with or without a query vector', () => {
+  test('every word must match, with or without a query vector', async () => {
     // /docs/notes.pdf has "aadhaar" but not "card": one matching word is not enough.
-    expect(paths(searchDocuments('aadhaar card', QUERY))).toEqual(['/docs/aadhaar.pdf']);
-  });
-
-  test('a failing vector query still returns the word matches', () => {
-    const db = connection.getDb();
-    const real = db.executeSync.bind(db);
-    jest.spyOn(db, 'executeSync').mockImplementation(((sql: string, params?: unknown[]) => {
-      if (/vec_index/.test(sql)) throw new Error('no vec0');
-      return real(sql, params as never);
-    }) as never);
-    expect(paths(searchDocuments('goa', QUERY))).toEqual(['/photos/goa.jpg']);
+    expect(paths(await searchDocumentsAsync('aadhaar card', QUERY))).toEqual(['/docs/aadhaar.pdf']);
   });
 });
 
 describe('searchDocumentsAsync — the look-alike scan off the JS thread', () => {
-  test('finds the same results as searchDocuments, in the same order', async () => {
+  test('without a query vector it finds what searchDocuments finds, in the same order', async () => {
     for (let i = 0; i < MIN_PHOTOS_FOR_STAND_OUT + 4; i++) addPhoto(`far${i}`, 0.05, 2 + i);
     addPhoto('lookonly', 0.4, 100);
-    const goaId = connection.getDb().executeSync('SELECT id FROM document_index WHERE filePath = ? LIMIT 1', ['/photos/goa.jpg']);
-    indexEmbedding((goaId.rows[0] as { id: number }).id, atCosine(0.3, 101));
 
     for (const q of ['trip', 'zzzlook', 'aadhaar card', 'goa', '']) {
-      expect(paths(await searchDocumentsAsync(q, QUERY))).toEqual(paths(searchDocuments(q, QUERY)));
       expect(paths(await searchDocumentsAsync(q))).toEqual(paths(searchDocuments(q)));
     }
+  });
+
+  test('an empty query finds nothing, even with a query vector', async () => {
+    for (let i = 0; i < MIN_PHOTOS_FOR_STAND_OUT + 4; i++) addPhoto(`far${i}`, 0.05, 2 + i);
+    addPhoto('lookonly', 0.4, 100);
+    expect(await searchDocumentsAsync('', QUERY)).toEqual([]);
+    expect(await searchDocumentsAsync('   ', QUERY)).toEqual([]);
   });
 
   test('runs the vector queries on the read connection, never with executeSync', async () => {
@@ -489,7 +483,6 @@ describe('searchDocuments — newest first ("latest electricity bill", "pichla b
   test('look-alike photos come after the word matches, newest first too', async () => {
     for (let i = 0; i < MIN_PHOTOS_FOR_STAND_OUT + 4; i++) addPhoto(`far${i}`, 0.05, 2 + i);
     const lookOnly = addPhoto('lookonly', 0.4, 100);
-    expect(paths(searchDocuments('latest electricity bill', QUERY))).toEqual([...LATEST, lookOnly]);
     expect(paths(await searchDocumentsAsync('latest electricity bill', QUERY))).toEqual([...LATEST, lookOnly]);
   });
 });

@@ -9,7 +9,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react-native';
 import { CameraRoll } from '@react-native-camera-roll/camera-roll';
 import { useHomeOverview, HomeOverviewOptions } from '../useHomeOverview';
-import { countCheckedFiles, getCollectionPreview, getSimilarPhotos } from '../../database';
+import { countCheckedFiles, getCollectionPreview, getSimilarPhotosAsync } from '../../database';
 import { encodeText } from '../../services/EmbeddingService';
 import { getRecentPhotos } from '../../utils/RecentPhotos';
 import type { Collection } from '../../utils/Collections';
@@ -17,10 +17,7 @@ import type { Collection } from '../../utils/Collections';
 jest.mock('../../database', () => ({
   countCheckedFiles: jest.fn(),
   getCollectionPreview: jest.fn(),
-  getSimilarPhotos: jest.fn(),
-  // Home awaits this; it hands over to the getSimilarPhotos mock.
-  getSimilarPhotosAsync: jest.fn(async (v: Float32Array, n: number) =>
-    (jest.requireMock('../../database') as { getSimilarPhotos: (v: Float32Array, n: number) => unknown }).getSimilarPhotos(v, n)),
+  getSimilarPhotosAsync: jest.fn(),
 }));
 
 // The text model's "ready" signal, driven by each test (it fires after a search loads the model).
@@ -52,7 +49,7 @@ jest.mock('../../utils/RecentPhotos', () => ({
 
 const mockChecked = countCheckedFiles as jest.Mock;
 const mockPreview = getCollectionPreview as jest.Mock;
-const mockSimilar = getSimilarPhotos as jest.Mock;
+const mockSimilar = getSimilarPhotosAsync as jest.Mock;
 const mockEncode = encodeText as jest.Mock;
 const mockRecent = getRecentPhotos as jest.Mock;
 const mockAlbums = CameraRoll.getAlbums as jest.Mock;
@@ -82,7 +79,7 @@ beforeEach(() => {
   textModel.__resetModel();
   mockChecked.mockReturnValue(120);
   mockPreview.mockImplementation((c: Collection) => PREVIEWS[c.id] ?? { count: 0, capped: false, photos: [] });
-  mockSimilar.mockReturnValue([]);
+  mockSimilar.mockResolvedValue([]);
   mockEncode.mockResolvedValue(null);
   mockRecent.mockResolvedValue([]);
   mockAlbums.mockResolvedValue([]);
@@ -211,7 +208,7 @@ describe('useHomeOverview', () => {
       jest.useFakeTimers();
       const vector = new Float32Array([0.1, 0.2]);
       mockEncode.mockResolvedValue(vector);
-      mockSimilar.mockReturnValue(family);
+      mockSimilar.mockResolvedValue(family);
 
       const { result } = await renderHook(() => useHomeOverview({ busy: false }));
       await act(async () => {
@@ -236,7 +233,7 @@ describe('useHomeOverview', () => {
 
     it('uses the model at once when it is already loaded as Home mounts', async () => {
       mockEncode.mockResolvedValue(new Float32Array([0.3]));
-      mockSimilar.mockReturnValue(family);
+      mockSimilar.mockResolvedValue(family);
       textModel.__modelLoaded();
       const { result } = await mount();
       await waitFor(() => expect(result.current.collections.family.photos[0]).toBe('file:///mum.jpg'));
