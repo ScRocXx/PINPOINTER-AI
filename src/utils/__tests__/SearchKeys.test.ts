@@ -1,7 +1,63 @@
 import {
     SEARCH_TAIL_MARK, buildSearchTail, queryWords, searchWords, termsForQueryWord, visibleContent, withSearchTail,
+    withoutOldEnrichment,
 } from '../SearchKeys';
 import { bhashaKey } from '../IndicText';
+import { enrichHindi } from '../HindiTranslit';
+import { soundex } from '../Soundex';
+
+describe('the tail holds what used to be appended to the text', () => {
+    it('keeps Soundex codes of the Latin words in the tail, never in what is shown', () => {
+        const out = withSearchTail('Hello World');
+        expect(visibleContent(out)).toBe('Hello World');
+        expect(out.split(SEARCH_TAIL_MARK)[1].split(' ')).toEqual(expect.arrayContaining(['H400', 'W643']));
+    });
+
+    it('keeps the Hinglish and English words for Hindi in the tail', () => {
+        const out = withSearchTail('कमल');
+        expect(visibleContent(out)).toBe('कमल');
+        expect(out.split(SEARCH_TAIL_MARK)[1].split(' ')).toEqual(expect.arrayContaining(['kamal', 'lotus', 'flower', 'K540', 'L320']));
+    });
+
+    it('builds the same keys and concepts as when the gloss was in the text', () => {
+        const before = buildSearchTail(enrichHindi('आधार कार्ड')).split(' ').filter(t => /^q[kc]/.test(t));
+        const now = buildSearchTail('आधार कार्ड').split(' ');
+        expect(now).toEqual(expect.arrayContaining(before));
+    });
+
+    it('adds no gloss for text without Devanagari, and no codes for words with digits', () => {
+        const tail = buildSearchTail('Invoice123 total').split(' ');
+        expect(tail).toContain(soundex('total'));
+        expect(tail).not.toContain(soundex('Invoice'));
+    });
+});
+
+describe('withoutOldEnrichment', () => {
+    it('removes trailing Soundex codes of the words before them', () => {
+        expect(withoutOldEnrichment('Hello World H400 W643')).toBe('Hello World');
+    });
+
+    it('removes an exact Hindi gloss, with the codes, in mixed text too', () => {
+        expect(withoutOldEnrichment('कमल kamal lotus flower K540 L320 F460')).toBe('कमल');
+        const mixed = `${enrichHindi('आधार card नंबर')} A360 C630`;
+        expect(withoutOldEnrichment(mixed)).toBe('आधार card नंबर');
+    });
+
+    it('keeps codes that are not the Soundex of a word in the text', () => {
+        expect(withoutOldEnrichment('Flat B123 Tower')).toBe('Flat B123 Tower');
+        expect(withoutOldEnrichment('Model A100 manual')).toBe('Model A100 manual');
+    });
+
+    it('keeps Hindi text that is not exactly an old gloss', () => {
+        expect(withoutOldEnrichment('कमल kamal')).toBe('कमल kamal');
+        expect(withoutOldEnrichment('कमल')).toBe('कमल');
+        expect(withoutOldEnrichment('बिजली का बिल 1240')).toBe('बिजली का बिल 1240');
+    });
+
+    it('leaves new text exactly as it is, line breaks included', () => {
+        expect(withoutOldEnrichment('Due date\n5 April')).toBe('Due date\n5 April');
+    });
+});
 
 describe('withSearchTail / visibleContent', () => {
     it('appends keys and concepts after the invisible marker', () => {
@@ -100,8 +156,8 @@ describe('buildSearchTail — OCR-tolerant keys', () => {
         expect(tokens.some(x => x.startsWith('qj'))).toBe(true);
     });
 
-    it('is at version 2 (bump it with every change to the tail)', () => {
-        expect(version).toBe(2);
+    it('is at version 3 (bump it with every change to the tail)', () => {
+        expect(version).toBe(3);
     });
 });
 

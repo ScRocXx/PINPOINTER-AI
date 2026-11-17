@@ -13,13 +13,12 @@
  *   - Early exit at Phase 2 for digital PDFs (no OCR needed)
  *   - Smart truncation: 500 chars/page, 2000 chars max per document
  *   - Pages 1-3 processed foreground, 4+ deferred for background
- *   - Soundex + transliteration applied even on early-exit path
+ *   - Search keys (sound keys, Soundex, Hindi gloss) are added by indexDocument, never shown
  */
 
 import { NativeModules } from 'react-native';
 import RNFS from 'react-native-fs';
 import { analyzeImage } from './VisionPipeline';
-import { soundexAll } from './Soundex';
 import { classifyDocument, extractSmartTitle, type ClassificationResult } from './DocumentClassifier';
 import { maskSensitiveData } from './DataMasking';
 import { indexDocument } from '../database';
@@ -238,18 +237,14 @@ const enrichAndIndex = (
         // Mask sensitive data (Aadhaar, PAN, phone) before storage
         const maskedContent = maskSensitiveData(rawContent);
 
-        // Build search-optimized content
+        // Smart title + category label + file name + the words. Sound keys and
+        // Soundex codes go in the hidden search tail (indexDocument).
         const words = maskedContent.split(/\s+/).filter(Boolean);
-        const latinWords = words.filter(w => /^[a-zA-Z]+$/.test(w));
-        const soundexCodes = soundexAll(latinWords.join(' '));
-
-        // Combine: smart title + category label + raw text + soundex codes
         const searchableContent = [
             smartTitle,
             classification.label,
             metadata.fileName.replace(/\.pdf$/i, ''),
             ...words,
-            ...soundexCodes,
         ].join(' ').substring(0, MAX_TOTAL_CHARS);
 
         indexDocument(
@@ -292,7 +287,7 @@ export const processPDF = async (filePath: string): Promise<PipelineResult> => {
     const nativeText = await extractNativeText(fileUri);
 
     if (nativeText.length >= MIN_TEXT_LENGTH) {
-        // Digital PDF — skip OCR, still enrich with Soundex + classify
+        // Digital PDF — skip OCR, still classify
         AppLogger.info('DocumentPipeline', `Phase 2 ✓ Digital PDF — ${nativeText.length} chars extracted, skipping OCR`);
 
         const { classification, smartTitle } = enrichAndIndex(nativeText, metadata, fileUri, 'TEXT', 'TEXT_INDEXED');

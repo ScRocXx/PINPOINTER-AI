@@ -5,7 +5,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as connection from '../../database/connection';
 import { getDb } from '../../database/connection';
-import { SEARCH_TAIL_MARK } from '../SearchKeys';
+import { SEARCH_KEYS_VERSION, SEARCH_TAIL_MARK, visibleContent } from '../SearchKeys';
 import { SEARCH_KEYS_CURSOR_KEY, SEARCH_KEYS_VERSION_KEY, isRekeyDone, rekeySearchTails } from '../SearchRekey';
 import { __resetInteractionGate, noteInteraction, QUIET_AFTER_MS } from '../../services/InteractionGate';
 // Test-only export of __mocks__/op-sqlite.js (declared in database/__tests__/search.test.ts).
@@ -93,5 +93,23 @@ test('leaves rows without words, and up-to-date rows, unchanged', async () => {
     const run = rekeySearchTails();
     await jest.runAllTimersAsync();
     await expect(run).resolves.toBe(0);
-    await expect(AsyncStorage.getItem(SEARCH_KEYS_VERSION_KEY)).resolves.toBe('2');
+    await expect(AsyncStorage.getItem(SEARCH_KEYS_VERSION_KEY)).resolves.toBe(String(SEARCH_KEYS_VERSION));
+});
+
+test('takes the Soundex codes and the Hindi gloss old versions stored out of the visible text', async () => {
+    // As versions before 3 stored them: words, codes, and for Hindi the gloss.
+    oldRow(1, 'Electricity Bill Receipt E423 B400 R213');
+    oldRow(2, 'कमल kamal lotus flower K540 L320 F460');
+    jest.useFakeTimers();
+    const run = rekeySearchTails();
+    await jest.runAllTimersAsync();
+    await expect(run).resolves.toBe(2);
+
+    const [english, hindi] = contents();
+    expect(visibleContent(english)).toBe('Electricity Bill Receipt');
+    expect(visibleContent(hindi)).toBe('कमल');
+    // Still searchable by them: they moved to the hidden tail.
+    const tail = hindi.split(SEARCH_TAIL_MARK)[1];
+    expect(tail.split(' ')).toEqual(expect.arrayContaining(['kamal', 'lotus', 'flower', 'L320']));
+    expect(english.split(SEARCH_TAIL_MARK)[1].split(' ')).toEqual(expect.arrayContaining(['E423', 'B400', 'R213']));
 });

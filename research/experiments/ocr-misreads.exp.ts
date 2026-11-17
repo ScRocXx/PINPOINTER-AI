@@ -4,7 +4,6 @@
  * re-implemented (FTS5 semantics: prefix on word/roman, exact on keys/concepts).
  */
 import * as fs from 'fs';
-import { buildIndexableContent } from '../../src/utils/TextEnrichment';
 import { withSearchTail, termsForQueryWord } from '../../src/utils/SearchKeys';
 import { bhashaKey, romanize } from '../../src/utils/IndicText';
 
@@ -100,7 +99,7 @@ const corruptLatin = (w: string, kind: 'glyph' | 'split'): string | null => {
 };
 
 // ── what the index holds for a document whose OCR text is `text` ──
-const indexTokens = async (text: string) => new Set(tokens(withSearchTail(await buildIndexableContent(text))));
+const indexTokens = async (text: string) => new Set(tokens(withSearchTail(text)));
 
 // ── matching rules ──
 type Matcher = (q: string, toks: Set<string>) => boolean;

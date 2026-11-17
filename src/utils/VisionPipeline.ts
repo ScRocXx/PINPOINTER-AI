@@ -3,7 +3,6 @@ import TextRecognition, { TextRecognitionScript } from '@react-native-ml-kit/tex
 import ImageLabeling from '@react-native-ml-kit/image-labeling';
 import ImageResizer from 'react-native-image-resizer';
 import RNFS from 'react-native-fs';
-import { soundexAll } from './Soundex';
 import { AppLogger } from './AppLogger';
 import { encodeImage } from '../services/EmbeddingService';
 import { nextPlan, recordResult, type OcrScript } from './ScriptPlanner';
@@ -18,9 +17,9 @@ export interface VisionResult {
     detection_type: DetectionType;
     /** Original raw text extracted before any enrichment */
     raw_text: string;
-    /** Flat space-joined string ready to store in SQLite for LIKE search */
+    /** The words (or labels), space-joined: what is stored and shown. Search keys are added at index time (SearchKeys). */
     content: string;
-    /** Structured keys: [original, transliteration?, soundex?, ...labels?] */
+    /** The same words (or labels) as a list. */
     search_index: string[];
     /** Audit field — tells whether object detection ran or was bypassed */
     optimized_status: string;
@@ -160,15 +159,11 @@ const finishAnalysis = async (
     // ── Step 2: Early exit if CLEAN text found ──────────────────────────────
     if (combinedText.length >= MIN_TEXT_LENGTH && !isGarbageText(combinedText)) {
         const words = combinedText.split(/\s+/).filter(Boolean);
-        // Soundex only makes sense for Latin/romanized words, not Devanagari
-        const latinWords = words.filter(w => /^[a-zA-Z]+$/.test(w));
-        const soundexCodes = soundexAll(latinWords.join(' '));
-
         return {
             detection_type: 'TEXT',
             raw_text: combinedText,
-            search_index: [...words, ...soundexCodes],
-            content: [...words, ...soundexCodes].join(' '),
+            search_index: words,
+            content: words.join(' '),
             optimized_status: 'Object_Detection_Bypassed: True',
             embedding,
         };
@@ -178,12 +173,11 @@ const finishAnalysis = async (
     const labels = await readLabels();
 
     if (labels.length > 0) {
-        const soundexCodes = soundexAll(labels.join(' '));
         return {
             detection_type: 'OBJECT',
             raw_text: labels.join(', '),
-            search_index: [...labels, ...soundexCodes],
-            content: [...labels, ...soundexCodes].join(' '),
+            search_index: labels,
+            content: labels.join(' '),
             optimized_status: 'Object_Detection_Bypassed: False',
             embedding,
         };
@@ -210,8 +204,8 @@ const finishAnalysis = async (
  *
  * Returns a structured VisionResult with:
  *  - detection_type: 'TEXT' | 'OBJECT' | 'EMPTY'
- *  - search_index:   [original, transliteration, soundex, ...] for multilingual search
- *  - content:        flat joined string for SQLite LIKE queries
+ *  - search_index:   the words (or labels)
+ *  - content:        the same, space-joined, as stored and shown
  *  - optimized_status: audit string
  *  - embedding:      the CLIP vector, unless `embed: false`
  */

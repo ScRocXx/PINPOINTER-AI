@@ -3,7 +3,6 @@
  * vs correcting the query against the person's OWN index vocabulary.
  */
 import * as fs from 'fs';
-import { buildIndexableContent } from '../../src/utils/TextEnrichment';
 import { withSearchTail, termsForQueryWord } from '../../src/utils/SearchKeys';
 import { bhashaKey, romanize } from '../../src/utils/IndicText';
 
@@ -12,7 +11,7 @@ let seed = 7;
 const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
 const pick = <T,>(a: T[]): T => a[Math.floor(rnd() * a.length)];
 const tokens = (text: string) => text.normalize('NFC').split(/[^\p{L}\p{N}\p{Co}\p{Mn}\p{Mc}]+/u).filter(Boolean).map(t => t.toLowerCase());
-const indexTokens = async (text: string) => new Set(tokens(withSearchTail(await buildIndexableContent(text))));
+const indexTokens = async (text: string) => new Set(tokens(withSearchTail(text)));
 const DEVA = /[ऀ-ॿ]/;
 
 const current = (q: string, toks: Set<string>) => {

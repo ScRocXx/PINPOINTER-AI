@@ -123,3 +123,25 @@ describe('migration 2 (existing installs)', () => {
     expect(vault[0].content).toBe('electricity bill');
   });
 });
+
+describe('search keys that are never shown', () => {
+  test('a Hindi photo is found by its English and Hinglish words, which stay out of its text', () => {
+    indexDocument(null, 'कमल का फूल', '/photos/lotus.jpg', 'IMAGE', 'TEXT');
+    expect(paths(searchDocuments('lotus'))).toContain('/photos/lotus.jpg');
+    expect(paths(searchDocuments('kamal'))).toContain('/photos/lotus.jpg');
+    const shown = searchDocuments('lotus').find(d => d.filePath === '/photos/lotus.jpg');
+    expect(shown?.content).toBe('कमल का फूल');
+  });
+
+  test('a misspelling that sounds the same still finds the photo, through the codes in the tail', () => {
+    indexDocument(null, 'trip to kathmandu', '/photos/nepal.jpg', 'IMAGE', 'TEXT');
+    expect(paths(searchDocuments('kathmandoo'))).toEqual(['/photos/nepal.jpg']);
+  });
+
+  test('stored text holds no Soundex codes', () => {
+    indexDocument(null, 'Hello World', '/photos/hello.jpg', 'IMAGE', 'TEXT');
+    const row = mockDb().documents.find(d => d.filePath === '/photos/hello.jpg')!;
+    expect(row.content.split(SEARCH_TAIL_MARK)[0].trim()).toBe('Hello World');
+    expect(row.content.split(SEARCH_TAIL_MARK)[1]).toContain('H400');
+  });
+});

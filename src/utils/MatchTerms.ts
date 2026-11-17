@@ -9,6 +9,7 @@
  * Pure and synchronous; cheap enough to run per visible row.
  */
 import { CONCEPTS, conceptsForWord } from './ConceptTable';
+import { lookupEnglish } from './HindiTranslit';
 import { bhashaKey, containsIndic, romanize, tokenizeWords } from './IndicText';
 import { searchWords } from './SearchKeys';
 import { foldedSoundKey, matraDrops, shapeKey } from './OcrTolerance';
@@ -68,8 +69,9 @@ export const alsoSearchedAs = (query: string, max = 3): string[] => {
 /**
  * The words in `text` that match `query`: the same word or its start (the
  * index matches prefixes), the same sound in any script, or the same
- * meaning. These are what HighlightedText and the lock-on corners mark.
- * In text order, each word once.
+ * meaning (a concept, or the English gloss search keeps for a Hindi word:
+ * "lotus" marks कमल). These are what HighlightedText and the lock-on corners
+ * mark. In text order, each word once.
  */
 export const matchTermsIn = (text: string, query: string): string[] => {
     if (!text) return [];
@@ -88,9 +90,16 @@ export const matchTermsIn = (text: string, query: string): string[] => {
         const prefix = words.some(w => lower.startsWith(w)) || romans.has(lower);
         const sound = !prefix && keys.size > 0 && keys.has(bhashaKey(token));
         const meaning = !prefix && !sound && concepts.size > 0 && conceptsForWord(token).some(id => concepts.has(id));
-        if (prefix || sound || meaning) found.push(token);
+        const gloss = !prefix && !sound && !meaning && DEVANAGARI.test(token) && glossMatches(token, words);
+        if (prefix || sound || meaning || gloss) found.push(token);
     }
     return found.length > 0 ? found : misreadTermsIn(text, words);
+};
+
+/** The English gloss of a Hindi word (HindiTranslit) starts with a query word. */
+const glossMatches = (token: string, words: ReadonlyArray<string>): boolean => {
+    const english = lookupEnglish(token);
+    return !!english && english.split(' ').some(e => words.some(w => e.startsWith(w)));
 };
 
 /**

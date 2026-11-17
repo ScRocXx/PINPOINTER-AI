@@ -2,7 +2,7 @@
 
 Research scripts, not app code: they are not part of `npx jest`, `tsc` or
 `npm run lint`. They run the app's real search-key code
-(`src/utils/TextEnrichment.ts`, `SearchKeys.ts`, `IndicText.ts`) and write
+(`SearchKeys.ts`, `IndicText.ts`; since search keys version 3 the Hindi gloss and Soundex codes come from `withSearchTail` itself) and write
 their numbers to `results/`.
 
 | Script | Question | Result file |

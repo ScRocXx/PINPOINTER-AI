@@ -79,6 +79,16 @@ describe('matchTermsIn', () => {
   });
 });
 
+describe('matchTermsIn — the English gloss of a Hindi word', () => {
+    it('marks कमल for "lotus": search found it through the gloss in the tail', () => {
+        expect(matchTermsIn('कमल का फूल', 'lotus')).toEqual(['कमल']);
+    });
+
+    it('marks nothing when the gloss does not match', () => {
+        expect(matchTermsIn('कमल', 'river')).toEqual([]);
+    });
+});
+
 describe('matchTermsIn — words OCR misread', () => {
     it('marks the misread word when nothing matched outright', () => {
         expect(matchTermsIn('rnedicine twice a day', 'medicine')).toEqual(['rnedicine']);

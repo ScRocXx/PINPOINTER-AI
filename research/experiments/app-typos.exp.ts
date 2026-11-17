@@ -8,7 +8,6 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
-import { buildIndexableContent } from '../../src/utils/TextEnrichment';
 import { withSearchTail, termsForQueryWord, visibleContent } from '../../src/utils/SearchKeys';
 import { bhashaKey, romanize, tokenizeWords } from '../../src/utils/IndicText';
 import { buildVocabulary, correctionsFor } from '../../src/utils/SpellingRescue';
@@ -18,7 +17,7 @@ let seed = 7;
 const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
 const pick = <T,>(a: T[]): T => a[Math.floor(rnd() * a.length)];
 const tokens = (text: string) => text.normalize('NFC').split(/[^\p{L}\p{N}\p{Co}\p{Mn}\p{Mc}]+/u).filter(Boolean).map(t => t.toLowerCase());
-const indexTokens = async (text: string) => new Set(tokens(withSearchTail(await buildIndexableContent(text))));
+const indexTokens = async (text: string) => new Set(tokens(withSearchTail(text)));
 const DEVA = /[ऀ-ॿ]/;
 
 const current = (q: string, toks: Set<string>) => {
@@ -55,7 +54,7 @@ test('experiment 4', async () => {
     const words = [...new Set([...DOC_HI, ...DOC_EN, ...HI.slice(0, size / 2), ...EN.slice(0, size / 2)])];
     // One indexed row per word: its stored text, as indexDocument writes it.
     const rows = new Map<string, string>();
-    for (const w of words) rows.set(w, withSearchTail(await buildIndexableContent(w)));
+    for (const w of words) rows.set(w, withSearchTail(w));
     const rowTokens = new Map<string, Set<string>>();
     for (const [w, c] of rows) rowTokens.set(w, new Set(tokens(c)));
     // fts5vocab: every token, with how many rows contain it.

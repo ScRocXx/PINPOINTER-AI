@@ -8,7 +8,6 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
-import { buildIndexableContent } from '../../src/utils/TextEnrichment';
 import { withSearchTail, termsForQueryWord } from '../../src/utils/SearchKeys';
 import { tolerantTermsForQueryWord } from '../../src/utils/OcrTolerance';
 import { romanize } from '../../src/utils/IndicText';
@@ -113,7 +112,7 @@ const EN_VOCAB = vocab.en.filter(w => /^[a-z]+$/.test(w));
 const HI_TARGETS = [...new Set([...DOC_WORDS_HI, ...HI_VOCAB.slice(150, 1650).filter(w => chars(w).length >= 3)])];
 
 
-const indexTokens = async (text: string) => new Set(tokens(withSearchTail(await buildIndexableContent(text))));
+const indexTokens = async (text: string) => new Set(tokens(withSearchTail(text)));
 
 /** Today's search: one group per query word, as search.ts builds it. */
 const exact = (q: string, toks: Set<string>): boolean => {

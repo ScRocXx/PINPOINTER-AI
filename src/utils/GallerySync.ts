@@ -8,7 +8,6 @@ import {
 import { CURRENT_EMBED_MODEL } from '../database/fileState';
 import { fingerprintOf } from './Duplicates';
 import { encodeImage } from '../services/EmbeddingService';
-import { buildIndexableContent } from './TextEnrichment';
 import { analyzeImage } from './VisionPipeline';
 import { isQuiet, waitForQuiet } from '../services/InteractionGate';
 import { AppLogger } from './AppLogger';
@@ -119,7 +118,8 @@ export const indexPhoto = async (uri: string, mtime?: number, takenAt?: number):
     try {
         const vision = await analyzeImage(uri);
         const rawText = vision.content ?? '';
-        content = rawText.trim().length === 0 ? 'image' : await buildIndexableContent(rawText);
+        // Only the words read; indexDocument adds the search keys (SearchKeys).
+        content = rawText.trim() || 'image';
         detection = vision.detection_type as 'TEXT' | 'OBJECT';
         embedding = vision.embedding;
     } catch (e) {

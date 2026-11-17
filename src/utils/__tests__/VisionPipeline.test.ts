@@ -18,7 +18,6 @@ import ImageLabeling from '@react-native-ml-kit/image-labeling';
 import ImageResizer from 'react-native-image-resizer';
 import RNFS from 'react-native-fs';
 import { analyzeImage } from '../VisionPipeline';
-import { soundexAll } from '../Soundex';
 
 // ─── Mock handles ────────────────────────────────────────────────────────────
 const recognizeMock = TextRecognition.recognize as jest.Mock;
@@ -83,13 +82,13 @@ describe('VisionPipeline — analyzeImage', () => {
             expect(labelMock).not.toHaveBeenCalled();
         });
 
-        test('search_index holds words + soundex codes, content is space-joined', async () => {
+        test('content is only the words read: no Soundex codes in what is shown or copied', async () => {
             setOCR('Hello World');
             const result = await analyzeImage(IMG);
 
-            // soundex('Hello')='H400', soundex('World')='W643' (verified against Soundex.ts)
-            expect(result.search_index).toEqual(['Hello', 'World', 'H400', 'W643']);
-            expect(result.content).toBe('Hello World H400 W643');
+            // The codes are added to the hidden search tail at index time (SearchKeys).
+            expect(result.search_index).toEqual(['Hello', 'World']);
+            expect(result.content).toBe('Hello World');
         });
 
         test('embedding is a Float32Array when MobileCLIP encoding succeeds', async () => {
@@ -126,7 +125,7 @@ describe('VisionPipeline — analyzeImage', () => {
 
             expect(result.detection_type).toBe('TEXT');
             expect(result.raw_text).toBe('Hello World');
-            expect(result.search_index).toEqual(['Hello', 'World', 'H400', 'W643']);
+            expect(result.search_index).toEqual(['Hello', 'World']);
         });
 
         test('latin + hindi texts are joined with a single space', async () => {
@@ -159,16 +158,15 @@ describe('VisionPipeline — analyzeImage', () => {
             expect(result.content).toBe('नमस्ते दुनिया');
         });
 
-        test('soundex is generated only for Latin words, not Devanagari', async () => {
+        test('Latin and Devanagari words are kept as read', async () => {
             setOCR('Hello', 'नमस्ते');
             const result = await analyzeImage(IMG);
 
-            // 'नमस्ते' must not contribute any soundex code
-            expect(result.search_index).toEqual(['Hello', 'नमस्ते', 'H400']);
-            expect(result.content).toBe('Hello नमस्ते H400');
+            expect(result.search_index).toEqual(['Hello', 'नमस्ते']);
+            expect(result.content).toBe('Hello नमस्ते');
         });
 
-        test('alphanumeric words (e.g. Invoice123) are excluded from soundex', async () => {
+        test('alphanumeric words (e.g. Invoice123) are kept as one word', async () => {
             setOCR('Invoice123');
             const result = await analyzeImage(IMG);
 
@@ -186,12 +184,11 @@ describe('VisionPipeline — analyzeImage', () => {
             expect(labelMock).not.toHaveBeenCalled();
         });
 
-        test('soundex codes in search_index match soundexAll for the latin words', async () => {
+        test('search_index is the words, in order', async () => {
             setOCR('Electricity Bill Receipt');
             const result = await analyzeImage(IMG);
-            const words = ['Electricity', 'Bill', 'Receipt'];
 
-            expect(result.search_index).toEqual([...words, ...soundexAll(words.join(' '))]);
+            expect(result.search_index).toEqual(['Electricity', 'Bill', 'Receipt']);
         });
     });
 
@@ -320,8 +317,8 @@ describe('VisionPipeline — analyzeImage', () => {
 
             expect(result.detection_type).toBe('OBJECT');
             expect(result.raw_text).toBe('Coffee, Cup');
-            expect(result.search_index).toEqual([...labels, ...soundexAll(labels.join(' '))]);
-            expect(result.content).toBe([...labels, ...soundexAll(labels.join(' '))].join(' '));
+            expect(result.search_index).toEqual(labels);
+            expect(result.content).toBe('Coffee Cup');
             expect(result.optimized_status).toBe('Object_Detection_Bypassed: False');
             expect(result.embedding).toBeInstanceOf(Float32Array);
         });
@@ -403,7 +400,7 @@ describe('VisionPipeline — analyzeImage', () => {
 
             expect(result.detection_type).toBe('TEXT');
             expect(result.embedding).toBeNull();
-            expect(result.search_index).toEqual(['Hello', 'World', 'H400', 'W643']);
+            expect(result.search_index).toEqual(['Hello', 'World']);
         });
 
         test('embed: false reads the words and never runs CLIP (PDF pages, Scan)', async () => {
