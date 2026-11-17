@@ -33,7 +33,7 @@ Cyan (`Colors.found`) marks matches, marigold (`Colors.important`) marks
    Icon-only buttons need a `label`.
 4. **Colour**: semantic names from `Colors` only. Every text colour pair
    passes 4.5:1 and `src/theme/__tests__/theme.test.ts` checks it; add any
-   new pair there. `AppColors` is the old dark palette: don't use it.
+   new pair there.
 5. **Motion**: tokens from `motion.ts` (`Duration`, `Ease`, `Spring`),
    `useNativeDriver: true`, and respect `useReducedMotion()`. No decorative
    loops; loops only while work runs (listening, searching).

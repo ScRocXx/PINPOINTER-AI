@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Linking, NativeModules, ScrollView, StyleSheet, View } from 'react-native';
+import { ScrollView, StyleSheet, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import {
@@ -32,6 +32,7 @@ import { usePinnedItems } from '../hooks/usePinnedItems';
 import { describePlaces, usePdfPlaces } from '../hooks/usePdfPlaces';
 import { useScreenFocus } from '../hooks/useScreenFocus';
 import { forgetIfGone } from '../utils/MissingFiles';
+import { openPdf } from '../utils/OpenPdf';
 import { AppLogger } from '../utils/AppLogger';
 import {
   PAPER_GROUPS,
@@ -47,16 +48,6 @@ import {
 /** Papers shown before "Show more". */
 export const PAPERS_PAGE = 30;
 const SEARCH_DELAY_MS = 250;
-
-const openPdf = (filePath: string): void => {
-  const { StorageModule } = NativeModules;
-  if (StorageModule?.openPDF) {
-    StorageModule.openPDF(filePath.replace('file://', ''));
-    return;
-  }
-  const uri = filePath.startsWith('file://') ? filePath : `file://${filePath}`;
-  Linking.openURL(uri).catch(e => AppLogger.warn('Papers', 'Could not open the PDF', e));
-};
 
 /** Papers reads only PDF progress, so typing in search or photo progress doesn't redraw it. */
 const selectPapersSync = (s: PinpointerState) => ({
@@ -144,7 +135,7 @@ export const DocumentVaultScreen: React.FC = () => {
         return;
       }
       try {
-        openPdf(paper.doc.filePath);
+        await openPdf(paper.doc.filePath);
       } catch (e) {
         AppLogger.warn('Papers', 'Could not open the PDF', e);
         toast.show(t('papers.openFailed'), { icon: 'alert' });

@@ -3,6 +3,7 @@ import RNFS from 'react-native-fs';
 import type { DocumentRecord } from '../../../database';
 import { forgetIfGone } from '../../../utils/MissingFiles';
 import { describeResult, fileNameOf, paperKind } from '../resultInfo';
+import { PAPER_GROUP_LOOK, groupOfCategory } from '../../../utils/PaperGroups';
 import { openResult } from '../openResult';
 
 jest.mock('../../../utils/MissingFiles', () => ({ forgetIfGone: jest.fn(async () => false) }));
@@ -24,6 +25,13 @@ describe('paperKind', () => {
     expect(paperKind('SALARY_SLIP').tint).toBe('bank');
     expect(paperKind('MEDICAL_REPORT').icon).toBe('medicine');
     expect(paperKind('TAX_RETURN').label).toBe('papers.kind.tax');
+  });
+
+  it('looks the same as the Papers tab for every kind', () => {
+    for (const category of ['PAN_CARD', 'INVOICE', 'BANK_STATEMENT', 'MEDICAL_REPORT', 'TAX_RETURN'] as const) {
+      const look = PAPER_GROUP_LOOK[groupOfCategory(category)];
+      expect(paperKind(category)).toEqual({ icon: look.icon, tint: look.tint, label: look.kind });
+    }
   });
 
   it('leaves a plain paper without a second word', () => {

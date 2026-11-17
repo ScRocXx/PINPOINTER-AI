@@ -58,35 +58,8 @@ export const PinpointerScreen: React.FC = () => {
         tabs.setOptions?.({ tabBarHidden: isSearching });
     }, [isSearching, navigation]);
 
-    useEffect(() => {
-        const backAction = () => {
-            // First behavior: cancel search if search is active
-            if (isSearching) {
-                // Closing search also stops the mic, so it can't reopen search later.
-                if (isRecording || isTranscribing) cancelListening();
-                Keyboard.dismiss();
-                setIsSearching(false);
-                // Delay state clearing so the Animated.timing isn't dropped by
-                // native layout shifts caused by unmounting the Results List
-                setTimeout(() => {
-                    setSearchText('');
-                }, 300);
-                return true;
-            }
-            // Secondary behavior: go back to previous screen (exit)
-            return false;
-        };
-
-        const backHandler = BackHandler.addEventListener(
-            'hardwareBackPress',
-            backAction
-        );
-
-        return () => backHandler.remove();
-    }, [isSearching, isRecording, isTranscribing, cancelListening, setIsSearching, setSearchText]);
-
-    const handleBackPress = () => {
-        if (isRecording || isTranscribing) cancelListening();
+    /** Leave search: hide the keyboard, close the overlay, then clear the query. */
+    const closeSearch = useCallback(() => {
         Keyboard.dismiss();
         setIsSearching(false);
         // Delay state clearing so the Animated.timing isn't dropped by
@@ -94,7 +67,23 @@ export const PinpointerScreen: React.FC = () => {
         setTimeout(() => {
             setSearchText('');
         }, 300);
-    };
+    }, [setIsSearching, setSearchText]);
+
+    /** Back (the arrow or Android's button): closing search also stops the mic, so it can't reopen search later. */
+    const handleBackPress = useCallback(() => {
+        if (isRecording || isTranscribing) cancelListening();
+        closeSearch();
+    }, [isRecording, isTranscribing, cancelListening, closeSearch]);
+
+    useEffect(() => {
+        const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
+            // Search open: close it. Otherwise let Android go back (exit).
+            if (!isSearching) return false;
+            handleBackPress();
+            return true;
+        });
+        return () => backHandler.remove();
+    }, [isSearching, handleBackPress]);
 
     const handleSearchFocus = () => {
         setIsSearching(true);
@@ -127,17 +116,8 @@ export const PinpointerScreen: React.FC = () => {
     }, [viewer, viewerAt]);
 
     const handleLookEverywhere = () => {
-        // 1. Close Search State
-        Keyboard.dismiss();
-        setIsSearching(false);
-
-        // Delay state clearing so the Animated.timing isn't dropped by
-        // native layout shifts caused by unmounting the Results List
-        setTimeout(() => {
-            setSearchText('');
-        }, 300);
-
-        // 2. Look through all photos and papers; Home shows the progress
+        closeSearch();
+        // Look through all photos and papers; Home shows the progress
         handleDeepSync();
         handleDocumentSync();
     };

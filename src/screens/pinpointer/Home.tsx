@@ -1,5 +1,4 @@
 import React, { useCallback } from 'react';
-import { Linking, NativeModules } from 'react-native';
 import { useToast } from '../../components/ui';
 import { useStrings } from '../../i18n';
 import { type PinpointerState, usePinpointerShared } from '../../hooks/PinpointerContext';
@@ -8,6 +7,7 @@ import { usePinnedItems } from '../../hooks/usePinnedItems';
 import { AppLogger } from '../../utils/AppLogger';
 import type { CollectionId } from '../../utils/Collections';
 import { forgetIfGone } from '../../utils/MissingFiles';
+import { openPdf } from '../../utils/OpenPdf';
 import type { PinnedItem } from '../../utils/PinnedItems';
 import { HomeView } from './HomeView';
 import { TILE_LOOK } from './HomeParts';
@@ -19,14 +19,9 @@ export interface HomeProps {
 
 const noop = () => {};
 
-/** Open a PDF in the phone's PDF app. */
+/** Open a starred paper in the phone's PDF app. */
 const openPaper = (filePath: string) => {
-  const { StorageModule } = NativeModules;
-  if (StorageModule?.openPDF) {
-    StorageModule.openPDF(filePath.replace('file://', ''));
-    return;
-  }
-  Linking.openURL(filePath).catch(e => AppLogger.error('Home', 'Could not open the paper', e));
+  openPdf(filePath).catch(e => AppLogger.error('Home', 'Could not open the paper', e));
 };
 
 /**

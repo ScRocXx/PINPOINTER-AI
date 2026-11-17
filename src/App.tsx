@@ -7,7 +7,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ModelServiceProvider } from './services/ModelService';
 import { PinpointerProvider } from './hooks/PinpointerContext';
-import { AppColors, Colors, GUTTER, Space } from './theme';
+import { Colors, GUTTER, Space } from './theme';
 import {
   PinpointerScreen,
   SmartClipboardScreen,
@@ -95,7 +95,8 @@ const App: React.FC = () => {
       <ToastProvider>
       <ModelServiceProvider>
         <PinpointerProvider>
-        <StatusBar barStyle="light-content" backgroundColor={AppColors.primaryDark} />
+        {/* The default until a screen draws its own (components/ui/Screen). */}
+        <StatusBar barStyle="dark-content" backgroundColor={Colors.canvas} />
         {firstRun === 'checking' ? (
           // A blank canvas for the few milliseconds the flag takes to read.
           <View style={styles.checking} testID="first-run-checking" />
@@ -107,7 +108,7 @@ const App: React.FC = () => {
             // No screen shows the stack's own header: each draws its own.
             screenOptions={{
               headerShown: false,
-              cardStyle: { backgroundColor: AppColors.primaryDark },
+              cardStyle: { backgroundColor: Colors.canvas },
               ...TransitionPresets.SlideFromRightIOS,
             }}
           >
@@ -115,7 +116,7 @@ const App: React.FC = () => {
             <Stack.Screen
               name="FirstRun"
               component={FirstRunScreen}
-              options={{ gestureEnabled: false, cardStyle: { backgroundColor: Colors.canvas } }}
+              options={{ gestureEnabled: false }}
             />
 
             {/* Home, Photos, Papers, Settings */}

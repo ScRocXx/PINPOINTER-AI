@@ -3,6 +3,7 @@ import { StringKey } from '../../i18n';
 import { IconName } from '../../components/ui';
 import { TintName } from '../../theme';
 import { DocumentCategory, classifyDocument } from '../../utils/DocumentClassifier';
+import { PAPER_GROUP_LOOK, groupOfCategory } from '../../utils/PaperGroups';
 import { maskSensitiveData } from '../../utils/DataMasking';
 import { matchTermsIn, snippetFrom } from '../../utils/MatchTerms';
 import { answerFacts, type AnswerFacts } from '../../utils/AnswerCards';
@@ -15,19 +16,16 @@ export interface PaperKind {
   label: StringKey | null;
 }
 
-const ID: DocumentCategory[] = ['AADHAAR_CARD', 'PAN_CARD', 'VOTER_ID', 'DRIVING_LICENSE', 'PASSPORT'];
-const BILL: DocumentCategory[] = ['INVOICE', 'RECEIPT', 'ELECTRICITY_BILL', 'PHONE_BILL'];
-const BANK: DocumentCategory[] = ['BANK_STATEMENT', 'SALARY_SLIP'];
-const MEDICAL: DocumentCategory[] = ['MEDICAL_REPORT'];
-const TAX: DocumentCategory[] = ['TAX_RETURN'];
-
+/**
+ * The same groups, icons and tints as the Papers tab (utils/PaperGroups), so
+ * a paper looks the same in search as it does there. A plain paper keeps the
+ * paper icon and no second word.
+ */
 export const paperKind = (category: DocumentCategory): PaperKind => {
-  if (ID.includes(category)) return { icon: 'idCard', tint: 'id', label: 'papers.kind.id' };
-  if (BILL.includes(category)) return { icon: 'bill', tint: 'bill', label: 'papers.kind.bill' };
-  if (BANK.includes(category)) return { icon: 'bank', tint: 'bank', label: 'papers.kind.bank' };
-  if (MEDICAL.includes(category)) return { icon: 'medicine', tint: 'medicine', label: 'papers.kind.medical' };
-  if (TAX.includes(category)) return { icon: 'bill', tint: 'bill', label: 'papers.kind.tax' };
-  return { icon: 'papers', tint: 'other', label: null };
+  const group = groupOfCategory(category);
+  if (group === 'other') return { icon: 'papers', tint: 'other', label: null };
+  const look = PAPER_GROUP_LOOK[group];
+  return { icon: look.icon, tint: look.tint, label: look.kind };
 };
 
 /** A readable name from a path. A stray "%" ("50% off.pdf") is kept as it is. */
