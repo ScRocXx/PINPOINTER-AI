@@ -12,6 +12,7 @@ their numbers to `results/`.
 | `app-search.exp.ts` | The misreadings of `ocr-misreads.exp.ts`, searched with the shipped code (`OcrTolerance.ts`, search tail, query terms). | `results/app-search.json` |
 | `app-typos.exp.ts` | The typos of `typos.exp.ts`, corrected with the shipped code (`SpellingRescue.ts`, vocabulary as `fts5vocab` reads it), only when nothing is found. | `results/app-typos.json` |
 | `hotword-split.exp.py` | Does sherpa-onnx split a hotword into the pieces the Hindi model emits? Its splitter (best total score) against the model's BPE, on 26,604 common Hindi words, for three ways of scoring `bpe.vocab`. | `results/hotword-split.json` |
+| `dump-seeds.exp.ts` + `hindi-seeds.exp.py` | Do built-in hotwords (the app's own search words) help Hindi voice search, and at what boost? 40 everyday searches, 35 sound-alike controls and 11 searches with names, each at three speaking speeds, with the shipped word list and line format. | `results/hindi-seed-words.json`, `results/hindi-seeds.json` |
 | `hindi-voice.exp.py` | Hindi voice search end to end with the app's exact recogniser settings, on synthetic Hindi speech (Piper Hindi voice, no sampling noise): greedy vs beam vs beam with hotwords, hotword boosts, and how many hotwords are safe for everyday queries. | `results/hindi-voice.json` |
 
 ## Run

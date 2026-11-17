@@ -287,11 +287,19 @@ a company name, are listened for.
   SHA-256 of every file, and writes the CC BY notice next to it; Settings →
   About credits it. It is new (published days before this branch) by one
   person: it needs real Hindi speech on a phone before release.
-- **Your words as hotwords.** Up to 200 Devanagari words from the person's
+- **Your words as hotwords.** Up to 80 Devanagari words from the person's
   own index (in two papers or more, three letters or more), read from
   fts5vocab on the read connection, go to the model with beam search
   (`services/VoiceHotwords.ts`, at most every 30 minutes). The same words then
   find the paper, and the typo rescue corrects what is still misheard.
+- **Built-in words too.** About 120 words people search for in any gallery
+  (आधार, गैस, वोटर, पर्ची, दिवाली, कार्ड...), taken from the app's own concept
+  table and festival names, are always given to the model, so a new phone
+  and a gallery of English papers are helped as well. They get a gentler
+  boost (1.0) than the person's own words (1.5), and a common word found in
+  the person's papers is left to this list: at 1.5 "आधार" turned "आधार
+  कार्ड" into "आधार कार" and "आधा किलो" into "आधार किलो". The first
+  version of this part had that flaw for anyone with "आधार" in two papers.
 - **Hotwords that can actually fire.** sherpa-onnx splits a hotword by the
   highest total score; this model's BPE splits words by merge order. With the
   model's own scores 75.0% of 26,604 common Hindi words split the same way
@@ -306,8 +314,9 @@ a company name, are listened for.
   app's first Android unit test).
 
 **Measured** (synthetic Hindi speech from the Piper Hindi voice, run with the
-app's exact settings, `research/experiments/hindi-voice.exp.py`; a check of
-the set-up and of what hotwords do, not of accuracy):
+app's exact settings, `research/experiments/hindi-voice.exp.py` and
+`hindi-seeds.exp.py`; a check of the set-up and of what hotwords do, not of
+accuracy):
 
 | | Result |
 |---|---|
@@ -315,6 +324,9 @@ the set-up and of what hotwords do, not of accuracy):
 | "बीएसईएस का बिल" | "बी एस एस का बिल" without hotwords, right with them |
 | Hotword boost 1.5 to 3.0 | No right phrase changed (in a run with the voice's sampling noise on, 2.0 and up turned "आधार कार्ड" into "पधार कार्ड": the default 1.5 is kept) |
 | How many hotwords | 50 and 200 changed nothing; at 500 one phrase got worse ("पर्ची" → "पारची"): the cap is 200 |
+| Built-in words, 40 everyday searches × 3 speeds | 82 → 91 of 120 exactly right, none broken ("कैश सिलेंडर" → "गैस सिलेंडर", "वाटर कार्ड" → "वोटर कार्ड"); at boost 1.5 instead: 89, and "आधार कार्ड" broken |
+| Built-in words, 35 sound-alike controls × 3 speeds | 86 → 87 of 105; one change, "रेलगाड़ी" → "रेल गाड़ी" (still found) |
+| Names (own words 1.5 + built-in 1.0), 11 searches × 3 speeds | 12 → 20 of 33, none broken; own words alone at 1.5 (the first version): 12, with "आधार कार्ड" and "आधा किलो" broken |
 | Speed on this server CPU, 2 threads | well under a tenth of the audio's length per decode; a phone will be several times slower |
 
 **Checked:** the Kotlin compiles against sherpa-onnx 1.13.4 (the pinned AAR),
