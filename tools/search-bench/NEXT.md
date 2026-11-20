@@ -22,16 +22,42 @@ FINDINGS.md). What's left is running it on the owner's phone.
 
 ## The order
 
-1. Connect the owner's computer (Claude desktop app, Remote Control, this
-   repo on `smart-main`). Phone on USB with debugging allowed. Then
-   `node tools/search-bench/device/bench.js check`.
-2. Make sure the CLIP models are in
-   `android/app/src/main/assets/models/clip/`. If not, ask the owner where
-   they are, or make them with `scripts/export_mobileclip.py`.
-3. `device/bench.js build`, then `install`. A Xiaomi/Redmi/POCO phone also
-   needs "Install via USB" and "USB debugging (Security settings)".
+1. **Build in the cloud session** with the environment's `build-apk`
+   (setup script). It installs the JDK, SDK and NDK on first use, exports the
+   CLIP models into `android/app/src/main/assets/models/clip/` (gitignored),
+   and builds arm64 into `/tmp/apk-out`.
+   - `build-apk release smart-main`: the normal app. Check the APK holds
+     `assets/models/clip/*.onnx` (`unzip -l`).
+   - Bench APK: set `BENCH_BUILD = true` in `src/bench/benchFlag.ts`, run
+     `build-apk release smart-main` again (it builds the working tree), rename
+     the output `PinPointer-bench-…apk`, then `git checkout
+     src/bench/benchFlag.ts` and confirm `git status` is clean. Never commit
+     the flag on.
+   - No debug APK: it needs Metro on a PC to run.
+2. **Get the APK to the owner's computer:** send it with SendUserFile (the
+   owner downloads it, one click). The cloud can't copy files to the computer
+   directly.
+3. **Connect the computer:** `list_computer_folders`, then
+   `request_computer_folder` for the folder with the repo clone. There:
+   `git pull` on `smart-main`, `adb devices` (phone authorised), `node
+   tools/search-bench/device/bench.js check`.
+   - Install: `bench.js install --apk <downloaded bench APK>`.
+   - If a differently signed Pinpointer is already installed, the install
+     fails: ask before uninstalling, since that deletes its data.
+   - A Xiaomi/Redmi/POCO phone also needs "Install via USB" and "USB
+     debugging (Security settings)".
+   - Then `bench.js grant`, plus
+     `adb shell pm grant com.pinpointer.app android.permission.RECORD_AUDIO`
+     (voice checks) and
+     `adb shell dumpsys deviceidle whitelist +com.pinpointer.app` (so long
+     indexing isn't killed). Undo the last one at the end with
+     `whitelist -com.pinpointer.app`.
+   - The test gallery (COCO download, drawing images) is prepared **on the
+     computer** (`bench.js prepare`; first `npm install` and `npx playwright
+     install chromium` in `tools/search-bench`): the cloud network blocks
+     COCO, and the images are too big to send.
 4. **Real gallery first:**
-   - `grant`, then `index`; this also writes `privacy.json` (shapes of numbers
+   - `index`; this also writes `privacy.json` (shapes of numbers
      the mask missed).
    - Write searches for what's in the gallery to
      `out/device/real/queries.jsonl`, `mode: "judge"` (picture searches such
