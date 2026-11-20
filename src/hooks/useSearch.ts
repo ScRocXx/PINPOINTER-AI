@@ -1,12 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { searchDocuments, searchDocumentsAsync, understandQuery, DocumentRecord } from '../database';
+import { DocumentRecord, understandQuery } from '../database';
 import { encodeText, warmUpText } from '../services/EmbeddingService';
-import { rescueQuery } from '../services/SpellingService';
-import { parseDateQuery, pictureTextFor, type DateMeaning } from '../utils/DateQuery';
+import { needsRescue, pictureQueryFor, rescueWords, withLookAlikes, wordResults } from '../services/SearchPipeline';
+import { type DateMeaning } from '../utils/DateQuery';
 import { AppLogger } from '../utils/AppLogger';
 import { noteInteraction } from '../services/InteractionGate';
-import { clipTextForQuery } from '../utils/ConceptTable';
-import { queryWords } from '../utils/SearchKeys';
 import {
     loadSearchHistory, saveSearch, deleteSearchItem,
     clearSearchHistory, SearchHistoryItem,
@@ -14,21 +12,6 @@ import {
 
 const SEARCH_DEBOUNCE_MS = 200;
 const HISTORY_DEBOUNCE_MS = 800;
-
-/**
- * Hybrid results first, then any text-only matches (synonyms, Soundex, LIKE
- * fallback) the hybrid query didn't return, so the semantic step only adds.
- */
-const mergeResults = (primary: DocumentRecord[], secondary: DocumentRecord[]): DocumentRecord[] => {
-    const seen = new Set<string>();
-    const merged: DocumentRecord[] = [];
-    for (const doc of [...primary, ...secondary]) {
-        if (seen.has(doc.filePath)) continue;
-        seen.add(doc.filePath);
-        merged.push(doc);
-    }
-    return merged;
-};
 
 /**
  * useSearch — handles search text, debounced DB queries, results, and history.
@@ -92,24 +75,19 @@ export const useSearch = (isDbReady: boolean) => {
         setIsSearchPending(true);
         const timer = setTimeout(async () => {
             try {
-                let query = searchText;
-                let textResults = searchDocuments(searchText);
-                let typed: string | null = null;
-                const dates = parseDateQuery(searchText);
-                // Nothing found by words: correct the typed words against the
-                // person's own index ("bijki bil" → "बिजली bill") and search that.
-                // Not for a date ("Diwali photos"): nothing from then is not a typo.
-                if (textResults.length === 0 && !dates) {
-                    const rescue = await rescueQuery(searchText);
-                    if (!isCurrent) return;
-                    const rescued = rescue ? searchDocuments(rescue.query) : [];
-                    if (rescue && rescued.length > 0) {
-                        query = rescue.query;
-                        textResults = rescued;
-                        typed = searchText;
-                    }
+                // Words first (a few ms). When they find nothing, correct the
+                // typed words against the person's own index ("bijki bil" →
+                // "बिजली bill") and search that; not for a date, since nothing
+                // from then is not a typo. (services/SearchPipeline, shared
+                // with the search bench.)
+                let words = wordResults(searchText);
+                if (needsRescue(words)) {
+                    const rescued = await rescueWords(searchText, () => isCurrent);
+                    if (!rescued) return;
+                    words = rescued;
                 }
                 if (!isCurrent) return;
+                const { query, results: textResults, correctedFrom: typed } = words;
                 lastResultRef.current = { query: searchText, count: textResults.length };
                 setSearchResults(textResults);
                 setDebouncedSearchText(query);
@@ -120,22 +98,14 @@ export const useSearch = (isDbReady: boolean) => {
                 setNewestFirst(meaning.recency !== null);
                 setIsSearchPending(false);
 
-                // Hindi and other Indian-script words never reach the
-                // English-only CLIP tokenizer: known concepts become English,
-                // unknown ones are dropped (null = skip semantic search). A
-                // date query shows CLIP its other words, or what the festival
-                // looks like ("diwali lamps and lights"). "Latest" words are
-                // left out: they are an order, not something a photo shows.
-                const words = meaning.recency ? meaning.recency.rest : null;
-                const lookFor = meaning.dates
-                    ? pictureTextFor({ ...meaning.dates, rest: words ?? meaning.dates.rest })
-                    : words ?? query;
-                const clipText = lookFor ? clipTextForQuery(lookFor, queryWords(lookFor)) : null;
+                // Then the photos that look like the query, once CLIP has
+                // encoded it (null = no picture step for this query).
+                const clipText = pictureQueryFor(query, meaning);
                 const queryVector = clipText ? await encodeText(clipText) : null;
                 if (!isCurrent || !queryVector) return;
                 // The look-alike scan reads every photo's vector: off the JS
                 // thread, so typing and scrolling stay smooth while it runs.
-                const hybridResults = mergeResults(await searchDocumentsAsync(query, queryVector), textResults);
+                const hybridResults = await withLookAlikes(query, queryVector, textResults);
                 if (!isCurrent) return;
                 lastResultRef.current = { query: searchText, count: hybridResults.length };
                 setSearchResults(hybridResults);
