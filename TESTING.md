@@ -25,6 +25,13 @@ npx eslint .
 `--forceExit` is used because React Native's async internals keep the event loop
 alive after the run finishes. `testTimeout` is 15s per test.
 
+## Search accuracy and the phone
+
+Unit tests check code; whether search *finds the right thing* in a big gallery
+is measured by the search bench (`tools/search-bench/README.md`): a desk run on
+real SQLite in seconds, and the same searches on a phone over USB. Everything
+else to check with the app open is in `tools/search-bench/CHECKLIST.md`.
+
 ## Layout
 
 ```

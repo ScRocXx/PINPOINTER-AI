@@ -1,0 +1,15 @@
+{
+  "name": "pinpointer-search-bench",
+  "private": true,
+  "description": "Search accuracy bench for PinPointer: desk (real search code on real SQLite) and device (the real app on a phone).",
+  "scripts": {
+    "corpus": "node corpus/generate.js",
+    "desk": "cd ../.. && npx jest --config tools/search-bench/jest.config.js --testMatch \"**/desk.bench.ts\" --forceExit",
+    "score": "node score.js",
+    "phone": "node device/bench.js"
+  },
+  "dependencies": {
+    "sqlite-vec": "0.1.9",
+    "playwright": "1.63.0"
+  }
+}

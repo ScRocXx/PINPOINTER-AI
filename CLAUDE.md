@@ -18,13 +18,15 @@ npm start                   # Metro
 npm run android             # build + install (needs Android SDK, a device or emulator)
 npx tsc --noEmit            # type check (must be clean)
 npm run lint                # eslint (must be clean)
-npx jest                    # 93 suites / ~2320 tests (must all pass). Slow on the D: drive; use --silent (--runInBand if workers run out of memory)
+npx jest                    # 95 suites / ~2340 tests (must all pass). Slow on the D: drive; use --silent (--runInBand if workers run out of memory)
 cd android && ./gradlew assembleDebug    # native compile check (JDK 17 from JAVA_HOME)
 cd android && ./gradlew testDebugUnitTest   # JVM unit tests of native helpers (android/app/src/test, e.g. SpeechTextTest)
 cd android && ./gradlew assembleRelease  # release APK for phones (arm64-v8a + armeabi-v7a); signed with your keystore if configured (see below), else the debug key
 cd android && ./gradlew assembleRelease -PpinpointerAbis=arm64-v8a,armeabi-v7a,x86_64   # a release build that also runs on an emulator
 adb shell cmd jobscheduler run -f com.pinpointer.app 4711   # force the charging-time indexing job
 npx jest --testMatch '**/research/experiments/app-search.exp.ts'   # research experiments (not part of npx jest; see research/experiments/README.md)
+cd tools/search-bench && npm install && node corpus/generate.js && npm run desk && node score.js out/desk-results.jsonl   # search accuracy bench on 10,000 test items, real SQLite (tools/search-bench/README.md)
+node tools/search-bench/device/bench.js all    # the same bench on a phone over adb (bench APK: device/bench.js build); A-to-Z phone checks: tools/search-bench/CHECKLIST.md
 cd tools/preview && npm install && npm run dev   # browser preview of the UI kit and screens (react-native-web), `npm run shots -- out` for phone screenshots (stories in `tools/preview/src/stories.tsx`, including `home*`, `viewer*` and `search-*`; `tools/preview/src/shims/` swaps the database, permissions, pickers and text reading for sample data, so whole screens like Photos, Papers and Scan render)
 ```
 
@@ -60,6 +62,7 @@ cd tools/preview && npm install && npm run dev   # browser preview of the UI kit
 - `src/utils/DocumentPipeline.ts`: 5-phase PDF pipeline (native text for digital PDFs, raster + OCR for scanned ones; 500 chars/page, 2000 total, pages 1–3).
 
 ### Search and language
+- `src/services/SearchPipeline.ts`: the steps of one search as plain functions (`wordResults`, `needsRescue`/`rescueWords`, `pictureQueryFor`, `withLookAlikes`/`mergeResults`; `searchWordsFirst` runs the word steps). `useSearch` and the search bench both use them, so the bench measures what the screen shows; change search behaviour there, not in the hook.
 - `src/hooks/useSearch.ts`: FTS results show **immediately**, then get re-ranked when the CLIP query vector arrives. When the typed words find nothing, `services/SpellingService.rescueQuery` corrects them against the person's own index (`utils/SpellingRescue.ts`: spelling within 1–2 edits, or a sound key within 1; vocabulary from `fts5vocab` as a TEMP table on the read connection, `database/vocabulary.ts`, freed after 10 idle minutes) and the corrected query is searched instead (`correctedFrom` → "Showing results for …"; "latest" words are never corrected). `newestFirst` drives the "Newest first" line, and CLIP is shown the query without those words. No duplicate search for history. Hindi words reach CLIP as English through `ConceptTable`, and unknown non-Latin text skips CLIP. The CLIP text model (about 64 MB) is **not** loaded at app start: `warmUpText()` runs when search opens (it loads while the person types; word results never wait), and `EmbeddingService` frees it with `MobileCLIPModule.unloadText()` after `TEXT_IDLE_UNLOAD_MS` (10 min) without a search. `isTextModelReady()` / `onTextModelReady()` tell others when it is loaded.
 - `src/utils/IndicText.ts`: one converter from 10 Indian scripts to Roman (schwa deletion, conjuncts, Indic digits) plus the **Bhasha sound key**.
 - `src/utils/SearchKeys.ts`: builds the same sound and concept keys for documents and queries. The hidden tail after `SEARCH_TAIL_MARK` holds `qk` sound keys, `qc` concepts, the Hindi gloss words, Soundex codes, and the OCR-tolerant keys from `src/utils/OcrTolerance.ts`: `qv` shape key (letters OCR confuses made one), `qf` folded sound key (Indian scripts), `qj` joined neighbours (split words). **Bump `SEARCH_KEYS_VERSION` whenever the tail changes:** the `rekey` job (`src/utils/SearchRekey.ts`) then rebuilds older rows from their stored text in the background.
@@ -99,6 +102,10 @@ cd tools/preview && npm install && npm run dev   # browser preview of the UI kit
 - `i18n/`: every string in English and Hindi (`strings.ts`, plain words, jargon glossary at the top), `useStrings()` → `t()`, `ago()` (calendar days: "yesterday" means the day before), `setLang()`; outside React (permission pop-ups, sync notes) use `tNow()` from `i18n/current.ts`, which `LanguageProvider` keeps current; the choice is saved in AsyncStorage, Hindi phones start in Hindi.
 - `utils/PinnedItems.ts` + `hooks/usePinnedItems.ts`: "Important" stars, AsyncStorage, synced across screens (titles must be masked).
 - `hooks/useReducedMotion.ts` (one shared check and listener for the whole app), `hooks/useScreenFocus.ts` (focus that also works outside a navigator).
+
+### Search bench (`tools/search-bench/`, `src/bench/`)
+- `tools/search-bench`: a made-up 10,000-item gallery with ~640 searches and their right answers (`corpus/generate.js`), a desk run of the app's own indexing and search code on real SQLite (`desk/nodeSqlite.js` stands in for op-sqlite; Jest config `tools/search-bench/jest.config.js`, TZ Asia/Kolkata), a phone run (`device/`: COCO photos, drawn papers with EXIF dates, adb orchestration), and one scorer (`score.js`). Findings: `FINDINGS.md`. Output goes to the gitignored `out/`.
+- `src/bench/BenchRunner.ts` runs bench requests inside the app (index, search; results name files, never text) and starts only when `src/bench/benchFlag.ts` says `BENCH_BUILD = true`. **Keep it false in git**; `device/bench.js build` flips it for one build and restores it. `vectors.lookAlikeDiagnosticsAsync` gives it the raw look-alike distances.
 
 ### Native modules (`android/app/src/main/java/com/pinpointer/app/`)
 `MobileCLIPModule` (own thread per encoder, int8 models; decodes file paths and the `content://` URIs gallery photos use, turned upright; `unloadText` frees the text encoder on its own thread), `PhotoReaderModule` (one-decode OCR and labels, see VisionPipeline; `fingerprint`: SHA-1 of the first 64 KB plus the size from the file system, never by skipping, since `FileInputStream.skip()` goes past the end) + `ImageOrientation` + `BPETokenizer` (CLIP-exact vocab), `NativePdfModule`, `SherpaOnnxModule` (Whisper or the Hindi model, see Voice) + `SpeechText`, `StorageModule`, `DocumentAccessModule`, `IndexingJobService` + `IndexingSchedulerModule`. The package name and application ID are `com.pinpointer.app`.

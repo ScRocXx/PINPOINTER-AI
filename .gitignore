@@ -121,3 +121,6 @@ android/.kotlin/
 
 # sherpa-onnx AAR: fetched by `npm install` (download-models.js)
 android/app/libs/*.aar
+
+# Search bench: generated gallery, phone runs, reports (tools/search-bench/README.md)
+tools/search-bench/out/
