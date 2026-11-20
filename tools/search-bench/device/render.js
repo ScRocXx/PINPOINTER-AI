@@ -9,7 +9,9 @@
  *
  *   node device/render.js [--out out] [--coco DIR] [--only 200]
  *
- * Writes out/device/media/Pictures/*.jpg and out/device/media/Download/*.pdf.
+ * Writes out/device/media/<folder>/<file name>: Pictures (photos, JPEG), Screenshots
+ * (1080 × 2400 PNG with a status bar), Download, Documents and WhatsApp (PDFs:
+ * typeset, scanned, or locked with a password like the e-Aadhaar).
  * Photos without text (most of a gallery) come from --coco: a folder of COCO
  * val2017 images (device/photos.js lists which image stands for which photo and
  * what is in it). Without --coco they are left out, and the "what a photo
@@ -20,6 +22,7 @@
  */
 const fs = require('fs');
 const path = require('path');
+const { spawnSync } = require('child_process');
 const { exifJpeg } = require('./exif');
 
 const arg = (name, def) => {
@@ -45,14 +48,23 @@ const fontFaces = ['Regular', 'SemiBold', 'Bold', 'ExtraBold']
   .map(w => `@font-face{font-family:'Mukta ${w}';src:url(data:font/ttf;base64,${fs.readFileSync(path.join(FONTS, `Mukta-${w}.ttf`)).toString('base64')});}`)
   .join('');
 
-/** Screens are drawn at phone size; papers as a photo of a page on a surface. */
-const SCREEN = new Set(['upi', 'sms', 'chat', 'recharge', 'news', 'ticket-app', 'flight']);
+/** Screens are drawn at phone size (1080 × 2400 PNG, like a real screenshot); papers as a photo of a page on a surface. */
+const SCREEN = new Set(['upi', 'sms', 'chat', 'recharge', 'news', 'ticket-app', 'flight', 'app', 'app-dark']);
+/** Copies of a screenshot (WhatsApp forwards) keep the source's look. */
+const isScreen = d => SCREEN.has(d.style) && d.kind !== 'DOCUMENT';
 
 const lineHtml = (lines, first = 'title') =>
   lines.map((l, i) => `<div class="${i === 0 ? first : 'line'}">${esc(l)}</div>`).join('');
 
+/** The phone's status bar on a screenshot: the first line of a screen's text. */
+const statusHtml = d => (isScreen(d) ? `<div class="status">${esc(d.lines[0])}</div>` : '');
+
 const body = d => {
-  const L = d.lines;
+  const L = isScreen(d) ? d.lines.slice(1) : d.lines;
+  return statusHtml(d) + bodyOf(d, L);
+};
+
+const bodyOf = (d, L) => {
   switch (d.style) {
     case 'upi':
       return `<div class="app">${esc(L[0])}</div><div class="tick">✓</div><div class="ok">${esc(L[1])}</div><div class="amount">${esc(L[2])}</div>${lineHtml(L.slice(3), 'line')}`;
@@ -70,8 +82,10 @@ const body = d => {
 };
 
 const css = d => {
-  const tilt = SCREEN.has(d.style) ? 0 : vary(d.id, 't', -4, 4);
-  const blur = SCREEN.has(d.style) || d.ocrLevel === 'clean' ? 0 : d.ocrLevel === 'light' ? 0.4 : 0.9;
+  const screen = isScreen(d);
+  const dark = d.style === 'app-dark';
+  const tilt = screen ? 0 : vary(d.id, 't', -4, 4);
+  const blur = screen || d.ocrLevel === 'clean' ? 0 : d.ocrLevel === 'light' ? 0.4 : 0.9;
   const light = vary(d.id, 'l', 0.85, 1.05);
   const surface = ['#8b6b4a', '#5d5246', '#c9c2b8', '#3f4a52', '#a08060'][hash(d.id) % 5];
   const paper = {
@@ -86,19 +100,21 @@ const css = d => {
     sign: `background:${['#c62828', '#1565c0', '#2e7d32', '#f9a825'][hash(d.id) % 4]};font-family:"Mukta ExtraBold","Mukta Bold";color:#fff;text-align:center;`,
   }[d.style] ?? 'background:#fff;font-family:"Mukta Regular";color:#111;';
   return `html,body{margin:0;padding:0;}
-  body{background:${SCREEN.has(d.style) ? '#fff' : surface};width:${SCREEN.has(d.style) ? 540 : 900}px;min-height:${SCREEN.has(d.style) ? 1200 : 1200}px;display:flex;align-items:center;justify-content:center;}
-  #shot{${SCREEN.has(d.style) ? 'width:540px;min-height:1200px;padding:40px 28px;box-sizing:border-box;background:#fff;font-family:"Mukta Regular";color:#111;' : `width:700px;padding:48px 44px;box-sizing:border-box;${paper}transform:rotate(${tilt}deg);box-shadow:0 18px 40px rgba(0,0,0,.45);filter:blur(${blur}px) brightness(${light});`}}
-  .title{font-family:"Mukta Bold";font-size:${SCREEN.has(d.style) ? 30 : 34}px;line-height:1.25;margin-bottom:12px;}
-  .line{font-size:${SCREEN.has(d.style) ? 24 : 26}px;line-height:1.45;}
+  body{background:${screen ? (dark ? '#121212' : '#fff') : surface};width:${screen ? 540 : 900}px;min-height:1200px;display:flex;align-items:${screen ? 'flex-start' : 'center'};justify-content:center;}
+  #shot{${screen ? `width:540px;height:1200px;overflow:hidden;padding:0 28px 40px;box-sizing:border-box;background:${dark ? '#121212' : '#fff'};font-family:"Mukta Regular";color:${dark ? '#e8e8e8' : '#111'};` : `width:780px;padding:48px 44px;box-sizing:border-box;${paper}transform:rotate(${tilt}deg);box-shadow:0 18px 40px rgba(0,0,0,.45);filter:blur(${blur}px) brightness(${light});`}}
+  .status{margin:0 -28px 22px;padding:6px 18px;font-family:"Mukta SemiBold";font-size:15px;background:${dark ? '#000' : '#f2f2f2'};color:${dark ? '#ddd' : '#333'};}
+  .title{font-family:"Mukta Bold";font-size:${screen ? 30 : 34}px;line-height:1.25;margin-bottom:12px;}
+  .line{font-size:${screen ? 24 : 26}px;line-height:1.45;}
   .big{font-size:58px;line-height:1.15;margin:30px 0 24px;}
   .app{font-family:"Mukta Bold";font-size:28px;color:#5f259f;margin-bottom:60px;}
   .tick{width:110px;height:110px;border-radius:55px;background:#1faa59;color:#fff;font-size:70px;text-align:center;line-height:110px;margin:0 auto 24px;}
   .ok{text-align:center;font-family:"Mukta SemiBold";font-size:30px;}
   .amount{text-align:center;font-family:"Mukta Bold";font-size:64px;margin:10px 0 40px;}
-  .chathead{background:#075e54;color:#fff;font-family:"Mukta SemiBold";font-size:28px;padding:18px 20px;margin:-40px -28px 24px;}
+  .chathead{background:#075e54;color:#fff;font-family:"Mukta SemiBold";font-size:28px;padding:18px 20px;margin:-22px -28px 24px;}
   .bubble{background:#fff;border-radius:12px;padding:12px 16px;margin:10px 60px 10px 0;font-size:24px;box-shadow:0 1px 1px rgba(0,0,0,.15);}
   .bubble.me{background:#dcf8c6;margin:10px 0 10px 60px;}
-  ${d.style === 'chat' || d.style === 'sms' ? '#shot{background:#ece5dd !important;}' : ''}`;
+  ${d.style === 'chat' || d.style === 'sms' ? '#shot{background:#ece5dd !important;}' : ''}
+  ${dark ? '.bubble{background:#1f2c34;color:#e9edef;box-shadow:none}.bubble.me{background:#005c4b}.title{color:#fff}' : ''}`;
 };
 
 const PAGE = `<!doctype html><html><head><meta charset="utf-8"><style>${fontFaces}</style><style id="look"></style></head><body><div id="shot"></div></body></html>`;
@@ -112,6 +128,42 @@ const draw = async (page, d) => {
   await page.evaluate(() => document.fonts.ready);
 };
 
+/**
+ * A PDF: digital ones are typeset text (pages as written); scanned ones are
+ * pictures of pages (each page drawn as a photo of paper, then put in a PDF,
+ * with no text in it).
+ */
+const drawPdf = async (pdfPage, photoPage, d, file) => {
+  const pages = d.pages ?? [d.lines];
+  if (d.pdfKind === 'scanned') {
+    const imgs = [];
+    for (const [i, lines] of pages.entries()) {
+      await draw(photoPage, { ...d, id: `${d.id}p${i}`, style: 'bill', lines, ocrLevel: 'light' });
+      imgs.push((await photoPage.screenshot({ type: 'jpeg', quality: 80, fullPage: true })).toString('base64'));
+    }
+    await pdfPage.setContent(`<!doctype html><style>@page{margin:0}body{margin:0}img{width:100%;page-break-after:always;display:block}</style>${imgs.map(b => `<img src="data:image/jpeg;base64,${b}">`).join('')}`);
+  } else {
+    await pdfPage.setContent(
+      `<!doctype html><meta charset="utf-8"><style>${fontFaces}body{font-family:"Mukta Regular";font-size:14px;color:#111;margin:36px}h2{font-family:"Mukta Bold";font-size:20px;margin:0 0 8px}.pg{page-break-after:always}.pg:last-child{page-break-after:auto}p{margin:2px 0}</style>` +
+        pages.map(lines => `<div class="pg"><h2>${esc(lines[0])}</h2>${lines.slice(1).map(l => `<p>${esc(l)}</p>`).join('')}</div>`).join(''),
+      { waitUntil: 'load' },
+    );
+    await pdfPage.evaluate(() => document.fonts.ready);
+  }
+  await pdfPage.pdf({ path: file, format: 'A4', printBackground: true });
+};
+
+/** Locks a PDF with a password, as UIDAI does with the e-Aadhaar (needs Python with pypdf). */
+const lockPdf = (file, password) => {
+  const script = 'import sys\nfrom pypdf import PdfWriter\nw=PdfWriter(clone_from=sys.argv[1])\nw.encrypt(sys.argv[2])\nw.write(sys.argv[1])';
+  for (const py of ['python3', 'python']) {
+    const r = spawnSync(py, ['-c', script, file, password], { encoding: 'utf8' });
+    if (r.status === 0) return true;
+  }
+  console.log(`\n(could not lock ${path.basename(file)}: install Python and "pip install pypdf"; it stays unlocked)`);
+  return false;
+};
+
 const main = async () => {
   let chromium;
   try {
@@ -123,57 +175,59 @@ const main = async () => {
   const docs = readJsonl(path.join(OUT, 'corpus.jsonl'));
   const textDocs = docs.filter(d => d.lines && !d.copyOf);
   const todo = ONLY ? textDocs.slice(0, ONLY) : textDocs;
-  fs.mkdirSync(path.join(MEDIA, 'Pictures'), { recursive: true });
-  fs.mkdirSync(path.join(MEDIA, 'Download'), { recursive: true });
+  const fileOf = d => path.join(MEDIA, d.folder, d.fileName);
+  for (const f of new Set(docs.map(d => d.folder))) fs.mkdirSync(path.join(MEDIA, f), { recursive: true });
 
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 900, height: 1200 }, deviceScaleFactor: 1.5 });
   await page.setContent(PAGE, { waitUntil: 'load' });
   await page.evaluate(() => document.fonts.ready);
+  const shots = await browser.newPage({ viewport: { width: 540, height: 1200 }, deviceScaleFactor: 2 }); // 1080 × 2400
+  await shots.setContent(PAGE, { waitUntil: 'load' });
+  await shots.evaluate(() => document.fonts.ready);
+  const pdfPage = await browser.newPage();
+  await pdfPage.setContent(PAGE, { waitUntil: 'load' });
   let n = 0;
+  let locked = 0;
   const t0 = Date.now();
   for (const d of todo) {
-    if (d.kind === 'DOCUMENT') {
-      const file = path.join(MEDIA, 'Download', `${d.id}.pdf`);
-      if (!fs.existsSync(file)) {
-        await draw(page, { ...d, style: 'pdf' });
-        await page.pdf({ path: file, format: 'A4', printBackground: true });
-      }
-      fs.utimesSync(file, d.takenAt / 1000, d.takenAt / 1000);
-    } else {
-      const file = path.join(MEDIA, 'Pictures', `${d.id}.jpg`);
-      if (!fs.existsSync(file)) {
-        await page.setViewportSize(SCREEN.has(d.style) ? { width: 540, height: 1200 } : { width: 900, height: 1200 });
+    const file = fileOf(d);
+    if (!fs.existsSync(file)) {
+      if (d.kind === 'DOCUMENT') await drawPdf(pdfPage, page, d, file);
+      else if (isScreen(d)) {
+        await draw(shots, d);
+        fs.writeFileSync(file, await shots.screenshot({ type: 'png', clip: { x: 0, y: 0, width: 540, height: 1200 } }));
+      } else {
         await draw(page, d);
-        const jpg = await page.screenshot({ type: 'jpeg', quality: 82, fullPage: true });
-        fs.writeFileSync(file, exifJpeg(jpg, d.takenAt));
+        fs.writeFileSync(file, exifJpeg(await page.screenshot({ type: 'jpeg', quality: 82, fullPage: true }), d.takenAt));
       }
-      fs.utimesSync(file, d.takenAt / 1000, d.takenAt / 1000);
+      if (d.pdfKind === 'password') locked += lockPdf(file, d.password) ? 1 : 0;
     }
+    fs.utimesSync(file, d.takenAt / 1000, d.takenAt / 1000);
     if (++n % 100 === 0) process.stdout.write(`\r${n} of ${todo.length} drawn (${Math.round((Date.now() - t0) / n)} ms each)`);
   }
   await browser.close();
 
   // Byte-identical WhatsApp copies: the same file under another name.
   let copies = 0;
+  const byId = new Map(docs.map(d => [d.id, d]));
   for (const d of docs.filter(x => x.copyOf)) {
-    const src = path.join(MEDIA, 'Pictures', `${d.copyOf}.jpg`);
+    const src = fileOf(byId.get(d.copyOf));
     if (!fs.existsSync(src)) continue;
-    const file = path.join(MEDIA, 'Pictures', `${d.id}.jpg`);
-    fs.copyFileSync(src, file);
-    fs.utimesSync(file, d.takenAt / 1000, d.takenAt / 1000);
+    fs.copyFileSync(src, fileOf(d));
+    fs.utimesSync(fileOf(d), d.takenAt / 1000, d.takenAt / 1000);
     copies++;
   }
+  if (locked) console.log(`\n${locked} PDFs locked with a password (like UIDAI's e-Aadhaar)`);
 
   // Photos without text: COCO images (see photos.js), dated like the gallery.
   let photos = 0;
   const mapFile = path.join(OUT, 'device', 'photos.json');
   if (COCO && fs.existsSync(mapFile)) {
     const map = JSON.parse(fs.readFileSync(mapFile, 'utf8'));
-    const byId = new Map(docs.map(d => [d.id, d]));
     for (const [id, entry] of Object.entries(map.photos)) {
       const d = byId.get(id);
-      const file = path.join(MEDIA, 'Pictures', `${id}.jpg`);
+      const file = fileOf(d);
       if (!fs.existsSync(file)) fs.writeFileSync(file, exifJpeg(fs.readFileSync(path.join(COCO, entry.file)), d.takenAt));
       fs.utimesSync(file, d.takenAt / 1000, d.takenAt / 1000);
       photos++;

@@ -37,8 +37,20 @@ const MEDIA = path.join(DEV, 'media');
 const REPO = path.resolve(__dirname, '..', '..', '..');
 const PKG = 'com.pinpointer.app';
 const PHONE_BENCH = `/sdcard/Android/data/${PKG}/files/bench`;
-const PHONE_PICTURES = '/sdcard/Pictures/PinpointerBench';
-const PHONE_DOWNLOAD = '/sdcard/Download/PinpointerBench';
+/**
+ * Where each folder of test files goes on the phone. Screenshots go into the
+ * phone's real Screenshots folder (the Home tile reads that album) and
+ * WhatsApp PDFs into WhatsApp's own Documents folder; clean removes only
+ * files whose names start with a bench id (d00001…).
+ */
+const PHONE_DIRS = {
+  Pictures: { to: '/sdcard/Pictures/PinpointerBench', own: true },
+  Screenshots: { to: '/sdcard/Pictures/Screenshots', own: false },
+  Download: { to: '/sdcard/Download/PinpointerBench', own: true },
+  Documents: { to: '/sdcard/Documents/PinpointerBench', own: true },
+  WhatsApp: { to: '/sdcard/Android/media/com.whatsapp/WhatsApp/Media/WhatsApp Documents', own: false },
+};
+const quote = p => `"${p}"`;
 const ADB = process.env.ADB || 'adb';
 const SERIAL = arg('serial', null);
 
@@ -132,33 +144,37 @@ const install = () => {
 };
 
 const push = () => {
-  for (const dir of ['Pictures', 'Download']) {
-    if (!fs.existsSync(path.join(MEDIA, dir))) throw new Error(`Nothing to push: ${path.join(MEDIA, dir)} is missing. Run device/render.js first.`);
+  const folders = Object.keys(PHONE_DIRS).filter(f => fs.existsSync(path.join(MEDIA, f)));
+  if (!folders.includes('Pictures')) throw new Error(`Nothing to push: ${MEDIA} is missing. Run "node device/bench.js prepare" first.`);
+  const present = [];
+  let images = 0;
+  for (const f of folders) {
+    const files = fs.readdirSync(path.join(MEDIA, f)).filter(n => /^d\d{5}/.test(n));
+    const { to } = PHONE_DIRS[f];
+    say(`copying ${files.length} files to ${to}…`);
+    sh(`mkdir -p ${quote(to)}`);
+    if (PHONE_DIRS[f].own) adb(['push', '--sync', path.join(MEDIA, f) + '/.', to]);
+    else for (const n of files) adb(['push', path.join(MEDIA, f, n), `${to}/${n}`], { quiet: true });
+    present.push(...files.map(n => n.slice(0, 6)));
+    if (/\.(jpg|png)$/i.test(files[0] ?? '')) images += files.length;
   }
-  const pictures = fs.readdirSync(path.join(MEDIA, 'Pictures')).filter(f => f.endsWith('.jpg'));
-  const pdfs = fs.readdirSync(path.join(MEDIA, 'Download')).filter(f => f.endsWith('.pdf'));
-  say(`copying ${pictures.length} photos and ${pdfs.length} PDFs (this takes a few minutes)…`);
-  sh(`mkdir -p ${PHONE_PICTURES} ${PHONE_DOWNLOAD}`);
-  adb(['push', '--sync', path.join(MEDIA, 'Pictures') + '/.', PHONE_PICTURES]);
-  adb(['push', '--sync', path.join(MEDIA, 'Download') + '/.', PHONE_DOWNLOAD]);
-  // Make sure the gallery (MediaStore) lists them.
+  // Make sure the gallery (MediaStore) lists every test photo and screenshot.
   const counted = () => {
-    const out = sh(`content query --uri content://media/external/images/media --projection _id --where "_data LIKE '%/Pictures/PinpointerBench/%'"`, { allowFail: true, quiet: true });
+    const out = sh(`content query --uri content://media/external/images/media --projection _id --where "_display_name GLOB 'd[0-9][0-9][0-9][0-9][0-9]*'"`, { allowFail: true, quiet: true });
     return out.split('\n').filter(l => l.startsWith('Row:')).length;
   };
   let n = counted();
-  if (n < pictures.length) {
-    say(`the gallery lists ${n} of ${pictures.length}; asking Android to scan the folder…`);
-    sh(`am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file://${PHONE_PICTURES}`, { allowFail: true, quiet: true });
-    for (const f of pictures) {
-      if (n >= pictures.length) break;
-      sh(`am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file://${PHONE_PICTURES}/${f}`, { allowFail: true, quiet: true });
+  if (n < images) {
+    say(`the gallery lists ${n} of ${images}; asking Android to scan the new files…`);
+    for (const f of folders.filter(x => x === 'Pictures' || x === 'Screenshots')) {
+      for (const name of fs.readdirSync(path.join(MEDIA, f))) {
+        sh(`am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d ${quote(`file://${PHONE_DIRS[f].to}/${name}`)}`, { allowFail: true, quiet: true });
+      }
     }
     n = counted();
   }
-  say(`the gallery lists ${n} of ${pictures.length} test photos`);
-  const present = [...pictures, ...pdfs].map(f => f.replace(/\.(jpg|pdf)$/, ''));
-  fs.writeFileSync(path.join(DEV, 'present.json'), JSON.stringify(present));
+  say(`the gallery lists ${n} of ${images} test photos and screenshots`);
+  fs.writeFileSync(path.join(DEV, 'present.json'), JSON.stringify([...new Set(present)]));
 };
 
 const grant = () => {
@@ -218,6 +234,12 @@ const index = async () => {
   const done = await watch('index-done.json', 'index', 30000);
   fs.writeFileSync(path.join(DEV, 'index-done.json'), JSON.stringify(done, null, 2));
   say(`indexed in ${Math.round(done.ms.total / 60000)} min: ${JSON.stringify(done.ready)}`);
+  // Privacy with real OCR: numbers the mask missed (shapes only, no digits leave the phone).
+  sh(`rm -f ${PHONE_BENCH}/privacy.json`, { allowFail: true, quiet: true });
+  request({ cmd: 'privacy' });
+  const privacy = await watch('privacy.json', 'privacy', 3000);
+  fs.writeFileSync(path.join(DEV, 'privacy.json'), JSON.stringify(privacy, null, 2));
+  say(`privacy: ${privacy.rowsWithUnmaskedNumbers} of ${privacy.rowsChecked} stored texts hold a long number the mask missed${privacy.rowsWithUnmaskedNumbers ? ` (shapes: ${Object.keys(privacy.shapes).slice(0, 5).join(', ')})` : ''}`);
 };
 
 const search = async () => {
@@ -246,7 +268,11 @@ const search = async () => {
 };
 
 const clean = () => {
-  sh(`rm -rf ${PHONE_PICTURES} ${PHONE_DOWNLOAD} ${PHONE_BENCH}`, { allowFail: true });
+  for (const { to, own } of Object.values(PHONE_DIRS)) {
+    if (own) sh(`rm -rf ${quote(to)}`, { allowFail: true });
+    else sh(`rm -f ${quote(to)}/d[0-9][0-9][0-9][0-9][0-9]*`, { allowFail: true }); // only the bench's own files
+  }
+  sh(`rm -rf ${PHONE_BENCH}`, { allowFail: true });
   sh('svc power stayon false', { allowFail: true, quiet: true });
   if (flag('reset-app')) sh(`pm clear ${PKG}`, { allowFail: true });
   say(`removed the test files from the phone${flag('reset-app') ? ' and cleared the app' : ''}. Android's gallery forgets them on its next scan.`);
@@ -324,7 +350,7 @@ const main = async () => {
   }
   const fn = STEPS[step];
   if (!fn) {
-    console.log(fs.readFileSync(__filename, 'utf8').split('*/')[0].replace(/^#!.*\n\/\*\*?/, '').replace(/^ \* ?/gm, ''));
+    console.log(fs.readFileSync(__filename, 'utf8').split('/**')[1].split('*/')[0].replace(/^ \* ?/gm, ''));
     process.exit(step ? 1 : 0);
   }
   if (!OFFLINE.has(step)) check();

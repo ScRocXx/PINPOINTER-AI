@@ -26,7 +26,23 @@ bank SMS, salary slips, LIC receipts, marksheets, certificates, train tickets,
 boarding passes, recharges, festival greetings and photos on the real festival
 days, wedding cards, and the noise a real gallery has: about 700 chat
 screenshots, 500 "good morning" quotes, news, shop boards, product labels,
-notices, WhatsApp copies, and about 7,500 photos without text. Names, numbers
+notices, WhatsApp copies, and about 7,500 photos without text.
+
+- **Screenshots** (about 1,340): UPI, chats (light and dark), SMS, recharges,
+  e-tickets, Amazon orders, DigiLocker, the power company's app, YouTube,
+  Hindi news, calendar, maps. Each is a 1080 × 2400 PNG in
+  `Pictures/Screenshots` with the phone's status bar.
+- **PDFs** (26):
+  - e-bills;
+  - 5-page bank statements, with test words low on page 1, at the top of page
+    2 and on page 5;
+  - an 8-page LIC policy;
+  - Hindi notices;
+  - scanned PDFs (only pictures inside);
+  - UIDAI-style e-Aadhaar locked with a password;
+  - PDFs in WhatsApp's Documents folder.
+- **Photos without text**, with and without image labels, and searches for the
+  placeholder the app stores for them. Names, numbers
 and companies are invented; Aadhaar-shaped numbers fail the Aadhaar checksum,
 so none is real.
 
@@ -48,13 +64,20 @@ npm run desk                                  # indexes 10,000 items with src/ c
 node score.js out/desk-results.jsonl          # → out/desk-results.report.md
 ```
 
+`desk/pdf.bench.ts` runs the app's own PDF reader (`processPDF`) on the
+rendered PDFs (or any folder: `BENCH_PDFS=dir`) and reports, per PDF, whether
+it was read as text or sent to OCR and how many of its words were kept.
+
 `desk/nodeSqlite.js` stands in for op-sqlite with Node's built-in SQLite (FTS5,
 fts5vocab) and the sqlite-vec extension, so the app's SQL, tokenizer and
 ranking run for real (the Jest mock only imitates FTS5). `desk/desk.bench.ts`
 indexes through `indexDocument` (masking, search keys, files table, copies'
 fingerprints) and searches through `services/SearchPipeline.ts`, the same
 functions the search screen calls. It also checks that no full Aadhaar, PAN or
-phone number from the test papers was stored. To look closely at a few
+phone number from the test papers was stored, including numbers where OCR
+read a digit as a letter ("1O85"), which the mask misses. On a phone the same
+check runs after indexing (`privacy.json`: shapes like "#### #### #O##" only,
+no digits). To look closely at a few
 searches:
 
 ```bash

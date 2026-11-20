@@ -154,7 +154,7 @@ const ocrRead = (lines, level) => {
 };
 const noiseLevel = style => {
   // Screenshots are read cleanly; photos of paper less so.
-  const screen = ['upi', 'sms', 'chat', 'recharge', 'news', 'ticket-app', 'flight'].includes(style);
+  const screen = ['upi', 'sms', 'chat', 'recharge', 'news', 'ticket-app', 'flight', 'app', 'app-dark'].includes(style);
   const r = rnd();
   if (screen) return r < 0.85 ? 'clean' : 'light';
   return r < 0.4 ? 'clean' : r < 0.8 ? 'light' : 'heavy';
@@ -204,26 +204,47 @@ let nextDoc = 1;
 let nextQuery = 1;
 
 /** Adds one photo or PDF. Returns its id. */
+/** Phone-screen styles: saved as PNG screenshots in Pictures/Screenshots, with the phone's status bar. */
+const SCREEN_STYLES = new Set(['upi', 'sms', 'chat', 'recharge', 'news', 'ticket-app', 'flight', 'app', 'app-dark']);
+const statusBar = t => {
+  const p = istParts(t);
+  return `${pad(p.h)}:${pad(p.mi)}  ${pick(['4G', '5G', 'VoLTE 4G', 'Wi-Fi'])}  ${int(8, 100)}%`;
+};
+
 const addDoc = d => {
   const id = `d${String(nextDoc++).padStart(5, '0')}`;
-  const level = d.lines ? noiseLevel(d.style) : 'clean';
+  const takenAt = d.takenAt ?? randomTaken();
+  const screen = SCREEN_STYLES.has(d.style) && d.kind !== 'DOCUMENT';
+  // A screenshot shows the phone's status bar too: OCR reads it like any text.
+  const lines = d.pages ? d.pages.flat() : d.lines ? (screen && !d.copyOf ? [statusBar(takenAt), ...d.lines] : d.lines) : null;
+  const level = lines ? (d.pdfKind === 'digital' ? 'clean' : noiseLevel(d.style)) : 'clean';
   const doc = {
     id,
     kind: d.kind ?? 'IMAGE',
     category: d.category,
     style: d.style,
     lang: d.lang ?? 'none',
-    lines: d.lines ?? null,
+    lines,
+    // PDFs: the text page by page (the app reads the first 500 characters of pages 1-3).
+    pages: d.pages ?? null,
+    pagesOcr: d.pages ? d.pages.map(pg => ocrRead(pg, level)) : null,
+    pdfKind: d.pdfKind ?? null,
+    password: d.password ?? null,
     labels: d.labels ?? null,
     theme: d.theme ?? null,
     ocrLevel: level,
-    ocr: d.lines ? ocrRead(d.lines, level) : null,
-    detection: d.lines ? 'TEXT' : d.labels ? 'OBJECT' : 'EMPTY',
-    takenAt: d.takenAt ?? randomTaken(),
+    ocr: lines ? ocrRead(lines, level) : null,
+    detection: lines ? 'TEXT' : d.labels ? 'OBJECT' : 'EMPTY',
+    takenAt,
     series: d.series ?? null,
     copyOf: d.copyOf ?? null,
     person: d.person ?? null,
+    // Where it lives on the phone, and its file name (always starting with the id).
+    folder: d.folder ?? (d.kind === 'DOCUMENT' ? 'Download' : screen ? 'Screenshots' : 'Pictures'),
+    format: d.kind === 'DOCUMENT' ? 'pdf' : screen ? 'png' : 'jpg',
+    fileName: null,
   };
+  doc.fileName = `${id}${d.fileName ? `_${d.fileName}` : ''}.${doc.format}`;
   docs.push(doc);
   return id;
 };
@@ -475,7 +496,7 @@ for (let k = 0; k < 140; k++) {
 for (const [payee, ids] of Object.entries(upiByPayee)) {
   ask(`${payee.split(' ')[0]} payment`, 'exact', 'en', 'set', ids);
 }
-ask('phonepe', 'exact', 'en', 'set', upiIds.filter(id => docs.find(d => d.id === id).lines[0] === 'PhonePe'));
+ask('phonepe', 'exact', 'en', 'set', upiIds.filter(id => docs.find(d => d.id === id).lines.includes('PhonePe')));
 ask('upi payment', 'concept', 'en', 'set', upiIds);
 ask('bhugtan', 'concept', 'hinglish', 'set', upiIds);
 const smsIds = [];
@@ -662,19 +683,153 @@ fill(Math.round(60 * scale), () => {
 const MENTIONS = ['Bijli ka bill bhar diya?', 'Aadhar card ki copy bhej do', 'Papa ki dawai khatam ho gayi', 'Gas cylinder book kar do', 'Bank passbook update karwana hai', 'Train ticket confirm hua?', 'बिजली का बिल कितना आया', 'दवाई ले आना'];
 fill(Math.round(15 * scale), () => addDoc({ category: 'chat', style: 'chat', lang: 'mix', lines: [pick(FAMILY).first, pick(MENTIONS), pick(P.CHAT_LINES)] }));
 
-// PDFs: a share of the papers also come as PDFs (Downloads, e-bills, e-tickets).
-for (const s of billSeries.slice(0, 2)) {
+// ── PDFs ─────────────────────────────────────────────────────────────────────
+// What people keep as PDFs: e-bills, bank statements, policies, e-tickets, an
+// e-Aadhaar (password-protected, as UIDAI sends it), scans, Hindi notices,
+// and PDFs that arrived on WhatsApp (they sit in WhatsApp's own folder).
+const pdfIds = [];
+const pdf = d => {
+  const id = addDoc({ kind: 'DOCUMENT', style: 'pdf', pdfKind: 'digital', ...d });
+  pdfIds.push(id);
+  return id;
+};
+// e-bills, as downloaded from the power company's site
+for (const s of billSeries.slice(0, 3)) {
   for (const id of s.ids.slice(-3)) {
     const d = docs.find(x => x.id === id);
-    addDoc({ kind: 'DOCUMENT', category: d.category, style: 'pdf', lang: d.lang, lines: d.lines, takenAt: d.takenAt, series: d.series, person: d.person });
+    const p = istParts(d.takenAt);
+    const fid = pdf({ category: 'electricity', lang: d.lang, pages: [d.lines], takenAt: d.takenAt, series: d.series, person: d.person, fileName: `${s.co.short.replace(/ /g, '_')}_Bill_${P.MONTHS_EN[p.m].slice(0, 3)}${p.y}` });
+    // The e-bill PDF is as right an answer as the photo of the same bill.
+    for (const q of queries) if (q.expect.ids.includes(id) && !q.expect.ids.includes(fid)) q.expect.ids.push(fid);
+    ask(`${s.co.en.split(' ')[0]} bill pdf ${P.MONTHS_EN[p.m].toLowerCase()} ${p.y}`, 'pdf', 'en', 'one', [fid, id], { note: 'the e-bill PDF (or its photo)' });
   }
 }
+// Bank statements: five pages; some words sit where the app doesn't read.
+const statementTests = [];
+for (let k = 0; k < 4; k++) {
+  const b = P.BANKS[k];
+  const who = FAMILY[k];
+  const acc = digits(12);
+  const late1 = ['Shiv Shakti Hardware', 'Navjeevan Opticals', 'Laxmi Narayan Jewellers', 'Sangam Tent House'][k];
+  const early2 = ['Krishna Fruit Wholesale', 'Vaishno Dhaba', 'Sai Ram Dairy Farm', 'Mahalaxmi Steel'][k];
+  const page5 = ['Saraswati Coaching Centre', 'Ganga Ram Hospital', 'Kalyan Matka Furniture', 'Durga Puja Samiti'][k];
+  const txn = n => Array.from({ length: n }, (_, i) => `${pad((i % 28) + 1)}/${pad(int(1, 12))}/2025 UPI/DR/${digits(9)}/${pick(P.PAYEES)} ${money(50, 4000)}.00 ${money(5000, 90000)}.00`);
+  const pages = [
+    [b.en, 'Account Statement', `Account Name: ${who.en}`, `Account Number: ${acc}`, `Branch: ${who.city[0]} Main`, `IFSC: ${b.ifsc}0${digits(6)}`, 'Statement Period: 01/04/2025 to 30/09/2025', ...txn(14), `05/05/2025 UPI/DR/${digits(9)}/${late1} 1,250.00 41,200.00`, ...txn(10)],
+    [`12/06/2025 UPI/DR/${digits(9)}/${early2} 780.00 38,100.00`, ...txn(24)],
+    txn(25),
+    txn(25),
+    [...txn(12), `28/09/2025 NEFT/${page5} 2,400.00 36,050.00`, 'Closing Balance 36,050.00', 'This is a computer generated statement'],
+  ];
+  const id = pdf({ category: 'bank', lang: 'en', pages, person: who.en, fileName: `${b.short.replace(/ /g, '')}_Statement_Apr-Sep2025` });
+  statementTests.push(id);
+  ask(`${b.en.split(' ').filter(w => w.length > 3 && !['Bank', 'India', 'National'].includes(w))[0] ?? b.ifsc} statement ${who.first.toLowerCase()}`.toLowerCase(), 'pdf', 'en', 'one', [id], { note: 'words at the top of page 1' });
+  ask(late1.toLowerCase(), 'pdf-depth', 'en', 'one', [id], { note: 'only on page 1, after its first 500 characters: the app reads 500 per page' });
+  ask(early2.toLowerCase(), 'pdf-depth', 'en', 'one', [id], { note: 'only at the top of page 2 (read)' });
+  ask(page5.toLowerCase(), 'pdf-depth', 'en', 'one', [id], { note: 'only on page 5: the app reads pages 1-3' });
+}
+ask('bank statement', 'pdf', 'en', 'set', statementTests);
+// An LIC policy document, eight pages, English and Hindi.
+const policyNo = digits(9);
+const lic = pdf({
+  category: 'insurance', lang: 'mix', folder: 'Documents', person: FAMILY[1].en, fileName: 'LIC_Policy_Document',
+  pages: [
+    ['Life Insurance Corporation of India', 'भारतीय जीवन बीमा निगम', 'Policy Document', `Policy Number: ${policyNo}`, `Life Assured: ${FAMILY[1].en}`, "Plan: LIC's Jeevan Anand (Table 915)", 'Sum Assured: Rs 5,00,000', `Nominee: ${FAMILY[0].en}`],
+    ['Schedule of Premiums', 'Yearly premium Rs 24,312', 'Date of commencement 15/03/2019', 'Date of maturity 15/03/2040'],
+    ...Array.from({ length: 6 }, (_, i) => [`Conditions and Privileges page ${i + 3}`, 'Grace period of 30 days is allowed for payment of premium', 'Revival of discontinued policies', 'Loan may be granted on the sole security of the policy']),
+  ],
+});
+ask('jeevan anand', 'pdf', 'en', 'one', [lic]);
+ask(policyNo, 'pdf', 'en', 'one', [lic], { note: 'policy number in a PDF' });
+ask('lic policy document', 'pdf', 'en', 'one', [lic], { also: lifeIds });
+ask('बीमा पॉलिसी', 'pdf', 'hi', 'set', [lic, ...lifeIds]);
+// Hindi PDFs with a text layer.
+const hiNotice = pdf({ category: 'notice', lang: 'hi', fileName: 'Nagar_Nigam_Suchna', pages: [['नगर निगम लखनऊ', 'सार्वजनिक सूचना', 'सभी भवन स्वामियों को सूचित किया जाता है कि गृहकर 31 मार्च तक जमा करें', 'विलंब होने पर ब्याज देय होगा', 'नगर आयुक्त']] });
+ask('गृहकर', 'pdf', 'hi', 'one', [hiNotice]);
+ask('nagar nigam suchna', 'pdf', 'hinglish', 'one', [hiNotice], { note: 'Hinglish query, Hindi PDF' });
+ask('house tax notice', 'pdf', 'en', 'one', [hiNotice], { note: 'English query, Hindi PDF: no shared word' });
+const hiRation = pdf({ category: 'id', lang: 'hi', fileName: 'Ration_Card_List', pages: [['खाद्य एवं रसद विभाग उत्तर प्रदेश', 'पात्र गृहस्थी राशन कार्ड सूची', `${FAMILY[2].hi} - ${int(3, 6)} सदस्य`, `${FAMILY[3].hi} - ${int(2, 5)} सदस्य`]] });
+ask('राशन कार्ड सूची', 'pdf', 'hi', 'one', [hiRation]);
+// Scans: PDFs that are only pictures of pages (a phone scanner app, a shop's scanner).
+const scans = [
+  ['Aadhaar_scan', 'id', ['भारत सरकार', 'Government of India', FAMILY[4].hi, FAMILY[4].en, `DOB: ${pad(int(1, 28))}/${pad(int(1, 12))}/${int(1950, 2000)}`, fakeAadhaar()], `${FAMILY[4].first.toLowerCase()} aadhaar`],
+  ['Property_papers', 'property', ['विक्रय विलेख', 'रजिस्ट्री', `विक्रेता: ${FAMILY[5].hi}`, `खसरा संख्या: ${int(100, 999)}`, 'उप निबंधक कार्यालय'], 'zameen ki registry'],
+  ['Prescription_scan', 'prescription', [`Dr. ${P.DOCTORS[0][0]}`, P.DOCTORS[0][1], `Name: ${FAMILY[6].en}`, 'Rx', '1. Tab Telma 40 mg 1-0-0 x 30 days', '2. Tab Glycomet 500 mg 1-0-1 x 30 days'], `${FAMILY[6].first.toLowerCase()} glycomet`],
+  ['Marksheet_scan', 'certificate', ['Board of High School and Intermediate Education Uttar Pradesh', 'Marksheet cum Certificate', `Name: ${FAMILY[7].en.toUpperCase()}`, 'Result: PASSED IN FIRST DIVISION'], `${FAMILY[7].first.toLowerCase()} marksheet`],
+];
+for (const [name, category, lines, q] of scans) {
+  const id = pdf({ category, lang: 'mix', pdfKind: 'scanned', style: 'pdf-scan', fileName: name, pages: [lines] });
+  const cards = category === 'id' ? idOf[FAMILY[4].en] ?? [] : [];
+  ask(q, 'pdf-scan', /^[a-z ]+$/.test(q) ? 'en' : 'hi', 'one', [id, ...cards], { note: 'a scanned PDF: only OCR can read it' });
+}
+// e-Aadhaar: UIDAI's PDF is locked with a password (first 4 letters of the name + birth year).
+const eAadhaar = [];
+for (const who of FAMILY.slice(0, 2)) {
+  const aad = fakeAadhaar();
+  const born = int(1950, 2000);
+  const id = pdf({
+    category: 'id', lang: 'mix', pdfKind: 'password', password: `${who.first.slice(0, 4).toUpperCase()}${born}`, person: who.en,
+    fileName: `EAadhaar_XXXXXXXX${aad.slice(-4)}_2023110512${digits(4)}`,
+    pages: [['Unique Identification Authority of India', 'भारतीय विशिष्ट पहचान प्राधिकरण', 'Enrolment No: 1234/56789/01234', who.en, `DOB: 01/01/${born}`, aad, 'आधार - आम आदमी का अधिकार']],
+  });
+  eAadhaar.push(id);
+  ask(`${who.first.toLowerCase()} e aadhaar`, 'pdf-locked', 'en', 'one', [id, ...(idOf[who.en] ?? [])], { note: 'password-protected e-Aadhaar PDF (or the card photo)' });
+}
+ask('eaadhaar pdf', 'pdf-locked', 'en', 'set', eAadhaar, { note: 'only the file name can be read without the password' });
+// PDFs that came on WhatsApp: they stay in WhatsApp's folder.
+const waIds = [];
+const waDocs = [
+  ['School_Circular', 'notice', 'en', ['Delhi Public School', 'Circular No. 45/2025', 'Annual Sports Day will be held on 15 December', 'Parents are requested to attend']],
+  ['Shaadi_Card', 'wedding', 'hi', ['शुभ विवाह', `चि. ${FAMILY[3].hi.split(' ')[0]}`, 'संग', 'आयु. पूजा', 'आप सपरिवार सादर आमंत्रित हैं']],
+  ['IRCTC_Ticket', 'ticket', 'en', ['IRCTC E-Ticket', `PNR: ${int(2, 5)}${digits(9)}`, 'Train No./Name: 12004 / Lucknow Shatabdi', 'From: NEW DELHI (NDLS) To: LUCKNOW NR (LKO)']],
+  ['Society_Maintenance_Bill', 'electricity', 'en', ['Green Valley Residents Welfare Association', 'Maintenance Bill', 'Flat No. B-204', 'Amount Due Rs 2,500', 'Due Date 10/12/2025']],
+];
+for (const [name, category, lang, lines] of waDocs) {
+  const id = pdf({ category, lang, folder: 'WhatsApp', fileName: name, pages: [lines] });
+  waIds.push(id);
+}
+ask('sports day circular', 'pdf-whatsapp', 'en', 'one', [waIds[0]], { note: 'a PDF in WhatsApp Documents' });
+ask('shatabdi ticket', 'pdf-whatsapp', 'en', 'one', [waIds[2]], { note: 'a PDF in WhatsApp Documents' });
+ask('maintenance bill', 'pdf-whatsapp', 'en', 'one', [waIds[3]], { note: 'a PDF in WhatsApp Documents' });
+
+// ── More screenshots: the apps people screenshot ─────────────────────────────
+const shotIds = {};
+const shot = (key, d) => {
+  const id = addDoc({ category: 'screenshot', ...d });
+  (shotIds[key] = shotIds[key] || []).push(id);
+  return id;
+};
+fill(25, () => {
+  const item = pick(['Prestige Pressure Cooker 5 L', 'boAt Rockerz 450 Headphones', 'Philips Steam Iron', 'Bajaj Mixer Grinder 750 W', 'Redmi 13C Mobile Cover']);
+  shot('amazon', { style: 'app', lang: 'en', lines: ['amazon.in', 'Your Orders', item, `Arriving ${pick(['Tuesday', 'Friday', 'tomorrow'])}`, `Order # 40${digits(1)}-${digits(7)}-${digits(7)}`, `Order Total ₹${money(299, 4999)}`] });
+});
+fill(6, () => shot('digilocker', { style: 'app', lang: 'mix', lines: ['DigiLocker', 'Issued Documents', 'Aadhaar Card', 'Unique Identification Authority of India', 'Driving License', 'PUC Certificate'] }));
+fill(10, () => {
+  const s = pick(billSeries);
+  shot('powerapp', { style: 'app', lang: 'en', lines: [s.co.short, 'Pay Bill', `${s.co.label} ${s.acct}`, `Bill Amount ₹${money(400, 4800)}`, `Due on ${dmy(randomTaken())}`, 'Pay Now'], person: s.who.en });
+});
+fill(20, () => shot('youtube', { style: 'app-dark', lang: 'mix', lines: ['YouTube', pick(['Shree Hanuman Chalisa | Hariharan', 'Easy Aloo Paratha Recipe', 'Yoga for Back Pain | 20 Minutes', 'Kapil Sharma Show Best Comedy', 'Mann Ki Baat']), `${int(1, 99)}M views`, 'Subscribe'] }));
+fill(25, () => {
+  const who = pick(FAMILY);
+  shot('darkchat', { style: 'app-dark', lang: 'mix', lines: [who.first, ...Array.from({ length: int(3, 6) }, () => pick(P.CHAT_LINES))] });
+});
+fill(15, () => shot('hindinews', { style: 'app', lang: 'hi', lines: [pick(['दैनिक भास्कर', 'अमर उजाला', 'आज तक']), pick(P.NEWS.filter(n => /[\u0900-\u097F]/.test(n))), 'और पढ़ें'] }));
+fill(10, () => shot('calendar', { style: 'app', lang: 'en', lines: ['Calendar', pick(['Doctor appointment', 'Pay LIC premium', 'Gas booking', 'Pension certificate submit']), `${pick(['Mon', 'Wed', 'Sat'])}, ${int(1, 28)} ${pick(P.MONTHS_EN)}`, `${int(9, 18)}:00 – ${int(10, 19)}:00`] }));
+fill(10, () => shot('maps', { style: 'app', lang: 'en', lines: ['Google Maps', `${int(5, 45)} min (${int(2, 30)} km)`, `via ${pick(['NH 27', 'Ring Road', 'Station Road'])}`, pick(['AIIMS Hospital', 'Charbagh Railway Station', 'Hazratganj Market', 'Bada Imambara'])] }));
+ask('amazon order', 'screenshot', 'en', 'set', shotIds.amazon);
+ask('pressure cooker', 'screenshot', 'en', 'set', docs.filter(d => d.lines?.includes('Prestige Pressure Cooker 5 L')).map(d => d.id));
+ask('digilocker', 'screenshot', 'en', 'set', shotIds.digilocker);
+ask('hanuman chalisa', 'screenshot', 'en', 'set', docs.filter(d => d.lines?.some(l => l.startsWith('Shree Hanuman Chalisa'))).map(d => d.id), { note: 'dark-mode screenshots' });
+ask('doctor appointment', 'screenshot', 'en', 'set', docs.filter(d => d.lines?.includes('Doctor appointment')).map(d => d.id));
+ask('hazratganj', 'screenshot', 'en', 'set', docs.filter(d => d.lines?.includes('Hazratganj Market')).map(d => d.id));
+ask('payment screenshot', 'screenshot', 'en', 'set', upiIds, { note: 'UPI screenshots never say "screenshot"' });
+ask('whatsapp chat', 'screenshot', 'en', 'set', docs.filter(d => d.style === 'chat' && !d.copyOf).map(d => d.id), { note: 'chat screenshots never say "WhatsApp"' });
 
 // WhatsApp copies: byte-identical copies of some photos (sent and received).
 const copySource = docs.filter(d => d.detection === 'TEXT' && d.kind === 'IMAGE' && ['payment', 'greeting', 'id', 'electricity'].includes(d.category));
 fill(60, () => {
   const src = pick(copySource);
-  addDoc({ ...src, kind: 'IMAGE', lines: src.lines, takenAt: src.takenAt + int(1, 600) * 1000, copyOf: src.id, series: src.series });
+  addDoc({ ...src, kind: 'IMAGE', lines: src.lines, takenAt: src.takenAt + int(1, 600) * 1000, copyOf: src.id, series: src.series, fileName: null, folder: src.folder === 'Screenshots' ? 'Pictures' : src.folder });
   // keep the copy's text exactly the same as the source's
   docs[docs.length - 1].ocr = src.ocr;
   docs[docs.length - 1].ocrLevel = src.ocrLevel;
@@ -763,6 +918,17 @@ ask('qwerty asdf zxcv giraffe', 'garbage', 'en', 'none', []);
 ask('electricity giraffe', 'absent', 'en', 'none', [], { note: 'one real word, one absent: every word must match' });
 ask('1234567890', 'garbage', 'en', 'none', []);
 ask('0000', 'garbage', 'en', 'none', []);
+
+// ── The Screenshots collection (Home's tile reads the phone's Screenshots album) ──
+const allShots = docs.filter(d => d.folder === 'Screenshots' && !d.copyOf).map(d => d.id);
+ask('Screenshots', 'collection', 'en', 'set', allShots, { note: 'the tile uses the album; a typed search uses words and CLIP' });
+ask('स्क्रीन शॉट', 'collection', 'hi', 'set', allShots);
+ask('screenshot', 'collection', 'en', 'set', allShots);
+
+// ── Photos without text: what is stored for them must not be searchable ──
+ask('image', 'placeholder', 'en', 'none', [], { note: 'photos without text are stored as the word "image"' });
+ask('img', 'placeholder', 'en', 'none', [], { note: 'prefix of the stored placeholder "image"' });
+ask('imag', 'placeholder', 'en', 'none', []);
 
 // ─── Typos in everyday searches ──────────────────────────────────────────────
 // One phone-keyboard typo in about half of the everyday searches (Latin

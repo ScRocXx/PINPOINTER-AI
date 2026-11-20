@@ -5,9 +5,10 @@
  * photos and PDFs on, then talks to this runner through files in the app's
  * own folder (Android/data/com.pinpointer.app/files/bench/):
  *
- *   request.json   {"cmd":"status"} | {"cmd":"index"} | {"cmd":"search","k":20}
+ *   request.json   {"cmd":"status"} | {"cmd":"index"} | {"cmd":"privacy"} | {"cmd":"search","k":100}
  *   status.json    written every few seconds: indexing progress and counts
- *   index-done.json, results.jsonl + run.json + search-done.json
+ *   index-done.json, privacy.json (shapes of numbers the mask missed, no digits),
+ *   results.jsonl + run.json + search-done.json
  *
  * A search runs the very steps the search screen runs (services/SearchPipeline:
  * words, typo rescue, CLIP text, look-alikes) and records what each returned
@@ -31,21 +32,22 @@ import { markFirstRunDone } from '../utils/FirstRun';
 import { AppLogger } from '../utils/AppLogger';
 
 export const BENCH_DIR = `${RNFS.ExternalDirectoryPath}/bench`;
-/** Test files are named d00001.jpg … by the bench; anything else is the phone's own. */
-const BENCH_NAME = /^d\d{5}\.(jpg|jpeg|png|pdf)$/i;
+/** Test files are named d00001.jpg, d00002_BSES_Bill_Nov2025.pdf … by the bench; anything else is the phone's own. */
+const BENCH_NAME = /^(d\d{5})(?:_[^/]*)?\.(jpg|jpeg|png|pdf)$/i;
 const POLL_MS = 2000;
 const STATUS_EVERY_MS = 5000;
 
 export type BenchCommand =
     | { cmd: 'status' }
     | { cmd: 'index' }
+    | { cmd: 'privacy' }
     | { cmd: 'search'; queries?: string; k?: number };
 
 /** The command in a request file, or null when it isn't one. */
 export const parseCommand = (text: string): BenchCommand | null => {
     try {
         const c = JSON.parse(text) as Partial<BenchCommand> & { cmd?: string };
-        if (c.cmd === 'status' || c.cmd === 'index') return { cmd: c.cmd };
+        if (c.cmd === 'status' || c.cmd === 'index' || c.cmd === 'privacy') return { cmd: c.cmd };
         if (c.cmd === 'search') {
             const s = c as { queries?: unknown; k?: unknown };
             return {
@@ -63,7 +65,7 @@ export const parseCommand = (text: string): BenchCommand | null => {
 /** A stored path or URI as the bench names it: "d00042" for its test files, "own:IMG_1234.jpg" otherwise. */
 export const benchIdOf = (filePath: string, names: ReadonlyMap<string, string>): string => {
     const name = names.get(filePath) ?? decodeURIComponent(filePath.split('/').pop() ?? filePath);
-    return BENCH_NAME.test(name) ? name.replace(/\.[a-z]+$/i, '') : `own:${name}`;
+    return BENCH_NAME.exec(name)?.[1] ?? `own:${name}`;
 };
 
 /** Every gallery photo's URI → file name (stored rows hold the URI; the bench knows files by name). */
@@ -119,6 +121,31 @@ const runIndex = async () => {
         vectors: getEmbeddingCount(),
         galleryTotal: await getGalleryTotalCount(),
     });
+};
+
+/**
+ * Long numbers that slipped past the mask: runs of 10-12 digit-like
+ * characters (OCR reads 0 as O, 1 as l, 5 as S…) with at least 8 real digits
+ * and no mask star. Only their shape is reported ("#### #### #O##"), never the
+ * digits, so the result is safe to copy off the phone.
+ */
+const SLIP = /(?<![0-9A-Za-z*])(?:[0-9OoDQlIi|SsBZ][ -]?){9,11}[0-9OoDQlIi|SsBZ](?![0-9A-Za-z*])/g;
+export const unmaskedNumberShapes = (text: string): string[] =>
+    (text.match(SLIP) ?? [])
+        .filter(run => (run.match(/[0-9]/g) ?? []).length >= 8 && /[0-9]/.test(run[0] + run[run.length - 1]))
+        .map(run => run.replace(/[0-9]/g, '#'));
+
+/** Scans every stored text for numbers the mask missed (bench builds only). */
+const runPrivacy = async () => {
+    const result = await getReadDb().execute('SELECT content FROM document_index');
+    const shapes: Record<string, number> = {};
+    let rows = 0;
+    for (const row of (result?.rows ?? []) as Array<{ content?: string }>) {
+        const found = unmaskedNumberShapes(String(row.content ?? '').split('\u2063')[0]);
+        if (found.length) rows++;
+        for (const shape of found) shapes[shape] = (shapes[shape] ?? 0) + 1;
+    }
+    await write('privacy.json', { at: Date.now(), rowsChecked: result?.rows?.length ?? 0, rowsWithUnmaskedNumbers: rows, shapes });
 };
 
 interface QueryLine { qid: string; text: string }
@@ -216,6 +243,7 @@ let busy = false;
 
 const handle = async (cmd: BenchCommand) => {
     if (cmd.cmd === 'index') await runIndex();
+    else if (cmd.cmd === 'privacy') await runPrivacy();
     else if (cmd.cmd === 'search') await runSearch(cmd);
     await writeStatus();
 };

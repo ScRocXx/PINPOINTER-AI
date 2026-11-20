@@ -97,6 +97,10 @@ Run `node device/bench.js search`. Report: `out/device/results.report.md`
 | D13 | Your own photos | `own-queries.csv`, scored the same way | 🖐 labels, 🤖 runs |
 | D14 | Speed | words p50 / p95 ms; CLIP encode ms; look-alike scan ms on 10,000 vectors | 🤖 |
 | D15 | Look-alike cutoff tuning | distances recorded per search → best `STAND_OUT_GAP` (section N) | 🤖 |
+| D16 | Screenshots (1080 × 2400 PNG in Pictures/Screenshots, status bar, light and dark apps) | words found; "Screenshots" / "स्क्रीन शॉट" / "payment screenshot" vs the album | 🤖 |
+| D17 | Photos without text | never in word results; "image" / "img" must not list them (stored placeholder) | 🤖 |
+| D18 | PDFs: e-bills, 5-page statements, 8-page policy, Hindi, scanned, locked e-Aadhaar, WhatsApp folder | found / rank; which page and how deep a word can be and still be found | 🤖 |
+| D19 | Privacy with real OCR | `privacy.json` after indexing: stored texts holding a long number the mask missed (digit read as a letter), by shape only | 🤖 |
 
 ## E. Home (`PinpointerScreen` → Home)
 
@@ -161,6 +165,8 @@ Run `node device/bench.js search`. Report: `out/device/results.report.md`
 | H4 | Progress header | while indexing | Shows progress; grid doesn't redraw every photo | 🤖 |
 | H5 | Viewer | open a photo: Read text, Important, swipe | Text shown is the stored (masked) text; star works | 🤖 |
 | H6 | Limited access notice | some photos allowed | In-page notice, not the banner | 🤖 |
+| H7 | Screenshots filter and tile | PNGs in `Pictures/Screenshots`; on Xiaomi/Redmi also `DCIM/Screenshots` | Both folders counted; count matches the phone's own Screenshots album | 🤖 |
+| H8 | Photos without text | open one in the viewer, Read text | "No words" (not the word "image") | 🤖 |
 
 ## I. Papers tab (`DocumentVaultScreen`)
 
@@ -173,6 +179,11 @@ Run `node device/bench.js search`. Report: `out/device/results.report.md`
 | I5 | Open with Pinpointer | open a PDF with Pinpointer | Same as I4 | 🤖 |
 | I6 | Scanned PDF | a PDF that is only images | Text read by OCR (pages 1–3) and findable | 🤖 |
 | I7 | Big digital PDF | 200 pages | First 2,000 chars indexed; no hang | 🤖 |
+| I8 | Digital PDF text (compressed, as banks and browsers make) | e-bill, statement; logcat "Phase 2" line | Read as text, not sent to OCR (today: always OCR, see FINDINGS 2); time per PDF recorded | 🤖 |
+| I9 | Hindi digital PDF | the Hindi notice | Devanagari words found, not garbage | 🤖 |
+| I10 | Words deep in a PDF | statement: low on page 1, top of page 2, page 5 | Recorded which are found (today: first 500 chars of pages 1–3) | 🤖 |
+| I11 | Password e-Aadhaar | `EAadhaar_….pdf` locked with name + birth year | No crash; something useful happens (today: only the file name is stored) | 🤖 |
+| I12 | WhatsApp PDFs | PDFs in `Android/media/com.whatsapp/WhatsApp/Media/WhatsApp Documents` | Found with All files access (today: never looked at) | 🤖 |
 
 ## J. Scan (`SmartClipboardScreen`)
 
@@ -217,6 +228,7 @@ Run `node device/bench.js search`. Report: `out/device/results.report.md`
 | M6 | ANRs | `dumpsys activity anr`, logcat | None during any section | 🤖 |
 | M7 | Logs don't leak | grep logcat for full Aadhaar / PAN / phone numbers from the test files | None | 🤖 |
 | M8 | Search history privacy gap | look at AsyncStorage search history | Known gap: still unmasked; recorded | 🤖 |
+| M9 | Numbers past the mask | bench `privacy` after indexing your gallery (shapes only) | 0 stored texts with an unmasked Aadhaar or phone number | 🤖 |
 
 ## N. Photo look-alikes (CLIP): unrelated photos
 

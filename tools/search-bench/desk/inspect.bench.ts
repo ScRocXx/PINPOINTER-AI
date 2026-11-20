@@ -17,6 +17,7 @@ import { beginTransaction, commitTransaction } from '../../../src/database/trans
 import { getDb } from '../../../src/database/connection';
 import { searchWordsFirst } from '../../../src/services/SearchPipeline';
 import { termsForQueryWord, searchWords } from '../../../src/utils/SearchKeys';
+import { appCanSee, benchPath, idOfPath, storedText, type CorpusDoc } from './stored';
 
 const OUT = process.env.BENCH_OUT ?? path.join(__dirname, '..', 'out');
 const readJsonl = (f: string) => fs.readFileSync(f, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l));
@@ -26,11 +27,11 @@ test('inspect', async () => {
   const byId = new Map(docs.map((d: any) => [d.id, d]));
   setupDatabase();
   beginTransaction();
-  for (const d of docs) {
-    const uri = `/b/${d.id}.${d.kind === 'DOCUMENT' ? 'pdf' : 'jpg'}`;
+  for (const d of docs as CorpusDoc[]) {
+    if (!appCanSee(d)) continue;
+    const uri = benchPath(d);
     noteFileSeen(uri, d.kind, d.takenAt);
-    const text = d.kind === 'DOCUMENT' ? d.lines.join(' ') : d.detection === 'TEXT' ? d.ocr : d.detection === 'OBJECT' ? d.labels.join(' ') : 'image';
-    indexDocument(null, text, uri, d.kind, d.detection, d.takenAt);
+    indexDocument(null, storedText(d), uri, d.kind, d.detection as 'TEXT', d.takenAt);
     markOcrDone(uri, d.kind);
     setFingerprint(uri, d.copyOf ?? d.id, d.kind);
   }
@@ -41,7 +42,7 @@ test('inspect', async () => {
     out.push(`\n=== ${q}  → searched "${r.query}"${r.correctedFrom ? ' (corrected)' : ''}, ${r.results.length} results, dates=${JSON.stringify(r.meaning.dates?.meaning ?? null)} newest=${!!r.meaning.recency}`);
     out.push(`    words=${JSON.stringify(searchWords(r.query))} terms=${JSON.stringify(searchWords(r.query).map(termsForQueryWord))}`);
     for (const doc of r.results.slice(0, Number(process.env.BENCH_TOP ?? 8))) {
-      const id = path.basename(doc.filePath).replace(/\.\w+$/, '');
+      const id = idOfPath(doc.filePath);
       const d: any = byId.get(id);
       out.push(`    ${id} [${d.category}${d.series ? ' ' + d.series : ''}] ${new Date(d.takenAt).toISOString().slice(0, 10)} ${JSON.stringify((doc.content ?? '').slice(0, 110))}`);
     }

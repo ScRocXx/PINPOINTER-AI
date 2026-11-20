@@ -4,7 +4,7 @@
  */
 import RNFS from 'react-native-fs';
 import { CameraRoll } from '@react-native-camera-roll/camera-roll';
-import { BENCH_DIR, benchIdOf, parseCommand, startBench } from '../BenchRunner';
+import { BENCH_DIR, benchIdOf, parseCommand, startBench, unmaskedNumberShapes } from '../BenchRunner';
 import { BENCH_BUILD } from '../benchFlag';
 import { setupDatabase } from '../../database';
 import { indexDocument } from '../../database/documents';
@@ -26,7 +26,8 @@ describe('benchFlag', () => {
 });
 
 describe('parseCommand', () => {
-    test('reads the three commands', () => {
+    test('reads the four commands', () => {
+        expect(parseCommand('{"cmd":"privacy"}')).toEqual({ cmd: 'privacy' });
         expect(parseCommand('{"cmd":"status"}')).toEqual({ cmd: 'status' });
         expect(parseCommand('{"cmd":"index"}')).toEqual({ cmd: 'index' });
         expect(parseCommand('{"cmd":"search","k":30,"queries":"q.jsonl"}')).toEqual({ cmd: 'search', k: 30, queries: 'q.jsonl' });
@@ -44,6 +45,22 @@ describe('parseCommand', () => {
     });
 });
 
+describe('unmaskedNumberShapes', () => {
+    test('finds numbers the mask missed because OCR read a digit as a letter, by shape only', () => {
+        expect(unmaskedNumberShapes('Aadhaar 4746 9769 1O85 issued')).toEqual(['#### #### #O##']);
+        expect(unmaskedNumberShapes('Mob. 98765l3210')).toEqual(['#####l####']);
+    });
+
+    test('masked numbers, dates, amounts and short numbers are not reported', () => {
+        expect(unmaskedNumberShapes('****-****-1085 ******3210 ABCDE****F')).toEqual([]);
+        expect(unmaskedNumberShapes('Date 12/03/2025 Amount Rs 1,24,500.50 Units 427 PIN 226001')).toEqual([]);
+    });
+
+    test('a full number with no slip is reported too (the mask should have caught it)', () => {
+        expect(unmaskedNumberShapes('K No 2136 5920 8016 due')).toEqual(['#### #### ####']);
+    });
+});
+
 describe('benchIdOf', () => {
     const names = new Map([['content://media/external/images/media/12', 'd00042.jpg'], ['content://media/external/images/media/13', 'IMG_2031.jpg']]);
 
@@ -54,6 +71,9 @@ describe('benchIdOf', () => {
 
     test('PDFs and unknown URIs fall back to the last part of the path', () => {
         expect(benchIdOf('file:///storage/emulated/0/Download/PinpointerBench/d00107.pdf', names)).toBe('d00107');
+        expect(benchIdOf('file:///storage/emulated/0/Download/PinpointerBench/d02485_EAadhaar_XXXXXXXX0711.pdf', names)).toBe('d02485');
+        expect(benchIdOf('content://media/external/images/media/99', new Map([['content://media/external/images/media/99', 'd01200.png']]))).toBe('d01200');
+        expect(benchIdOf('file:///storage/emulated/0/Download/d001.pdf', names)).toBe('own:d001.pdf');
         expect(benchIdOf('file:///storage/emulated/0/Download/Bill%20March.pdf', names)).toBe('own:Bill March.pdf');
     });
 });

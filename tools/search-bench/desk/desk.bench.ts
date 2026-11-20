@@ -25,19 +25,10 @@ import { noteFileSeen, markOcrDone, setFingerprint } from '../../../src/database
 import { beginTransaction, commitTransaction } from '../../../src/database/transactions';
 import { getDb, isFtsAvailable } from '../../../src/database/connection';
 import { searchWordsFirst, pictureQueryFor } from '../../../src/services/SearchPipeline';
+import { appCanSee, benchPath, idOfPath, storedText, type CorpusDoc } from './stored';
 
 const OUT = process.env.BENCH_OUT ?? path.join(__dirname, '..', 'out');
 
-interface CorpusDoc {
-  id: string;
-  kind: 'IMAGE' | 'DOCUMENT';
-  detection: 'TEXT' | 'OBJECT' | 'EMPTY';
-  ocr: string | null;
-  lines: string[] | null;
-  labels: string[] | null;
-  takenAt: number;
-  copyOf: string | null;
-}
 interface Query {
   qid: string;
   text: string;
@@ -45,18 +36,6 @@ interface Query {
 
 const readJsonl = <T,>(file: string): T[] =>
   fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l) as T);
-
-/** Where a test file "lives": the scorer turns results back into ids by this name. */
-export const benchPath = (doc: Pick<CorpusDoc, 'id' | 'kind'>) => `/storage/emulated/0/Pictures/PinpointerBench/${doc.id}.${doc.kind === 'DOCUMENT' ? 'pdf' : 'jpg'}`;
-const idOfPath = (p: string) => path.basename(p).replace(/\.(jpg|pdf)$/, '');
-
-/** What the app stores for a photo or PDF, as GallerySync and DocumentPipeline do. */
-const storedText = (d: CorpusDoc): string => {
-  if (d.kind === 'DOCUMENT') return (d.lines ?? []).join(' ').substring(0, 2000);
-  if (d.detection === 'TEXT') return (d.ocr ?? '').trim() || 'image';
-  if (d.detection === 'OBJECT') return (d.labels ?? []).join(' ');
-  return 'image';
-};
 
 test('desk bench', async () => {
   const docs = readJsonl<CorpusDoc>(path.join(OUT, 'corpus.jsonl'));
@@ -72,6 +51,7 @@ test('desk bench', async () => {
   for (let i = 0; i < docs.length; i += 250) {
     beginTransaction();
     for (const d of docs.slice(i, i + 250)) {
+      if (!appCanSee(d)) continue;
       const t0 = process.hrtime.bigint();
       const uri = benchPath(d);
       noteFileSeen(uri, d.kind, d.takenAt);
@@ -101,18 +81,37 @@ test('desk bench', async () => {
     for (const m of text.match(/\b[6-9]\d{9}\b/g) ?? []) numbers.add(m);
   }
   const db = getDb();
+  // OCR slips turn digits into look-alike letters ("1O85", "l234", "5S"): read
+  // stored text with those letters as digits, so a number that slipped past
+  // the mask that way is still caught.
+  const asDigits = (t: string) => t.replace(/[OoDQ]/g, '0').replace(/[lIi|!]/g, '1').replace(/[Zz]/g, '2').replace(/[Ss]/g, '5').replace(/[G]/g, '6').replace(/[B]/g, '8').replace(/[g]/g, '9');
+  const contents = (db.executeSync('SELECT filePath, content, title FROM document_index').rows ?? []) as Array<{ filePath: string; content: string; title: string | null }>;
   const leaks: string[] = [];
+  const slipped: Array<{ number: string; stored: string; file: string }> = [];
   for (const n of numbers) {
     const spaced = /^\d{12}$/.test(n) ? `${n.slice(0, 4)} ${n.slice(4, 8)} ${n.slice(8)}` : n;
-    const hit = db.executeSync('SELECT COUNT(*) AS c FROM document_index WHERE content LIKE ? OR content LIKE ? OR title LIKE ?', [`%${n}%`, `%${spaced}%`, `%${n}%`]).rows?.[0] as { c: number };
-    if (hit.c > 0) leaks.push(n);
+    const exact = contents.some(r => (r.content ?? '').includes(n) || (r.content ?? '').includes(spaced) || (r.title ?? '').includes(n));
+    if (exact) {
+      leaks.push(n);
+      continue;
+    }
+    if (!/^\d+$/.test(n)) continue;
+    for (const r of contents) {
+      const text = (r.content ?? '').split('\u2063')[0];
+      const flat = asDigits(text).replace(/[\s-]/g, '');
+      if (flat.includes(n)) {
+        const m = text.match(new RegExp(spaced.split('').map(ch => (ch === ' ' ? '[\\s-]?' : '[0-9OoDQlIi|!ZzSsGBg]')).join('')));
+        slipped.push({ number: `${n.slice(0, 2)}…${n.slice(-2)}`, stored: m ? m[0].replace(/[0-9]/g, '#') : '?', file: idOfPath(r.filePath) });
+        break;
+      }
+    }
   }
   const vocabLeaks = (db.executeSync("CREATE VIRTUAL TABLE IF NOT EXISTS temp.bench_vocab USING fts5vocab(main, 'fts_index', 'row')"), [...numbers].filter(n => {
     const r = db.executeSync('SELECT COUNT(*) AS c FROM temp.bench_vocab WHERE term = ?', [n.toLowerCase()]).rows?.[0] as { c: number };
     return r.c > 0;
   }));
   const indexReport = JSON.parse(fs.readFileSync(path.join(OUT, 'desk-index.json'), 'utf8'));
-  indexReport.privacy = { numbersChecked: numbers.size, storedInText: leaks, storedInSearchIndex: vocabLeaks };
+  indexReport.privacy = { numbersChecked: numbers.size, storedInText: leaks, storedInSearchIndex: vocabLeaks, storedWithOcrSlips: slipped };
   fs.writeFileSync(path.join(OUT, 'desk-index.json'), JSON.stringify(indexReport, null, 2));
 
   // ── Search ──
@@ -140,5 +139,5 @@ test('desk bench', async () => {
     lines.push(JSON.stringify(row));
   }
   fs.writeFileSync(path.join(OUT, 'desk-results.jsonl'), lines.join('\n') + '\n');
-  fs.writeFileSync(path.join(OUT, 'desk-run.json'), JSON.stringify({ runAt, where: 'desk', lookAlikes: false }, null, 2));
+  fs.writeFileSync(path.join(OUT, 'desk-run.json'), JSON.stringify({ runAt, where: 'desk', lookAlikes: false, notSeen: docs.filter(d => !appCanSee(d)).map(d => d.id) }, null, 2));
 });

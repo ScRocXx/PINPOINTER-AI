@@ -182,6 +182,8 @@ for (const q of queries) {
     row.ownOnly = bench.length === 0 && gotUnique.length > 0;
   }
   row.failed = !!row.error;
+  // Photos without text in the first 10 (words can only match their labels or the placeholder).
+  row.textlessInTop10 = gotUnique.slice(0, 10).filter(id => { const d = byId.get(id); return d && !d.lines; }).length;
 
   // ── What CLIP added: photos in the final list that the words did not find ──
   if (r.wordIds && (r.look || r.clipText)) {
@@ -289,9 +291,19 @@ const clipSummary = clipRows.length
     }
   : null;
 
+// Photos without text in searches that ask for words (not pictures, dates or the placeholder test).
+const wordy = rows.filter(r => !r.missing && !['picture', 'date', 'placeholder', 'short', 'syntax', 'garbage'].includes(r.kind) && r.textlessInTop10 != null);
+const textless = {
+  searches: wordy.length,
+  withAny: wordy.filter(r => r.textlessInTop10 > 0).length,
+  perSearch: wordy.length ? Math.round((10 * wordy.reduce((a, r) => a + r.textlessInTop10, 0)) / wordy.length) / 10 : null,
+  worst: [...wordy].sort((a, b) => b.textlessInTop10 - a.textlessInTop10).slice(0, 10).filter(r => r.textlessInTop10 > 0).map(r => `${r.text} (${r.textlessInTop10})`),
+};
+
 const report = {
   results: path.relative(process.cwd(), resultsFile),
   clip: clipSummary,
+  textless,
   run,
   overall: summarise(rows),
   byKind: Object.fromEntries(Object.entries(group('kind')).map(([k, rs]) => [k, summarise(rs)])),
@@ -350,6 +362,10 @@ const md = [
         '',
       ]
     : []),
+  '### Photos without text in word searches',
+  '',
+  `${textless.withAny} of ${textless.searches} word searches show photos without text in their top 10 (${cell(textless.perSearch)} per search). Most: ${textless.worst.join(', ') || 'none'}.`,
+  '',
   `### Misses (${report.misses.length})`,
   '',
   '| | Search | Kind | What happened | Note |',

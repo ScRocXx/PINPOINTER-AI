@@ -63,6 +63,11 @@ const localCopy = id => {
 };
 
 const main = async () => {
+  if (process.argv.length <= 2 || !fs.existsSync(path.join(DEV, 'results.jsonl'))) {
+    console.log(fs.readFileSync(__filename, 'utf8').split('/**')[1].split('*/')[0].replace(/^ \* ?/gm, ''));
+    if (process.argv.length > 2) console.log(`No phone results yet in ${DEV} (node device/bench.js search).`);
+    process.exit(1);
+  }
   const results = readJsonl(path.join(DEV, 'results.jsonl'));
   const queries = new Map(readJsonl(path.join(DEV, 'queries.jsonl')).map(q => [q.qid, q]));
   let chosen = process.argv.slice(2).filter(a => /^[a-z]\d+$/i.test(a));
@@ -72,7 +77,7 @@ const main = async () => {
     chosen = [...results].sort((a, b) => added(b) - added(a)).slice(0, Number(arg('worst'))).map(r => r.qid);
   }
   if (chosen.length === 0) {
-    console.log(fs.readFileSync(__filename, 'utf8').split('*/')[0].replace(/^#!.*\n\/\* eslint-env node \*\/\n\/\*\*?/, '').replace(/^ \* ?/gm, ''));
+    console.log(fs.readFileSync(__filename, 'utf8').split('/**')[1].split('*/')[0].replace(/^ \* ?/gm, ''));
     process.exit(1);
   }
   let chromium;
