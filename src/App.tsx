@@ -27,6 +27,8 @@ import { useFirstRunGate } from './hooks/useFirstRun';
 import { useMicButton } from './hooks/useMicButton';
 import { AppLogger } from './utils/AppLogger';
 import { scheduleBackgroundIndexing } from './services/BackgroundIndexingTask';
+import { BENCH_BUILD } from './bench/benchFlag';
+import { startBench } from './bench/BenchRunner';
 import { noteInteraction } from './services/InteractionGate';
 
 const Stack = createStackNavigator<StackParamList>();
@@ -74,6 +76,9 @@ const App: React.FC = () => {
 
         // 2. Let Android index the rest of the gallery while the phone charges
         scheduleBackgroundIndexing();
+
+        // 3. Search bench builds only (tools/search-bench): never in a normal build.
+        if (BENCH_BUILD) startBench();
 
         AppLogger.info('App', 'All systems initialized successfully');
       } catch (error) {

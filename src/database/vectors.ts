@@ -134,6 +134,45 @@ export const findLookAlikesAsync = async (queryVector: Float32Array, limit = 50)
   }
 };
 
+/** What the look-alike rule saw for one query: for measuring and tuning it (the search bench). */
+export interface LookAlikeDiagnostics {
+  /** Photos with a vector. */
+  photos: number;
+  /** The FAR_PERCENTILE distance of the sample, or null when not measured (small gallery or failure). */
+  farDistance: number | null;
+  /** The furthest a photo could be and still count (what findLookAlikesAsync used). */
+  limit: number;
+  /** The `k` closest photos, closest first, whether or not they count. */
+  nearest: LookAlike[];
+}
+
+/**
+ * The same measurements findLookAlikesAsync makes, without the cut: the
+ * closest photos with their distances, the far distance and the limit. Read
+ * only, on the read connection. Null without the vector index.
+ */
+export const lookAlikeDiagnosticsAsync = async (queryVector: Float32Array, k = 50): Promise<LookAlikeDiagnostics | null> => {
+  if (!isVecAvailable()) return null;
+  try {
+    const db = getReadDb();
+    const blob = blobOf(queryVector);
+    const photos = countFrom(await db.execute(COUNT_SQL));
+    let farDistance: number | null = null;
+    if (photos >= MIN_PHOTOS_FOR_STAND_OUT) {
+      const far = farDistanceOf(
+        ((await db.execute(SAMPLE_SQL, [blob, sampleStride(photos)]))?.rows ?? []).map(r => Number((r as { distance?: number }).distance)),
+      );
+      farDistance = Number.isFinite(far) && far > 0 ? far : null;
+    }
+    const limit = farDistance !== null ? standOutLimit(farDistance) : MAX_VECTOR_DISTANCE;
+    const nearest = lookAlikesFrom(await db.execute(KNN_SQL, [blob, knnLimit(k)]), Infinity);
+    return { photos, farDistance, limit, nearest };
+  } catch (e) {
+    AppLogger.warn('DB', 'lookAlikeDiagnosticsAsync failed:', e);
+    return null;
+  }
+};
+
 /** Store a 512-dim float32 embedding vector for a document. Returns false when it wasn't stored. */
 export const indexEmbedding = (documentId: number, embedding: Float32Array): boolean => {
   if (!isVecAvailable()) return false;

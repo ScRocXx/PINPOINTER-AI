@@ -9,7 +9,7 @@
  * Raw stored bytes are read back through the mock's vec_index rows.
  */
 import {
-  getEmbedding, findLookAlikesAsync, farDistanceOf, sampleStride, FAR_SAMPLE_SIZE, getEmbeddingCount, getImagesMissingEmbeddings, hasEmbedding, indexEmbedding,
+  getEmbedding, findLookAlikesAsync, lookAlikeDiagnosticsAsync, farDistanceOf, sampleStride, FAR_SAMPLE_SIZE, getEmbeddingCount, getImagesMissingEmbeddings, hasEmbedding, indexEmbedding,
   standOutLimit, FAR_PERCENTILE, MAX_VECTOR_DISTANCE, MIN_PHOTOS_FOR_STAND_OUT, STAND_OUT_GAP,
 } from '../vectors';
 import { indexDocument } from '../documents';
@@ -321,6 +321,31 @@ describe('findLookAlikesAsync', () => {
       return real(sql, params as never);
     }) as never);
     expect(await findLookAlikesAsync(query)).toHaveLength(30);
+  });
+
+  test('diagnostics: the nearest photos uncut, with the far distance and the limit the search used', async () => {
+    for (let i = 0; i < 30; i++) indexEmbedding(100 + i, atCosine(0.05, 2 + i));
+    indexEmbedding(1, atCosine(0.4, 200));
+    const diag = await lookAlikeDiagnosticsAsync(query, 5);
+    expect(diag).not.toBeNull();
+    expect(diag!.photos).toBe(31);
+    expect(diag!.farDistance).toBeCloseTo(distanceAt(0.05), 4);
+    expect(diag!.limit).toBeCloseTo(distanceAt(0.05) - STAND_OUT_GAP, 4);
+    // Uncut: the far photos are listed too, closest first.
+    expect(diag!.nearest).toHaveLength(5);
+    expect(diag!.nearest[0].documentId).toBe(1);
+    expect(diag!.nearest[1].distance).toBeGreaterThan(diag!.limit);
+    // The same photos the search keeps.
+    expect((await findLookAlikesAsync(query)).map(l => l.documentId)).toEqual(diag!.nearest.filter(n => n.distance <= diag!.limit).map(n => n.documentId));
+  });
+
+  test('diagnostics: a small gallery uses the fixed limit, and nothing without the vector index', async () => {
+    indexEmbedding(1, atCosine(0.3, 2));
+    const diag = await lookAlikeDiagnosticsAsync(query);
+    expect(diag!.farDistance).toBeNull();
+    expect(diag!.limit).toBe(MAX_VECTOR_DISTANCE);
+    jest.spyOn(connectionModule, 'isVecAvailable').mockReturnValue(false);
+    expect(await lookAlikeDiagnosticsAsync(query)).toBeNull();
   });
 
   test('reads a query vector that is a view into a larger buffer', async () => {
