@@ -13,7 +13,7 @@ nothing. Two ways to run it, scored the same way:
 | Photo look-alikes (CLIP) | no | yes, with the raw distances for tuning |
 | Speed, memory, heat | desk speed only | the phone's |
 
-Findings so far: [FINDINGS.md](FINDINGS.md). Next step, the phone run: [NEXT.md](NEXT.md). Everything else to check on a
+Findings so far: [FINDINGS.md](FINDINGS.md). Next step, the phone run: [NEXT.md](NEXT.md); its report follows [REPORT_TEMPLATE.md](REPORT_TEMPLATE.md). Everything else to check on a
 phone, A to Z: [CHECKLIST.md](CHECKLIST.md).
 
 ## The test gallery (`corpus/generate.js`)

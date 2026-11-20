@@ -69,9 +69,23 @@ FINDINGS.md). What's left is running it on the owner's phone.
    - Pick a `STAND_OUT_GAP` from the sweep table.
 5. **Test gallery:** `prepare` (1 GB COCO download), `push`, `index`,
    `search`.
-6. The rest of CHECKLIST.md, by section. Results go in
-   `out/device/checklist-results.md`, a summary in FINDINGS.md.
+6. The rest of CHECKLIST.md, by section.
 7. `clean`.
+
+## The report (required)
+
+From step 1 on, keep a full report in the **laptop's clone**, where the data
+is (the cloud copy is temporary): copy `REPORT_TEMPLATE.md` to
+`reports/<YYYY-MM-DD>-<phone>.md`. Fill in each part as soon as it's done and
+commit it on `smart-main` each time (ask before pushing). At the end:
+- every checklist line has a result;
+- every problem has a "Problems to fix" block (what, evidence, file:line,
+  suggested fix, how to re-test);
+- FINDINGS.md gets a short "On the phone" section linking to the report.
+
+Keep personal content out of the repo: no photos, sheets or real names or
+numbers from the owner's gallery (see the template). Raw results stay in the
+gitignored `out/device/`.
 
 ## Never run on a real phone yet: watch for
 
