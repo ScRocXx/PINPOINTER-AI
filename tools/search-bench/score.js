@@ -41,7 +41,8 @@ const corpusDir = path.resolve(argOf('corpus', findCorpus()));
 const readJsonl = f => fs.readFileSync(f, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l));
 
 const PHASE = argOf('phase', 'final'); // 'words': score what search shows first, before CLIP
-const docs = readJsonl(path.join(corpusDir, 'corpus.jsonl'));
+// A run on your real gallery alone has no test gallery: then there are no test files to know about.
+const docs = fs.existsSync(path.join(corpusDir, 'corpus.jsonl')) ? readJsonl(path.join(corpusDir, 'corpus.jsonl')) : [];
 // A phone run has its own search list (device/photos.js) next to its results.
 const queriesFile = argOf('queries', fs.existsSync(path.join(dir, 'queries.jsonl')) ? path.join(dir, 'queries.jsonl') : path.join(corpusDir, 'queries.jsonl'));
 const queries = readJsonl(queriesFile);
@@ -75,7 +76,7 @@ const windowOf = rule => {
   }
 };
 const expectedIds = q => {
-  if (!q.rule) return q.expect.ids;
+  if (!q.rule) return q.expect?.ids ?? [];
   const [from, to] = windowOf(q.rule);
   return docs.filter(d => d.takenAt >= from && d.takenAt < to && (!q.rule.categories || q.rule.categories.includes(d.category)) && !d.copyOf).map(d => d.id);
 };
@@ -178,8 +179,11 @@ for (const q of queries) {
     }
   } else if (q.mode === 'none') {
     const bench = gotUnique.filter(id => !id.startsWith('own:'));
-    row.falseAlarm = bench.length > 0;
-    row.ownOnly = bench.length === 0 && gotUnique.length > 0;
+    // On a run over your real gallery alone, your photos are the only results:
+    // any not judged right is a false alarm there.
+    const ownWrong = docs.length === 0 ? gotUnique.filter(id => id.startsWith('own:') && verdicts.get(id) !== true) : [];
+    row.falseAlarm = bench.length > 0 || ownWrong.length > 0;
+    row.ownOnly = !row.falseAlarm && gotUnique.length > 0;
   }
   row.failed = !!row.error;
   // Photos without text in the first 10 (words can only match their labels or the placeholder).

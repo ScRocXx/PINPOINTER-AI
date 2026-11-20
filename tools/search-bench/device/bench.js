@@ -280,15 +280,25 @@ const clean = () => {
 
 /** Downloads COCO val2017 (about 1 GB) into --coco DIR (default out/coco) and unpacks it. */
 const coco = async () => {
-  const https = require('https');
+  const web = { 'https:': require('https'), 'http:': require('http') };
   const dir = path.resolve(arg('coco', path.join(OUT, 'coco')));
   fs.mkdirSync(dir, { recursive: true });
-  const get = (url, file) =>
+  // COCO's site may answer only over http: try https first, then http.
+  const get = async (url, file) => {
+    try {
+      await fetchTo(url, file);
+    } catch (e) {
+      if (!url.startsWith('https:')) throw e;
+      say(`${e.message}; trying http`);
+      await fetchTo(url.replace('https:', 'http:'), file);
+    }
+  };
+  const fetchTo = (url, file) =>
     new Promise((resolve, reject) => {
       if (fs.existsSync(file)) return resolve();
       say(`downloading ${url}…`);
       const tmp = `${file}.part`;
-      https
+      web[new URL(url).protocol]
         .get(url, res => {
           if (res.statusCode !== 200) return reject(new Error(`${url}: HTTP ${res.statusCode}`));
           const total = Number(res.headers['content-length'] || 0);

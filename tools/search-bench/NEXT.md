@@ -87,3 +87,13 @@ FINDINGS.md). What's left is running it on the owner's phone.
   (checklist H7).
 - `bench.js build` flips `src/bench/benchFlag.ts` to true and back. If a
   build is interrupted, check it is `false` before committing.
+- The bench talks to the app through `/sdcard/Android/data/com.pinpointer.app/files/bench`.
+  `adb shell` can read it on Android 11–14. If a phone refuses
+  (`Permission denied`), add a mirror under `/sdcard/Download/PinpointerBench-io`
+  to BenchRunner (the app has All files access) rather than giving up.
+- APK signing: without the owner's release keystore, `build-apk` signs with
+  the repo's `android/app/debug.keystore`. A Pinpointer installed from the
+  owner's own PC with the same key installs over it with data kept;
+  otherwise ask before uninstalling.
+- The new cloud session starts on its own branch: `build-apk … smart-main`
+  checks out `smart-main` itself, and commits belong on `smart-main`.
