@@ -2,7 +2,8 @@
 
 Everything to check with the real app open, A to Z. The search accuracy part is
 measured by the bench (`README.md` in this folder); this list covers it and
-everything around it.
+everything around it. Photo look-alikes (CLIP), the biggest open question,
+have their own section at the end: N.
 
 **Who:** 🤖 = Claude can run it over USB (adb taps found by on-screen text,
 screenshots, logs, `dumpsys`); 🖐 = needs a person (speaking, judging whether
@@ -89,13 +90,13 @@ Run `node device/bench.js search`. Report: `out/device/results.report.md`
 | D6 | "Latest" (latest bill, pichla bill, सबसे नया) | right one 1st | 🤖 |
 | D7 | Dates and festivals (kal, last month, Diwali 2024, march 2024 bill) | recall in top 10 / 50 | 🤖 |
 | D8 | Collections (ID cards, Bills, दवाइयाँ, Bank) | recall and precision; matches the Home tile counts (E3) | 🤖 |
-| D9 | What photos show (dog, kutta, कुत्ता, family photo) via CLIP | recall@10 / @50, precision@10 | 🤖 |
+| D9 | What photos show (dog, kutta, कुत्ता, family photo) via CLIP | recall@10 / @50, precision@10; in depth: section N | 🤖 |
 | D10 | Nothing to find (giraffe, keyboard mash, emoji) | false alarms (should be 0) | 🤖 |
 | D11 | Special characters (`"`, `*`, `AND`, `NEAR(`, SQL) | no failure, answers quickly | 🤖 |
 | D12 | Privacy: full Aadhaar / PAN never findable or stored | 0 stored (desk check), Aadhaar search finds nothing | 🤖 |
 | D13 | Your own photos | `own-queries.csv`, scored the same way | 🖐 labels, 🤖 runs |
 | D14 | Speed | words p50 / p95 ms; CLIP encode ms; look-alike scan ms on 10,000 vectors | 🤖 |
-| D15 | Look-alike cutoff tuning | distances recorded per search → best `STAND_OUT_GAP` | 🤖 |
+| D15 | Look-alike cutoff tuning | distances recorded per search → best `STAND_OUT_GAP` (section N) | 🤖 |
 
 ## E. Home (`PinpointerScreen` → Home)
 
@@ -216,3 +217,32 @@ Run `node device/bench.js search`. Report: `out/device/results.report.md`
 | M6 | ANRs | `dumpsys activity anr`, logcat | None during any section | 🤖 |
 | M7 | Logs don't leak | grep logcat for full Aadhaar / PAN / phone numbers from the test files | None | 🤖 |
 | M8 | Search history privacy gap | look at AsyncStorage search history | Known gap: still unmasked; recorded | 🤖 |
+
+## N. Photo look-alikes (CLIP): unrelated photos
+
+The main worry: CLIP adding photos that have nothing to do with the search.
+Every search on the phone records what the words found, what CLIP added, the
+100 nearest photos with their distances, the far distance and the cutoff the
+app used. `score.js` reports it under "Photo look-alikes (CLIP)". On your real
+gallery, Claude looks at the photos (`device/sheet.js` makes one numbered sheet
+per search) and records each one right or wrong (`device/judge.js`), so the
+numbers come from your photos, not made-up ones.
+
+| # | Check | How | Pass when | Who |
+|---|---|---|---|---|
+| N1 | Nonsense gets no photos | keyboard mash, "giraffe", emoji, single letters, 400 letters | 0 look-alikes added (the app's own measurement: 3 of 200 nonsense strings got one) | 🤖 |
+| N2 | Paper searches aren't buried | names, numbers, "ramesh aadhaar", "bses bill", "pnr …" | CLIP never pushes the right paper down; no wrong look-alike in the top 3 | 🤖 |
+| N3 | Paper searches get few photos | same searches | Look-alikes added per search, and how many are wrong (a paper search shouldn't bring ten random card-like photos) | 🤖 |
+| N4 | Picture searches are right | dog, cat, car, cake, temple, flowers, food, beach, baby, selfie, mountain, bike, cow, elephant, wedding, birthday, festival lights | Of the look-alikes in the top 10, at least 8 right (judged on your photos) | 🤖 |
+| N5 | Hindi and Hinglish picture words | कुत्ता, kutta, mandir, मंदिर, khana, phool, gaadi, शादी | Known words reach CLIP in English and work like N4; unknown Hindi is skipped (no look-alikes); unknown Hinglish ("kutta") sent to CLIP as-is: what comes back? | 🤖 |
+| N6 | How many photos CLIP adds | every search | Look-alikes per search: median and max; searches that hit the 50 cap | 🤖 |
+| N7 | The cutoff (`STAND_OUT_GAP` 0.12) | sweep 0.04–0.24 from the recorded distances | A value where N1 = 0 and N4 precision ≥ 80% with the most right photos kept; write it in `vectors.ts` | 🤖 |
+| N8 | Your gallery's make-up | look at the far distance per search on your phone vs the test gallery | The 90th-percentile yardstick behaves on a gallery that is mostly screenshots / mostly people / mostly papers | 🤖 |
+| N9 | Look-alikes of papers | "bill", "aadhaar card", "medicine" | CLIP adds photos of papers that are the right kind, not every white rectangle | 🤖 |
+| N10 | People photos | "family photo", "baby", "selfie", Family tile | Group photos, not every photo with a person; Family tile count sensible | 🤖 |
+| N11 | Festivals | "Diwali 2024", "holi photos" (CLIP sees "diwali lamps and lights") | Lights and colours photos lead; photos of papers from that week don't | 🤖 |
+| N12 | Near-duplicates | 10 burst shots of one scene | Don't fill the whole top 10 | 🤖 |
+| N13 | What CLIP is shown | `clipText` for every search | No filler ("ka", doubled "bill"), no names/numbers that only confuse it | 🤖 |
+| N14 | Small gallery | phone with fewer than 20 photos | Fixed limit 1.26 behaves (no flood) | 🤖 |
+| N15 | Merge order | word search with many matches | First 11 rows are word matches, then one look-alike per two words (RANK_K 10); check it reads well | 🤖 + 🖐 |
+| N16 | Speed of the look-alike scan | 10,000 vectors | Scan time per search (ms) on your phone; typing stays smooth while it runs | 🤖 |

@@ -15,7 +15,7 @@
  *   node device/bench.js clean             take the test files off the phone (--reset-app also clears the app)
  *
  * Options: --serial ID (several devices), --out DIR (default tools/search-bench/out),
- * --apk FILE, --k 20 (look-alike distances recorded per search).
+ * --set NAME (search: run out/device/NAME/queries.jsonl instead, e.g. your real gallery's), --apk FILE, --k 100 (nearest photos recorded per search, with distances).
  *
  * "prepare" runs corpus/generate.js, the COCO download ("coco"), device/photos.js and device/render.js.
  * The phone talks back through files in Android/data/com.pinpointer.app/files/bench (see
@@ -221,7 +221,9 @@ const index = async () => {
 };
 
 const search = async () => {
-  const queries = path.join(DEV, 'queries.jsonl');
+  // --set NAME: another list of searches (out/device/NAME/queries.jsonl), e.g. your real gallery's.
+  const QDIR = arg('set') ? path.join(DEV, arg('set')) : DEV;
+  const queries = path.join(QDIR, 'queries.jsonl');
   if (!fs.existsSync(queries)) throw new Error('No device searches yet: run "node device/photos.js --coco DIR" first.');
   await launch();
   sh(`rm -f ${PHONE_BENCH}/search-done.json ${PHONE_BENCH}/results.jsonl`, { allowFail: true, quiet: true });
@@ -231,16 +233,16 @@ const search = async () => {
     return JSON.stringify({ qid: q.qid, text: q.text });
   });
   pushJson('queries.jsonl', lines.join('\n') + '\n');
-  request({ cmd: 'search', k: Number(arg('k', 20)) });
+  request({ cmd: 'search', k: Number(arg('k', 100)) });
   say(`running ${lines.length} searches on the phone…`);
   await watch('search-done.json', 'search', 5000);
-  adb(['pull', `${PHONE_BENCH}/results.jsonl`, path.join(DEV, 'results.jsonl')], { quiet: true });
+  adb(['pull', `${PHONE_BENCH}/results.jsonl`, path.join(QDIR, 'results.jsonl')], { quiet: true });
   const run = readPhone('run.json');
   const device = fs.existsSync(path.join(DEV, 'device.json')) ? JSON.parse(fs.readFileSync(path.join(DEV, 'device.json'), 'utf8')) : null;
-  fs.writeFileSync(path.join(DEV, 'run.json'), JSON.stringify({ ...run, device }, null, 2));
+  fs.writeFileSync(path.join(QDIR, 'run.json'), JSON.stringify({ ...run, device }, null, 2));
   say('scoring…');
-  spawnSync(process.execPath, [path.join(__dirname, '..', 'score.js'), path.join(DEV, 'results.jsonl')], { stdio: 'inherit' });
-  spawnSync(process.execPath, [path.join(__dirname, '..', 'score.js'), path.join(DEV, 'results.jsonl'), '--phase', 'words'], { stdio: 'inherit' });
+  spawnSync(process.execPath, [path.join(__dirname, '..', 'score.js'), path.join(QDIR, 'results.jsonl')], { stdio: 'inherit' });
+  spawnSync(process.execPath, [path.join(__dirname, '..', 'score.js'), path.join(QDIR, 'results.jsonl'), '--phase', 'words'], { stdio: 'inherit' });
 };
 
 const clean = () => {

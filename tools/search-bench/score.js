@@ -30,7 +30,14 @@ const argOf = (name, def) => {
   return i >= 0 ? process.argv[i + 1] : def;
 };
 const dir = path.dirname(resultsFile);
-const corpusDir = path.resolve(argOf('corpus', fs.existsSync(path.join(dir, 'corpus.jsonl')) ? dir : path.join(dir, '..')));
+/** The nearest folder at or above the results that holds the test gallery. */
+const findCorpus = () => {
+  for (let d = dir; ; d = path.dirname(d)) {
+    if (fs.existsSync(path.join(d, 'corpus.jsonl'))) return d;
+    if (path.dirname(d) === d) return path.join(__dirname, 'out');
+  }
+};
+const corpusDir = path.resolve(argOf('corpus', findCorpus()));
 const readJsonl = f => fs.readFileSync(f, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l));
 
 const PHASE = argOf('phase', 'final'); // 'words': score what search shows first, before CLIP
@@ -40,7 +47,7 @@ const queriesFile = argOf('queries', fs.existsSync(path.join(dir, 'queries.jsonl
 const queries = readJsonl(queriesFile);
 const results = new Map(readJsonl(resultsFile).map(r => [r.qid, PHASE === 'words' && r.wordIds ? { ...r, ids: r.wordIds, ms: { words: r.ms?.words } } : r]));
 // On a phone, only the test files that were copied on can be found.
-const presentFile = path.join(dir, 'present.json');
+const presentFile = [path.join(dir, 'present.json'), path.join(dir, '..', 'present.json')].find(f => fs.existsSync(f)) ?? path.join(dir, 'present.json');
 const present = fs.existsSync(presentFile) ? new Set(JSON.parse(fs.readFileSync(presentFile, 'utf8'))) : null;
 const onPhone = id => id.startsWith('own:') || !present || present.has(id);
 const runFile = [resultsFile.replace(/results\.jsonl$/, 'run.json'), path.join(dir, 'run.json')].find(f => fs.existsSync(f));
@@ -80,6 +87,18 @@ const saysAll = query => {
   return id => words.length > 0 && words.every(w => (textOf.get(id) ?? '').includes(w));
 };
 
+// Judgments: "this photo is / isn't a right answer for this search", made by
+// looking at the photos (device/sheet.js makes the pictures to look at).
+// out/device/judged.jsonl: {"qid":"…","id":"own:IMG_1.jpg","ok":true}
+const judgedFile = path.join(dir, 'judged.jsonl');
+const judged = new Map();
+if (fs.existsSync(judgedFile)) {
+  for (const j of readJsonl(judgedFile)) {
+    if (!judged.has(j.qid)) judged.set(j.qid, new Map());
+    judged.get(j.qid).set(j.id, !!j.ok);
+  }
+}
+
 // A copy stands for its source: finding either is finding the paper.
 const canon = id => byId.get(id)?.copyOf ?? id;
 
@@ -91,6 +110,7 @@ const quantile = (xs, p) => {
   return s[Math.min(s.length - 1, Math.floor(p * s.length))];
 };
 
+const SWEEP = [0.04, 0.06, 0.08, 0.1, 0.12, 0.14, 0.16, 0.18, 0.2, 0.24];
 const rows = [];
 for (const q of queries) {
   const r = results.get(q.qid);
@@ -113,8 +133,12 @@ for (const q of queries) {
     rows.push({ ...row, notOnPhone: true, missing: true });
     continue;
   }
+  const verdicts = judged.get(q.qid) ?? new Map();
+  // A search whose right answers are only known by looking ("judge"): the judged-right ones.
+  if (q.mode === 'judge') for (const [id, ok] of verdicts) if (ok) want.push(id);
   const wantSet = new Set(want);
-  const okSet = new Set([...want, ...(q.also ?? []).map(canon)]);
+  const okSet = new Set([...want, ...(q.also ?? []).map(canon), ...[...verdicts].filter(([, ok]) => ok).map(([id]) => id)]);
+  const wrongSet = new Set([...verdicts].filter(([, ok]) => !ok).map(([id]) => id));
   // A result that literally says every word of the search (a chat that says
   // "bijli bill") is not wrong, just not what was asked for: it counts for
   // precision, not for recall.
@@ -132,6 +156,12 @@ for (const q of queries) {
   } else if (q.mode === 'first') {
     row.hit1 = gotUnique.length > 0 && wantSet.has(gotUnique[0]);
     row.foundAtAll = gotUnique.some(id => wantSet.has(id));
+  } else if (q.mode === 'judge') {
+    const top10 = gotUnique.slice(0, 10);
+    const seen = top10.filter(id => verdicts.has(id));
+    row.judgedInTop10 = seen.length;
+    row.precision10 = seen.length ? seen.filter(id => okSet.has(id)).length / seen.length : null;
+    row.unjudgedInTop10 = top10.length - seen.length;
   } else if (q.mode === 'set') {
     if (want.length === 0) {
       row.emptyExpectation = true; // nothing from then in this gallery: scored as "nothing should be found"
@@ -152,6 +182,38 @@ for (const q of queries) {
     row.ownOnly = bench.length === 0 && gotUnique.length > 0;
   }
   row.failed = !!row.error;
+
+  // ── What CLIP added: photos in the final list that the words did not find ──
+  if (r.wordIds && (r.look || r.clipText)) {
+    const words = new Set(r.wordIds.map(canon));
+    const isRight = id => okSet.has(id) || said(id);
+    const isWrong = id => wrongSet.has(id) || (!isRight(id) && !id.startsWith('own:') && q.mode !== 'judge');
+    const added = gotUnique.filter(id => !words.has(id));
+    const top10 = gotUnique.slice(0, 10);
+    row.clip = {
+      text: r.clipText ?? null,
+      encoded: !!r.look,
+      added: added.length,
+      right: added.filter(isRight).length,
+      wrong: added.filter(isWrong).length,
+      unknown: added.filter(id => !isRight(id) && !isWrong(id)).length,
+      wrongInTop10: top10.filter(id => !words.has(id) && isWrong(id)).length,
+      wrongIds: added.filter(isWrong).slice(0, 8),
+    };
+    if (q.mode === 'one') {
+      const before = [...new Set(r.wordIds.map(canon))].findIndex(id => wantSet.has(id));
+      row.clip.rankBefore = before >= 0 ? before + 1 : null;
+      row.clip.pushedDown = before >= 0 && row.rank != null && row.rank > before + 1;
+    }
+    // What other cutoffs (STAND_OUT_GAP) would have kept, from the recorded distances.
+    if (r.look?.nearest?.length && r.look.far != null) {
+      row.clip.sweep = {};
+      for (const gap of SWEEP) {
+        const kept = r.look.nearest.filter(n => n.d <= r.look.far - gap).slice(0, 50).map(n => canon(n.id));
+        row.clip.sweep[gap] = { kept: kept.length, right: kept.filter(isRight).length, wrong: kept.filter(isWrong).length, wantFound: kept.filter(id => wantSet.has(id)).length };
+      }
+    }
+  }
   rows.push(row);
 }
 
@@ -180,13 +242,61 @@ const summarise = rs => {
     ms: times.length ? { p50: Math.round(quantile(times, 0.5) * 10) / 10, p95: Math.round(quantile(times, 0.95) * 10) / 10, max: Math.round(Math.max(...times) * 10) / 10 } : null,
   };
 };
+// ── CLIP: does it add photos that don't belong? ──
+const NOTHING = r => r.mode === 'none' || r.emptyExpectation;
+const PAPER = r => (r.mode === 'one' || r.mode === 'first') && !['picture', 'own'].includes(r.kind);
+const PICTURE = r => r.kind === 'picture' || r.mode === 'judge' || (r.kind === 'own' && r.mode === 'set');
+const clipRows = rows.filter(r => r.clip && !r.missing);
+const clipGroup = (name, test) => {
+  const rs = clipRows.filter(test);
+  if (!rs.length) return null;
+  const added = rs.reduce((a, r) => a + r.clip.added, 0);
+  const right = rs.reduce((a, r) => a + r.clip.right, 0);
+  const wrong = rs.reduce((a, r) => a + r.clip.wrong, 0);
+  return {
+    name,
+    searches: rs.length,
+    encoded: rs.filter(r => r.clip.encoded).length,
+    withAdded: rs.filter(r => r.clip.added > 0).length,
+    addedPerSearch: Math.round((10 * added) / rs.length) / 10,
+    addedMax: Math.max(...rs.map(r => r.clip.added)),
+    rightPct: pct(right, right + wrong),
+    wrongInTop10PerSearch: Math.round((10 * rs.reduce((a, r) => a + r.clip.wrongInTop10, 0)) / rs.length) / 10,
+    pushedDown: rs.filter(r => r.clip.pushedDown).length,
+  };
+};
+const clipSummary = clipRows.length
+  ? {
+      groups: [clipGroup('Should find nothing', NOTHING), clipGroup('Asking for a paper', PAPER), clipGroup('What a photo shows', PICTURE), clipGroup('All searches', () => true)].filter(Boolean),
+      sweep: SWEEP.map(gap => {
+        const at = test => clipRows.filter(r => test(r) && r.clip.sweep);
+        const sum = (rs, k) => rs.reduce((a, r) => a + r.clip.sweep[gap][k], 0);
+        const nothing = at(NOTHING);
+        const paper = at(PAPER);
+        const picture = at(PICTURE);
+        const wantTotal = picture.reduce((a, r) => a + Math.min(50, r.expected || 0), 0);
+        return {
+          gap,
+          nothingWithAny: nothing.filter(r => r.clip.sweep[gap].kept > 0).length,
+          nothingN: nothing.length,
+          paperKept: paper.length ? Math.round((10 * sum(paper, 'kept')) / paper.length) / 10 : null,
+          paperWrong: paper.length ? Math.round((10 * sum(paper, 'wrong')) / paper.length) / 10 : null,
+          picturePrecision: pct(sum(picture, 'right'), sum(picture, 'right') + sum(picture, 'wrong')),
+          pictureRecall: pct(sum(picture, 'wantFound'), wantTotal),
+        };
+      }),
+      worst: [...clipRows].sort((a, b) => b.clip.wrong - a.clip.wrong).slice(0, 25).filter(r => r.clip.wrong > 0),
+    }
+  : null;
+
 const report = {
   results: path.relative(process.cwd(), resultsFile),
+  clip: clipSummary,
   run,
   overall: summarise(rows),
   byKind: Object.fromEntries(Object.entries(group('kind')).map(([k, rs]) => [k, summarise(rs)])),
   byLang: Object.fromEntries(Object.entries(group('lang')).map(([k, rs]) => [k, summarise(rs)])),
-  misses: rows.filter(r => (r.mode === 'one' && !r.hit3) || (r.mode === 'first' && !r.hit1) || (r.mode === 'set' && !r.emptyExpectation && (r.recall10 ?? 1) < 0.5) || r.falseAlarm || r.failed),
+  misses: rows.filter(r => !r.missing).filter(r => (r.mode === 'one' && !r.hit3) || (r.mode === 'first' && !r.hit1) || (r.mode === 'set' && !r.emptyExpectation && (r.recall10 ?? 1) < 0.5) || (r.mode === 'judge' && (r.precision10 ?? 1) < 0.5) || r.falseAlarm || r.failed),
   rows,
 };
 const base = resultsFile.replace(/\.jsonl$/, '') + (PHASE === 'words' ? '.words' : '');
@@ -202,7 +312,7 @@ const table = (title, groups) => {
   return lines.join('\n');
 };
 const missLine = r => {
-  const why = r.failed ? `failed: ${r.error}` : r.falseAlarm ? `found ${r.found} (should be none)` : r.mode === 'one' ? (r.rank ? `ranked ${r.rank}` : 'not found') : r.mode === 'first' ? `top was ${cell(r.top[0])}` : `recall@10 ${Math.round(100 * r.recall10)}%, precision@10 ${Math.round(100 * r.precision10)}%`;
+  const why = r.failed ? `failed: ${r.error}` : r.falseAlarm ? `found ${r.found} (should be none)` : r.mode === 'one' ? (r.rank ? `ranked ${r.rank}` : 'not found') : r.mode === 'first' ? `top was ${cell(r.top?.[0])}` : r.mode === 'judge' ? `precision@10 ${Math.round(100 * r.precision10)}% of ${r.judgedInTop10} judged` : `recall@10 ${Math.round(100 * r.recall10)}%, precision@10 ${Math.round(100 * r.precision10)}%`;
   return `| ${r.qid} | \`${r.text.length > 50 ? r.text.slice(0, 50) + '…' : r.text}\` | ${r.kind} | ${why}${r.correctedFrom ? ` (searched "${r.searched}")` : ''} | ${cell(r.note)} |`;
 };
 const md = [
@@ -216,6 +326,30 @@ const md = [
   '',
   table('By language', report.byLang),
   '',
+  ...(clipSummary
+    ? [
+        '### Photo look-alikes (CLIP): what it adds',
+        '',
+        'Photos in the final list that the words did not find. Right = an answer of the search (or judged right); wrong = not an answer (or judged wrong); your own unjudged photos are unknown.',
+        '',
+        '| | Searches | CLIP ran | Added any | Added per search (max) | Of added: right | Wrong ones in top 10, per search | Pushed the right paper down |',
+        '|---|---|---|---|---|---|---|---|',
+        ...clipSummary.groups.map(g => `| ${g.name} | ${g.searches} | ${g.encoded} | ${g.withAdded} | ${g.addedPerSearch} (${g.addedMax}) | ${cell(g.rightPct)}% | ${g.wrongInTop10PerSearch} | ${g.pushedDown} |`),
+        '',
+        `Other cutoffs, from the recorded distances (the app uses STAND_OUT_GAP = 0.12; larger = stricter):`,
+        '',
+        '| Gap | Should find nothing: searches with any look-alike | Paper searches: look-alikes kept / wrong, per search | Picture searches: precision / recall |',
+        '|---|---|---|---|',
+        ...clipSummary.sweep.map(w => `| ${w.gap}${w.gap === 0.12 ? ' (now)' : ''} | ${w.nothingWithAny} of ${w.nothingN} | ${cell(w.paperKept)} / ${cell(w.paperWrong)} | ${cell(w.picturePrecision)}% / ${cell(w.pictureRecall)}% |`),
+        '',
+        '**Most wrong look-alikes**',
+        '',
+        '| | Search | CLIP was shown | Added | Wrong | Wrong ones (first 8) |',
+        '|---|---|---|---|---|---|',
+        ...clipSummary.worst.map(r => `| ${r.qid} | \`${r.text}\` | ${cell(r.clip.text)} | ${r.clip.added} | ${r.clip.wrong} | ${r.clip.wrongIds.join(' ')} |`),
+        '',
+      ]
+    : []),
   `### Misses (${report.misses.length})`,
   '',
   '| | Search | Kind | What happened | Note |',
@@ -227,4 +361,8 @@ fs.writeFileSync(`${base}.report.md`, md);
 console.log(table('Overall', { all: report.overall }));
 console.log('');
 console.log(table('By kind of search', report.byKind));
+if (clipSummary) {
+  console.log('\nCLIP look-alikes:');
+  for (const g of clipSummary.groups) console.log(`  ${g.name}: ${g.withAdded} of ${g.searches} searches got look-alikes, ${g.addedPerSearch} per search, ${cell(g.rightPct)}% of them right, ${g.pushedDown} pushed the right paper down`);
+}
 console.log(`\n${report.misses.length} misses → ${path.relative(process.cwd(), base)}.report.md`);

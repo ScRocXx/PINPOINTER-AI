@@ -197,7 +197,7 @@ const runSearch = async (cmd: Extract<BenchCommand, { cmd: 'search' }>) => {
     for (let i = 0; i < queries.length; i++) {
         let row: unknown;
         try {
-            row = await searchOnce(queries[i], names, cmd.k ?? 20);
+            row = await searchOnce(queries[i], names, cmd.k ?? 100);
         } catch (e) {
             row = { qid: queries[i].qid, ids: [], error: String(e) };
         }

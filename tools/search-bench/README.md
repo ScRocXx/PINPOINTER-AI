@@ -100,6 +100,19 @@ they show ("dog", "kutta", "कुत्ता", "family photo" …) with COCO's
 the right answers. COCO has 5,000, so the phone gallery is about 7,600 test
 files; your own photos make up the rest.
 
+**Judging CLIP on real photos:** the bench records what CLIP added to every
+search and the 100 nearest photos with their distances. `device/sheet.js`
+makes a numbered picture sheet per search (green = found by words, purple =
+added by CLIP, dashed = nearest photos the cutoff left out); after looking,
+`device/judge.js q00405 ok 1-6,9 wrong 7,8` records verdicts in
+`judged.jsonl`, and `score.js` counts them. The report's CLIP section shows
+how many photos CLIP adds, how many are wrong, whether they push the right
+paper down, and what other `STAND_OUT_GAP` values would have kept. Searches on
+your real gallery go in their own set: `out/device/real/queries.jsonl` (mode
+`judge` when the right answers are only known by looking), then `node
+device/bench.js search --set real`, `node device/sheet.js --set real --kind
+picture`.
+
 **Your own photos (optional):** list searches and their right answers by file
 name in `out/device/own-queries.csv`, one per line:
 

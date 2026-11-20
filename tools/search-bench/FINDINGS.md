@@ -148,9 +148,11 @@ Each has the searches that show it; `inspect.bench.ts` shows why (see README).
 
 - Real ML Kit OCR on tilted, blurred photos (Latin and Devanagari), instead of
   simulated misreadings.
-- CLIP look-alikes:
+- CLIP look-alikes, the biggest open question (CHECKLIST.md, section N):
+  - how many unrelated photos CLIP adds to each search, judged on real photos;
+  - whether they push the right paper down in paper searches;
   - "dog", "kutta", "family photo" and festival photos;
-  - whether `STAND_OUT_GAP = 0.12` keeps nonsense out and real matches in, from
-    the distances recorded for every search.
+  - which `STAND_OUT_GAP` keeps nonsense out and real matches in, from the 100
+    nearest distances recorded for every search.
 - Speed, memory and heat on a 2–3 GB phone: indexing 10,000 photos, the CLIP
   scan over 10,000 vectors, voice.
