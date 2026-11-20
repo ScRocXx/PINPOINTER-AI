@@ -1,14 +1,20 @@
 # Phone test report: <phone model>, <date>
 
-Copy this file to `tools/search-bench/reports/<YYYY-MM-DD>-<phone>.md` and
-fill it in **as you go**. After each part, save and commit it on `smart-main`,
-so nothing is lost if the session or the context runs out. Write for someone
-who wasn't there: a later session fixing these problems starts from this file.
+Fill in **two copies** of this file as you go, and save after every part, so
+nothing is lost if the session or the context runs out:
 
-**Privacy:** no personal photos, sheets or screenshots of personal content in
-the repo. No real names, numbers or addresses from the owner's gallery: say
-"a family photo" or "an Aadhaar card". File names like IMG_2031.jpg are fine.
-Raw data stays in the gitignored `out/` folder on the laptop.
+| | Private report | Repo report |
+|---|---|---|
+| Where | `tools/search-bench/private/reports/<YYYY-MM-DD>-<phone>.md` on the laptop (gitignored, never committed) | `tools/search-bench/reports/<YYYY-MM-DD>-<phone>.md`, committed on `smart-main` after each part |
+| Holds | everything: real file names, names and words seen in the owner's photos, real searches and what they returned, links to sheets, screenshots and logs in `out/device/` and `private/` | the same structure and every number, with personal details replaced by descriptions ("a family photo", "an Aadhaar card", "a relative's name") |
+| For | working from the laptop later: reproducing a problem on the owner's own photos | fixing the code anywhere |
+
+Write the private report first, then the repo report from it. Screenshots
+and sheets of personal content go in `tools/search-bench/private/` or
+`out/device/`, never elsewhere in the repo. Before every commit, check the repo
+report and `git diff` for names, numbers or addresses from the gallery.
+Write for someone who wasn't there: a later session fixing these problems
+starts from these files.
 
 ## 1. Setup
 

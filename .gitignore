@@ -124,3 +124,5 @@ android/app/libs/*.aar
 
 # Search bench: generated gallery, phone runs, reports (tools/search-bench/README.md)
 tools/search-bench/out/
+# Private phone test reports: real names, examples and photos from the owner's gallery. Laptop only, never committed.
+tools/search-bench/private/

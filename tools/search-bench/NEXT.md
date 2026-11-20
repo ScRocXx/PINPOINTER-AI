@@ -72,20 +72,27 @@ FINDINGS.md). What's left is running it on the owner's phone.
 6. The rest of CHECKLIST.md, by section.
 7. `clean`.
 
-## The report (required)
+## The reports (required)
 
-From step 1 on, keep a full report in the **laptop's clone**, where the data
-is (the cloud copy is temporary): copy `REPORT_TEMPLATE.md` to
-`reports/<YYYY-MM-DD>-<phone>.md`. Fill in each part as soon as it's done and
-commit it on `smart-main` each time (ask before pushing). At the end:
+Keep two copies of `REPORT_TEMPLATE.md` in the **laptop's clone**, where the
+data is (the cloud copy is temporary). Fill both in as each part is done:
+
+- **Private, full:** `tools/search-bench/private/reports/<YYYY-MM-DD>-<phone>.md`.
+  Gitignored, never committed. Everything goes here: real file names, what
+  the photos show, real searches and results, links to sheets, screenshots
+  and logs (kept in `private/` or `out/device/`). It is for working from the
+  laptop later on the owner's own photos.
+- **Repo, cleaned:** `tools/search-bench/reports/<YYYY-MM-DD>-<phone>.md`.
+  The same structure and numbers, with names, numbers, addresses and photo
+  descriptions that identify anyone replaced by general words. Commit it on
+  `smart-main` after each part; ask before pushing. Check `git diff` for
+  personal details before every commit.
+
+At the end:
 - every checklist line has a result;
 - every problem has a "Problems to fix" block (what, evidence, file:line,
   suggested fix, how to re-test);
-- FINDINGS.md gets a short "On the phone" section linking to the report.
-
-Keep personal content out of the repo: no photos, sheets or real names or
-numbers from the owner's gallery (see the template). Raw results stay in the
-gitignored `out/device/`.
+- FINDINGS.md gets a short "On the phone" section linking to the repo report.
 
 ## Never run on a real phone yet: watch for
 
