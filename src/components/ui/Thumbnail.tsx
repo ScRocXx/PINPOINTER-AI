@@ -14,6 +14,12 @@ export interface ThumbnailProps {
   resizeMode?: ImageResizeMode;
   /** Shown while loading and when there's no picture (PDFs, missing files). */
   fallbackIcon?: IconName;
+  /**
+   * Show the icon while the photo loads, not only when there is none.
+   * Grids turn it off: one SVG per tile is real work while scrolling on a
+   * slow phone, and the soft placeholder alone already shows something.
+   */
+  iconWhileLoading?: boolean;
   /** Fill the parent's width instead of a fixed size (grids). */
   fill?: boolean;
   style?: StyleProp<ViewStyle>;
@@ -32,6 +38,7 @@ export const Thumbnail: React.FC<ThumbnailProps> = ({
   radius = Radius.sm,
   resizeMode = 'cover',
   fallbackIcon = 'photos',
+  iconWhileLoading = true,
   fill = false,
   style,
   testID = 'thumbnail',
@@ -59,9 +66,11 @@ export const Thumbnail: React.FC<ThumbnailProps> = ({
 
   return (
     <View style={[styles.box, box, { borderRadius: radius }, style]} testID={testID}>
-      <View style={[StyleSheet.absoluteFill, styles.center]}>
-        <Icon name={fallbackIcon} size={Math.min(32, Math.round(size / 3))} color={Colors.textMuted} />
-      </View>
+      {iconWhileLoading || !showImage ? (
+        <View style={[StyleSheet.absoluteFill, styles.center]}>
+          <Icon name={fallbackIcon} size={Math.min(32, Math.round(size / 3))} color={Colors.textMuted} />
+        </View>
+      ) : null}
       {showImage ? (
         <Animated.Image
           source={{ uri }}

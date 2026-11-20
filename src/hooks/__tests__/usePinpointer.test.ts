@@ -1,53 +1,31 @@
 /**
- * Tests for usePinpointer — the thin composition hook wiring search, sync,
- * voice, scan, share, and edit.
+ * Tests for usePinpointer — the thin composition hook wiring search, sync
+ * and voice.
  *
  * All four sub-hooks (useSearch, useGallerySync, useDocumentSync,
- * useVoiceRecording) plus Database, VisionPipeline, image-picker, and
- * AppLogger are mocked so these tests assert ONLY the composition logic:
- * wiring, the onTranscription cleanup, handleScan, handleShare, handleEdit,
- * and the mount/unmount lifecycle.
+ * useVoiceRecording) are mocked so these tests assert ONLY the composition
+ * logic: wiring, the onTranscription cleanup, and the mount/unmount lifecycle.
  *
  * NOTE: @testing-library/react-native v14 made renderHook/render async —
  * every call site awaits them.
  */
 import { renderHook, act } from '@testing-library/react-native';
-import { Platform, Alert, Share, Linking, NativeModules } from 'react-native';
 import { usePinpointer } from '../usePinpointer';
 
 jest.mock('../useSearch', () => ({ useSearch: jest.fn() }));
 jest.mock('../useGallerySync', () => ({ useGallerySync: jest.fn() }));
 jest.mock('../useDocumentSync', () => ({ useDocumentSync: jest.fn() }));
 jest.mock('../useVoiceRecording', () => ({ useVoiceRecording: jest.fn() }));
-jest.mock('react-native-image-picker', () => ({ launchImageLibrary: jest.fn() }));
-jest.mock('../../database', () => ({ indexDocument: jest.fn() }));
-jest.mock('../../utils/VisionPipeline', () => ({ analyzeImage: jest.fn() }));
-jest.mock('../../utils/AppLogger', () => ({
-    AppLogger: { error: jest.fn(), warn: jest.fn(), info: jest.fn(), debug: jest.fn() },
-}));
 
 import { useSearch } from '../useSearch';
 import { useGallerySync } from '../useGallerySync';
 import { useDocumentSync } from '../useDocumentSync';
 import { useVoiceRecording } from '../useVoiceRecording';
-import { launchImageLibrary } from 'react-native-image-picker';
-import { indexDocument } from '../../database';
-import { analyzeImage } from '../../utils/VisionPipeline';
-import { AppLogger } from '../../utils/AppLogger';
 
 const mockUseSearch = useSearch as jest.Mock;
 const mockUseGallerySync = useGallerySync as jest.Mock;
 const mockUseDocumentSync = useDocumentSync as jest.Mock;
 const mockUseVoiceRecording = useVoiceRecording as jest.Mock;
-const mockLaunchImageLibrary = launchImageLibrary as jest.Mock;
-const mockIndexDocument = indexDocument as jest.Mock;
-const mockAnalyzeImage = analyzeImage as jest.Mock;
-
-// The RN jest preset leaves Share/Alert/Linking as real implementations —
-// spy on them so calls are observable (spies survive jest.clearAllMocks).
-const mockAlert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
-const mockShare = jest.spyOn(Share, 'share').mockImplementation(async () => ({} as never));
-const mockOpenURL = jest.spyOn(Linking, 'openURL').mockImplementation(async () => {});
 
 /** Captures the onTranscription callback the hook hands to useVoiceRecording. */
 const getOnTranscription = (): ((text: string) => void) => {
@@ -169,19 +147,6 @@ describe('usePinpointer — composition wiring', () => {
         expect(result.current.cancelListening).toBe(voiceState.cancelListening);
     });
 
-    test('own image-viewer state starts null and updates via setSelectedImage', async () => {
-        const { result } = await renderHook(() => usePinpointer());
-        expect(result.current.selectedImage).toBeNull();
-        await act(() => {
-            result.current.setSelectedImage('file:///a.jpg');
-        });
-        expect(result.current.selectedImage).toBe('file:///a.jpg');
-        await act(() => {
-            result.current.setSelectedImage(null);
-        });
-        expect(result.current.selectedImage).toBeNull();
-    });
-
     test('loads persisted state on mount and cleans up recording on unmount', async () => {
         const { unmount } = await renderHook(() => usePinpointer());
         expect(galleryState.loadPersistedCount).toHaveBeenCalledTimes(1);
@@ -263,201 +228,5 @@ describe('usePinpointer — onTranscription cleanup', () => {
         // "search for a " appears before the shorter "search " in the list
         await transcribe('search for a cat');
         expect(setSearchText).toHaveBeenCalledWith('cat');
-    });
-});
-
-describe('usePinpointer — handleScan', () => {
-    beforeEach(() => {
-        jest.clearAllMocks();
-        mockUseSearch.mockReturnValue({ setSearchText: jest.fn(), setIsSearching: jest.fn() });
-        mockUseGallerySync.mockReturnValue({ loadPersistedCount: jest.fn() });
-        mockUseDocumentSync.mockReturnValue({ loadPersistedState: jest.fn() });
-        mockUseVoiceRecording.mockReturnValue({ cleanupRecording: jest.fn() });
-    });
-
-    const renderAndScan = async () => {
-        const { result } = await renderHook(() => usePinpointer());
-        await act(async () => {
-            await result.current.handleScan();
-        });
-        return result;
-    };
-
-    test('happy path: picks image, reads text, indexes it, says it is ready to find', async () => {
-        mockLaunchImageLibrary.mockResolvedValue({ assets: [{ uri: 'file:///photo.jpg' }] });
-        mockAnalyzeImage.mockResolvedValue({ detection_type: 'TEXT', content: 'Hello World' });
-
-        await renderAndScan();
-
-        expect(mockLaunchImageLibrary).toHaveBeenCalledWith({
-            mediaType: 'photo', quality: 0.5, maxWidth: 1024, maxHeight: 1024,
-        });
-        expect(mockAnalyzeImage).toHaveBeenCalledWith('file:///photo.jpg');
-        expect(mockIndexDocument).toHaveBeenCalledWith(
-            null,
-            expect.stringContaining('Hello'),
-            'file:///photo.jpg',
-            'IMAGE',
-            'TEXT',
-        );
-        expect(mockAlert).toHaveBeenCalledWith(
-            'Ready to find',
-            'You can now search for the words in this photo.',
-        );
-    });
-
-    test('no readable text: nothing is indexed and it says no words were found', async () => {
-        mockLaunchImageLibrary.mockResolvedValue({ assets: [{ uri: 'file:///blank.jpg' }] });
-        mockAnalyzeImage.mockResolvedValue({ detection_type: 'EMPTY', content: '' });
-
-        await renderAndScan();
-
-        expect(mockIndexDocument).not.toHaveBeenCalled();
-        expect(mockAlert).toHaveBeenCalledWith('No words found', expect.stringContaining('clearer photo'));
-        expect(mockAlert).not.toHaveBeenCalledWith('Ready to find', expect.any(String));
-    });
-
-    test('only objects (no words) is not a success either', async () => {
-        mockLaunchImageLibrary.mockResolvedValue({ assets: [{ uri: 'file:///dog.jpg' }] });
-        mockAnalyzeImage.mockResolvedValue({ detection_type: 'OBJECT', content: 'Dog Grass' });
-
-        await renderAndScan();
-
-        expect(mockIndexDocument).not.toHaveBeenCalled();
-        expect(mockAlert).toHaveBeenCalledWith('No words found', expect.any(String));
-    });
-
-    test('cancelled picker is a silent no-op', async () => {
-        mockLaunchImageLibrary.mockResolvedValue({ didCancel: true });
-
-        await renderAndScan();
-
-        expect(mockAnalyzeImage).not.toHaveBeenCalled();
-        expect(mockIndexDocument).not.toHaveBeenCalled();
-        expect(mockAlert).not.toHaveBeenCalled();
-    });
-
-    test('result without assets is a silent no-op', async () => {
-        mockLaunchImageLibrary.mockResolvedValue({});
-
-        await renderAndScan();
-
-        expect(mockAnalyzeImage).not.toHaveBeenCalled();
-        expect(mockIndexDocument).not.toHaveBeenCalled();
-        expect(mockAlert).not.toHaveBeenCalled();
-    });
-
-    test('asset without uri is a silent no-op', async () => {
-        mockLaunchImageLibrary.mockResolvedValue({ assets: [{}] });
-
-        await renderAndScan();
-
-        expect(mockAnalyzeImage).not.toHaveBeenCalled();
-        expect(mockIndexDocument).not.toHaveBeenCalled();
-    });
-
-    test('picker rejection surfaces OCR error alert and logs', async () => {
-        const err = new Error('picker exploded');
-        mockLaunchImageLibrary.mockRejectedValue(err);
-
-        await renderAndScan();
-
-        expect(AppLogger.error).toHaveBeenCalledWith('Pinpointer', 'OCR scan failed', err);
-        expect(mockAlert).toHaveBeenCalledWith('This photo could not be read', 'Please try again, or pick another photo.');
-        expect(mockIndexDocument).not.toHaveBeenCalled();
-    });
-
-    test('analyzeImage rejection surfaces OCR error alert and logs', async () => {
-        const err = new Error('vision exploded');
-        mockLaunchImageLibrary.mockResolvedValue({ assets: [{ uri: 'file:///x.jpg' }] });
-        mockAnalyzeImage.mockRejectedValue(err);
-
-        await renderAndScan();
-
-        expect(AppLogger.error).toHaveBeenCalledWith('Pinpointer', 'OCR scan failed', err);
-        expect(mockAlert).toHaveBeenCalledWith('This photo could not be read', 'Please try again, or pick another photo.');
-        expect(mockIndexDocument).not.toHaveBeenCalled();
-    });
-});
-
-describe('usePinpointer — handleShare / handleEdit', () => {
-    const originalOS = Platform.OS;
-    const storageModule = NativeModules.StorageModule as { shareImage?: jest.Mock };
-    const originalShareImage = storageModule.shareImage;
-
-    beforeEach(() => {
-        jest.clearAllMocks();
-        mockUseSearch.mockReturnValue({ setSearchText: jest.fn(), setIsSearching: jest.fn() });
-        mockUseGallerySync.mockReturnValue({ loadPersistedCount: jest.fn() });
-        mockUseDocumentSync.mockReturnValue({ loadPersistedState: jest.fn() });
-        mockUseVoiceRecording.mockReturnValue({ cleanupRecording: jest.fn() });
-        storageModule.shareImage = originalShareImage;
-    });
-
-    afterEach(() => {
-        jest.replaceProperty(Platform, 'OS', originalOS);
-        storageModule.shareImage = originalShareImage;
-    });
-
-    const selectImage = async (uri: string | null) => {
-        const { result } = await renderHook(() => usePinpointer());
-        await act(() => {
-            result.current.setSelectedImage(uri);
-        });
-        return result;
-    };
-
-    test('handleShare does nothing when no image is selected', async () => {
-        const result = await selectImage(null);
-        await act(() => {
-            result.current.handleShare();
-        });
-        expect(mockShare).not.toHaveBeenCalled();
-        expect(storageModule.shareImage).not.toHaveBeenCalled();
-    });
-
-    test('handleShare on android uses StorageModule.shareImage with file:// stripped', async () => {
-        jest.replaceProperty(Platform, 'OS', 'android');
-        const result = await selectImage('file:///sdcard/pic.jpg');
-        await act(() => {
-            result.current.handleShare();
-        });
-        expect(storageModule.shareImage).toHaveBeenCalledWith('/sdcard/pic.jpg');
-        expect(mockShare).not.toHaveBeenCalled();
-    });
-
-    test('handleShare on android falls back to mockShare when shareImage is missing', async () => {
-        jest.replaceProperty(Platform, 'OS', 'android');
-        delete storageModule.shareImage;
-        const result = await selectImage('file:///sdcard/pic.jpg');
-        await act(() => {
-            result.current.handleShare();
-        });
-        expect(mockShare).toHaveBeenCalledWith({ url: 'file:///sdcard/pic.jpg' });
-    });
-
-    test('handleShare on ios uses mockShare', async () => {
-        jest.replaceProperty(Platform, 'OS', 'ios');
-        const result = await selectImage('file:///pic.jpg');
-        await act(() => {
-            result.current.handleShare();
-        });
-        expect(mockShare).toHaveBeenCalledWith({ url: 'file:///pic.jpg' });
-    });
-
-    test('handleEdit opens the selected image URL', async () => {
-        const result = await selectImage('file:///pic.jpg');
-        await act(() => {
-            result.current.handleEdit();
-        });
-        expect(mockOpenURL).toHaveBeenCalledWith('file:///pic.jpg');
-    });
-
-    test('handleEdit does nothing when no image is selected', async () => {
-        const result = await selectImage(null);
-        await act(() => {
-            result.current.handleEdit();
-        });
-        expect(mockOpenURL).not.toHaveBeenCalled();
     });
 });

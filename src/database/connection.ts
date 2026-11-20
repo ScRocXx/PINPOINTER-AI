@@ -20,7 +20,35 @@ export const getDb = (): ReturnType<typeof open> => {
   return _db;
 };
 
+/**
+ * A second connection, for reads that may take a while (photo look-alike
+ * search scans every vector). Its async execute() runs on op-sqlite's own
+ * thread, so the JS thread stays free to draw; WAL lets it read while
+ * indexing writes on the main connection. Opened on first use, after
+ * setupDatabase() has created the tables.
+ */
+let _readDb: ReturnType<typeof open> | null = null;
+
+export const getReadDb = (): ReturnType<typeof open> => {
+  if (!_readDb) {
+    _readDb = open({ name: 'pinpoint.db' });
+  }
+  return _readDb;
+};
+
 export const closeDatabase = () => {
+  if (_readDb) {
+    const readDb = _readDb;
+    _readDb = null;
+    // In tests open() hands back the same object for the same name.
+    if (readDb !== _db) {
+      try {
+        readDb.close();
+      } catch (e) {
+        AppLogger.warn('DB', 'Failed to close the read connection', e);
+      }
+    }
+  }
   if (_db) {
     try {
       _db.close();
@@ -216,6 +244,38 @@ const MIGRATIONS: Migration[] = [
         createFtsTable(db);
         db.executeSync('INSERT INTO fts_index(rowid, content, filePath) SELECT id, content, filePath FROM document_index;');
       }
+    },
+  },
+  {
+    version: 3,
+    name: 'when each photo was taken',
+    up: () => {
+      const db = getDb();
+      try {
+        db.executeSync('ALTER TABLE document_index ADD COLUMN taken_at INTEGER;');
+      } catch {
+        // Already there.
+      }
+      db.executeSync('CREATE INDEX IF NOT EXISTS document_taken_at ON document_index(taken_at);');
+      // Rows indexed before: the file time sync recorded is the best guess
+      // (photos: seconds from MediaStore; PDFs: ms from the file system).
+      db.executeSync(`UPDATE document_index SET taken_at = (
+          SELECT CASE WHEN f.kind = 'IMAGE' THEN f.mtime * 1000 ELSE f.mtime END
+          FROM files f WHERE f.uri = document_index.filePath)
+        WHERE taken_at IS NULL;`);
+    },
+  },
+  {
+    version: 4,
+    name: 'file fingerprints for duplicates',
+    up: () => {
+      const db = getDb();
+      try {
+        db.executeSync('ALTER TABLE files ADD COLUMN fingerprint TEXT;');
+      } catch {
+        // Already there.
+      }
+      db.executeSync('CREATE INDEX IF NOT EXISTS files_fingerprint ON files(fingerprint);');
     },
   },
 ];

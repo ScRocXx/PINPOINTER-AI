@@ -99,7 +99,7 @@ Lightning-fast, fully offline search engine:
 ### 🎙️ **Voice Intelligence**
 
 - 🗣️ **Voice Search**: Speak your query and it is transcribed on the device (no internet required)
-- 🧠 Powered by Whisper base.en through sherpa-onnx (English speech for now)
+- 🧠 Powered by sherpa-onnx: Whisper base.en for English, indic-lekhan for Hindi
 - ✅ Fully offline, hands-free search
 
 ---
@@ -141,7 +141,7 @@ Lightning-fast, fully offline search engine:
 | **ML/AI** | Google ML Kit, MobileCLIP2-S0 (int8) on ONNX Runtime |
 | **OCR** | ML Kit Latin + Devanagari |
 | **Search** | FTS5 + vector search, Soundex and Indian-language sound keys |
-| **Speech** | On-device speech-to-text with sherpa-onnx (Whisper base.en) |
+| **Speech** | On-device speech-to-text with sherpa-onnx (Whisper base.en, indic-lekhan for Hindi) |
 
 ---
 
@@ -150,7 +150,7 @@ Lightning-fast, fully offline search engine:
 ### Prerequisites
 - Node.js 18+
 - Android SDK and NDK, with a device or emulator (arm64)
-- JDK 17+
+- JDK 17, with `JAVA_HOME` pointing at it
 - Python 3, only if you want to export the CLIP models
 
 Android is the only supported platform.
@@ -170,10 +170,11 @@ Android is the only supported platform.
 
 3. **Optional: export the CLIP models** for search by meaning:
    ```bash
-   pip install mobileclip torch onnx onnxruntime
+   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+   pip install open_clip_torch timm onnx onnxruntime onnxscript pillow
    python scripts/export_mobileclip.py
    ```
-   Copy `vision_encoder_int8.onnx`, `text_encoder_int8.onnx` and the vocab file into `android/app/src/main/assets/models/clip/`. Without them the app still works, using text search only.
+   The script writes `vision_encoder_int8.onnx`, `text_encoder_int8.onnx` and the vocab file straight into `android/app/src/main/assets/models/clip/`. Without them the app still works, using text search only.
 
 4. **Run the app:**
    ```bash

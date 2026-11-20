@@ -1,0 +1,183 @@
+{
+  "note": "synthetic speech (Piper Hindi, no sampling noise); not an accuracy measure",
+  "real_time_factor_this_cpu_all_three": 0.17,
+  "phrases": [
+    {
+      "said": "बीएसईएस का बिल",
+      "greedy": "बी एस एस का बिल",
+      "beam": "बी एस एस का बिल",
+      "beam_hotwords": "बीएसईएस का बिल"
+    },
+    {
+      "said": "अपोलो फार्मेसी की रसीद",
+      "greedy": "पोलो फार्मेसी की रसीद",
+      "beam": "पोलो फार्मेसी की रसीद",
+      "beam_hotwords": "पोलो फार्मेसी की रसीद"
+    },
+    {
+      "said": "रमेश कुमार का राशन कार्ड",
+      "greedy": "अमेश कुमार का राशन कार्ड",
+      "beam": "अमेश कुमार का राशन कार्ड",
+      "beam_hotwords": "अमेश कुमार का राशन कार्ड"
+    },
+    {
+      "said": "डोलो की गोली",
+      "greedy": "दोनों की गोली",
+      "beam": "दोनों की गोली",
+      "beam_hotwords": "दोनों की गोली"
+    },
+    {
+      "said": "बिजली का बिल",
+      "greedy": "बिजली का बिल",
+      "beam": "बिजली का बिल",
+      "beam_hotwords": "बिजली का बिल"
+    },
+    {
+      "said": "दवाई की पर्ची",
+      "greedy": "दवाई की पर्ची",
+      "beam": "दवाई की पर्ची",
+      "beam_hotwords": "दवाई की पर्ची"
+    },
+    {
+      "said": "आधार कार्ड",
+      "greedy": "आधार कार",
+      "beam": "आधार कार्ड",
+      "beam_hotwords": "आधार कार्ड"
+    },
+    {
+      "said": "पिछले महीने का बिजली बिल",
+      "greedy": "पिछले महीने का बिजली बिल",
+      "beam": "पिछले महीने का बिजली बिल",
+      "beam_hotwords": "पिछले महीने का बिजली बिल"
+    },
+    {
+      "said": "दोनों बिल दिखाओ",
+      "greedy": "दोनों बिल दिखाओ",
+      "beam": "दोनों बिल दिखाओ",
+      "beam_hotwords": "दोनों बिल दिखाओ"
+    },
+    {
+      "said": "उमेश की फोटो",
+      "greedy": "उमेश की फोटो",
+      "beam": "उमेश की फोटो",
+      "beam_hotwords": "उमेश की फोटो"
+    },
+    {
+      "said": "गैस सिलेंडर की रसीद",
+      "greedy": "कैश सिलेंडर की रसीद",
+      "beam": "कैश सिलेंडर की रसीद",
+      "beam_hotwords": "कैश सिलेंडर की रसीद"
+    },
+    {
+      "said": "बैंक की पासबुक",
+      "greedy": "बैंक की पासबुक",
+      "beam": "बैंक की पासबुक",
+      "beam_hotwords": "बैंक की पासबुक"
+    },
+    {
+      "said": "पैन कार्ड की फोटो",
+      "greedy": "पैन कार्ड की फोटो",
+      "beam": "पैन कार्ड की फोटो",
+      "beam_hotwords": "पैन कार्ड की फोटो"
+    },
+    {
+      "said": "दिवाली की फोटो",
+      "greedy": "दीवाली की फोटो",
+      "beam": "दीवाली की फोटो",
+      "beam_hotwords": "दीवाली की फोटो"
+    },
+    {
+      "said": "राशन कार्ड",
+      "greedy": "राशन कार्ड",
+      "beam": "राशन कार्ड",
+      "beam_hotwords": "राशन कार्ड"
+    },
+    {
+      "said": "बीमा पॉलिसी",
+      "greedy": "बीमा पॉलिसी",
+      "beam": "बीमा पॉलिसी",
+      "beam_hotwords": "बीमा पॉलिसी"
+    },
+    {
+      "said": "स्कूल की फीस",
+      "greedy": "स्कूल की फीस",
+      "beam": "स्कूल की फीस",
+      "beam_hotwords": "स्कूल की फीस"
+    },
+    {
+      "said": "पानी का बिल",
+      "greedy": "पानी का बिल",
+      "beam": "पानी का बिल",
+      "beam_hotwords": "पानी का बिल"
+    },
+    {
+      "said": "डॉक्टर की पर्ची",
+      "greedy": "डॉक्टर की पक्षी",
+      "beam": "डॉक्टर की पक्षी",
+      "beam_hotwords": "डॉक्टर की पक्षी"
+    },
+    {
+      "said": "टिकट दिखाओ",
+      "greedy": "टिकट दिखाओ",
+      "beam": "टिकट दिखाओ",
+      "beam_hotwords": "टिकट दिखाओ"
+    }
+  ],
+  "boost_sweep": [
+    {
+      "hotwords_score": 1.5,
+      "names_right": 1,
+      "everyday_changed_by_hotwords": []
+    },
+    {
+      "hotwords_score": 2.0,
+      "names_right": 1,
+      "everyday_changed_by_hotwords": []
+    },
+    {
+      "hotwords_score": 3.0,
+      "names_right": 1,
+      "everyday_changed_by_hotwords": []
+    }
+  ],
+  "hotword_count": [
+    {
+      "hotwords": 50,
+      "everyday_changed": []
+    },
+    {
+      "hotwords": 200,
+      "everyday_changed": []
+    },
+    {
+      "hotwords": 500,
+      "everyday_changed": [
+        {
+          "said": "दवाई की पर्ची",
+          "without": "दवाई की पर्ची",
+          "with": "दवाई की पारची"
+        }
+      ]
+    },
+    {
+      "hotwords": 1000,
+      "everyday_changed": [
+        {
+          "said": "दवाई की पर्ची",
+          "without": "दवाई की पर्ची",
+          "with": "दवाई की पारची"
+        },
+        {
+          "said": "गैस सिलेंडर की रसीद",
+          "without": "कैश सिलेंडर की रसीद",
+          "with": "गैस सिलेंडर की रसीद"
+        },
+        {
+          "said": "डॉक्टर की पर्ची",
+          "without": "डॉक्टर की पक्षी",
+          "with": "डाक्टर की पक्षी"
+        }
+      ]
+    }
+  ]
+}

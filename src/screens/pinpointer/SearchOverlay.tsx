@@ -13,11 +13,13 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppText, Chip, EmptyState, IconButton, Tag, useToast } from '../../components/ui';
 import { DocumentRecord } from '../../database';
-import { useStrings } from '../../i18n';
+import { formatDateMeaning, useStrings } from '../../i18n';
+import type { DateMeaning } from '../../utils/DateQuery';
 import { Colors, Duration, Ease, GUTTER, Space, Touch } from '../../theme';
 import { useReducedMotion } from '../../hooks/useReducedMotion';
 import { usePinnedItems } from '../../hooks/usePinnedItems';
 import { alsoSearchedAs } from '../../utils/MatchTerms';
+import { noteInteraction } from '../../services/InteractionGate';
 import { SearchHistoryItem } from '../../utils/SearchHistory';
 import { ListeningPanel } from './ListeningPanel';
 import { NothingFound } from './NothingFound';
@@ -32,6 +34,18 @@ export interface SearchOverlayProps {
   visible: boolean;
   searchText: string;
   results: ReadonlyArray<DocumentRecord>;
+  /**
+   * The query `results` were found for. While typing it lags `searchText`
+   * by the search debounce; rows mark its words, so they don't redo that
+   * work on every key. Defaults to `searchText`.
+   */
+  resultsQuery?: string;
+  /** What was typed, when the results are for a corrected query ("Showing results for …"). */
+  correctedFrom?: string | null;
+  /** What the query's date words meant, for the "When: …" line. */
+  dateMeaning?: DateMeaning | null;
+  /** "latest bill": the results are newest first. */
+  newestFirst?: boolean;
   isSearchPending: boolean;
   history: ReadonlyArray<SearchHistoryItem>;
   onSelectHistory: (query: string) => void;
@@ -111,6 +125,10 @@ const SearchContent: React.FC<SearchOverlayProps> = ({
   visible,
   searchText,
   results,
+  resultsQuery,
+  correctedFrom,
+  dateMeaning,
+  newestFirst = false,
   isSearchPending,
   history,
   onSelectHistory,
@@ -136,6 +154,7 @@ const SearchContent: React.FC<SearchOverlayProps> = ({
   const opening = useRef(false);
 
   const query = searchText.trim();
+  const rowsQuery = (resultsQuery ?? searchText).trim();
   const voice = isRecording || isTranscribing;
 
   // The keyboard would cover the listening panel.
@@ -172,12 +191,14 @@ const SearchContent: React.FC<SearchOverlayProps> = ({
     [live, active],
   );
 
-  const also = useMemo(() => (query ? alsoSearchedAs(query) : []), [query]);
+  const also = useMemo(() => (rowsQuery ? alsoSearchedAs(rowsQuery) : []), [rowsQuery]);
 
   // Read through a ref so `open` (and every row) keeps one identity while
   // results re-rank or a filter changes.
   const shownRef = useRef(shown);
   shownRef.current = shown;
+  const searchTextRef = useRef(searchText);
+  searchTextRef.current = searchText;
 
   const open = useCallback(
     async (item: DocumentRecord) => {
@@ -186,10 +207,11 @@ const SearchContent: React.FC<SearchOverlayProps> = ({
       try {
         const outcome = await openResult(item);
         if (outcome === 'gone') {
+          const q = searchTextRef.current;
           setGone(prev => {
-            const paths = new Set(prev.q === searchText ? prev.paths : []);
+            const paths = new Set(prev.q === q ? prev.paths : []);
             paths.add(item.filePath);
-            return { q: searchText, paths };
+            return { q, paths };
           });
           toast.show(t('error.fileGone'), { icon: 'alert' });
           return;
@@ -205,14 +227,14 @@ const SearchContent: React.FC<SearchOverlayProps> = ({
         opening.current = false;
       }
     },
-    [searchText, onOpenPhoto, toast, t],
+    [onOpenPhoto, toast, t],
   );
 
   const renderItem = useCallback(
     ({ item, index }: ListRenderItemInfo<DocumentRecord>) => (
-      <ResultItem item={item} query={query} index={index} pinned={isPinned(item.filePath)} onPress={open} />
+      <ResultItem item={item} query={rowsQuery} index={index} pinned={isPinned(item.filePath)} onPress={open} />
     ),
-    [query, isPinned, open],
+    [rowsQuery, isPinned, open],
   );
 
   let body: React.ReactNode;
@@ -271,6 +293,7 @@ const SearchContent: React.FC<SearchOverlayProps> = ({
         ) : null}
         <FlatList
           data={shown as DocumentRecord[]}
+          onScroll={noteInteraction}
           renderItem={renderItem}
           keyExtractor={keyOf}
           style={styles.fill}
@@ -286,6 +309,24 @@ const SearchContent: React.FC<SearchOverlayProps> = ({
               >
                 {isSearchPending ? t('search.searching') : n === 1 ? t('search.foundOne') : t('search.found', { n })}
               </AppText>
+              {dateMeaning ? (
+                <AppText variant="bodyStrong" testID="search-when">
+                  {t('search.when', { when: formatDateMeaning(t, dateMeaning) })}
+                </AppText>
+              ) : null}
+              {newestFirst ? (
+                <AppText variant="bodyStrong" testID="search-newest">
+                  {t('search.newestFirst')}
+                </AppText>
+              ) : null}
+              {correctedFrom && rowsQuery ? (
+                <View style={styles.corrected} testID="search-corrected">
+                  <AppText variant="bodyStrong">{t('search.showingFor', { q: rowsQuery })}</AppText>
+                  <AppText variant="small" color="textMuted">
+                    {t('search.youTyped', { q: correctedFrom.trim() })}
+                  </AppText>
+                </View>
+              ) : null}
               {also.length > 0 ? (
                 <View style={styles.also} testID="search-also">
                   <AppText variant="small" color="textMuted">
@@ -343,6 +384,7 @@ const styles = StyleSheet.create({
   list: { paddingHorizontal: GUTTER },
   listHead: { gap: Space.sm, paddingTop: Space.xs, paddingBottom: Space.md },
   also: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: Space.xs + 2 },
+  corrected: { gap: 2 },
   gap: { height: Space.sm + 2 },
   pending: { marginTop: Space.xxl, marginHorizontal: GUTTER },
 });

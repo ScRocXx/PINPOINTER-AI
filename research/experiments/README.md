@@ -1,0 +1,48 @@
+# Experiments
+
+Research scripts, not app code: they are not part of `npx jest`, `tsc` or
+`npm run lint`. They run the app's real search-key code
+(`SearchKeys.ts`, `IndicText.ts`; since search keys version 3 the Hindi gloss and Soundex codes come from `withSearchTail` itself) and write
+their numbers to `results/`.
+
+| Script | Question | Result file |
+|---|---|---|
+| `ocr-misreads.exp.ts` | If OCR misreads one letter of a word, does search still find it? Today's matching vs shape key, query expansion, OCR-tolerant sound key, sound key within one edit, joined neighbours, and all combined. Also counts false matches against ~24,000 Hindi and 20,000 English words. | `results/ocr-misreads.json` |
+| `typos.exp.ts` | If a person makes one typo (phone keyboard), does search still find the paper? Today vs correcting the query against the person's own indexed words. | `results/typos.json` |
+| `app-search.exp.ts` | The misreadings of `ocr-misreads.exp.ts`, searched with the shipped code (`OcrTolerance.ts`, search tail, query terms). | `results/app-search.json` |
+| `app-typos.exp.ts` | The typos of `typos.exp.ts`, corrected with the shipped code (`SpellingRescue.ts`, vocabulary as `fts5vocab` reads it), only when nothing is found. | `results/app-typos.json` |
+| `hotword-split.exp.py` | Does sherpa-onnx split a hotword into the pieces the Hindi model emits? Its splitter (best total score) against the model's BPE, on 26,604 common Hindi words, for three ways of scoring `bpe.vocab`. | `results/hotword-split.json` |
+| `dump-seeds.exp.ts` + `hindi-seeds.exp.py` | Do built-in hotwords (the app's own search words) help Hindi voice search, and at what boost? 40 everyday searches, 35 sound-alike controls and 11 searches with names, each at three speaking speeds, with the shipped word list and line format. | `results/hindi-seed-words.json`, `results/hindi-seeds.json` |
+| `hindi-voice.exp.py` | Hindi voice search end to end with the app's exact recogniser settings, on synthetic Hindi speech (Piper Hindi voice, no sampling noise): greedy vs beam vs beam with hotwords, hotword boosts, and how many hotwords are safe for everyday queries. | `results/hindi-voice.json` |
+
+## Run
+
+```bash
+python3 -m venv research/experiments/.venv
+research/experiments/.venv/bin/pip install wordfreq
+research/experiments/.venv/bin/python research/experiments/make-vocab.py   # writes data/vocab.json (not committed)
+
+npx jest --testMatch '**/research/experiments/ocr-misreads.exp.ts'   # about 6 minutes
+npx jest --testMatch '**/research/experiments/typos.exp.ts'          # about 4 minutes
+```
+
+The two Python scripts need `pip install sentencepiece` (split) or
+`pip install sherpa-onnx==1.13.4 numpy` (voice), the model folder
+`download-models.js` makes, and for the voice script the
+`vits-piper-hi_IN-pratham-medium` release of sherpa-onnx; see their headers.
+
+`EXP_OUT=/some/file.json` writes the results elsewhere; `EXP_VOCAB` points at
+another vocabulary file. Both scripts use a fixed random seed, so a rerun gives
+the same numbers.
+
+## What the simulation assumes
+
+- OCR mistakes: one per word, kinds and rough weights from published
+  Devanagari OCR studies (vowel signs, look-alike letters, marks, broken
+  conjuncts, split words). They are not measured from ML Kit on phones yet:
+  that is the next experiment, on real photos.
+- The shape key and query expansion know the same confusion pairs the
+  simulation uses, so their numbers are an upper bound for those mistakes.
+- Typos: neighbouring key 40%, missed key 25%, extra key 20%, swapped keys 15%.
+- The "person's index" is their document words plus common words, with
+  wordfreq frequency standing in for how often each word appears.

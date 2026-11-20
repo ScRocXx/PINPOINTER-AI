@@ -14,6 +14,16 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.concurrent.thread
 
+/**
+ * On-device speech to text, in the app's language:
+ *  - English: Whisper base.en (OfflineRecognizer), about 160 MB.
+ *  - Hindi: indic-lekhan, a small streaming Zipformer transducer (about 28 MB,
+ *    CC BY 4.0, see models/hindi/NOTICE.txt). It is fed the whole recording at
+ *    the end, like Whisper, and listens for the Hindi words of the person's own
+ *    papers and for the app's built-in search words (hotwords, `setHotwords`).
+ * Only one model is in memory at a time: `initSTT` with the other language
+ * frees the first.
+ */
 class SherpaOnnxModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
 
     override fun getName(): String = "SherpaOnnxModule"
@@ -24,6 +34,20 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) : ReactContextBase
         const val CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO
         const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
 
+        /** The Hindi model, as download-models.js puts it in the APK. */
+        private const val HINDI_ENCODER = "models/hindi/encoder.int8.onnx"
+        private const val HINDI_DECODER = "models/hindi/decoder.int8.onnx"
+        private const val HINDI_JOINER = "models/hindi/joiner-hi.int8.onnx"
+        private const val HINDI_TOKENS = "models/hindi/tokens.txt"
+        /** Optional: without it the model still works, without hotwords. */
+        private const val HINDI_VOCAB = "models/hindi/bpe.vocab"
+
+        /**
+         * Default boost per hotword token (sherpa-onnx's own default). Every
+         * hotword carries its own score (SpeechText.hotwordsLine), so this is
+         * only a fallback.
+         */
+        private const val HOTWORDS_SCORE = 1.5f
         /** How often the live mic level is sent to JS ("onSpeechVolume"). */
         const val LEVEL_INTERVAL_MS = 60L
         /** Room noise sits below MIN_DB, close speech reaches MAX_DB (dBFS). */
@@ -68,8 +92,18 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) : ReactContextBase
     }
 
     // ─── STT State ─────────────────────────────────────────────────────
+    /** Held while a model loads, is freed or decodes: never freed under a running decode. */
+    private val modelLock = Any()
+    /** English (Whisper). */
     private var recognizer: OfflineRecognizer? = null
-    private var isSTTReady = false
+    /** Hindi (indic-lekhan). */
+    private var hindiRecognizer: OnlineRecognizer? = null
+    /** "en" or "hi" once a model is loaded. */
+    @Volatile private var loadedLanguage: String? = null
+    /** Beam search with the BPE vocabulary loaded: only then may hotwords be passed (else sherpa-onnx crashes). */
+    @Volatile private var hotwordsUsable = false
+    @Volatile private var hotwords = ""
+    @Volatile private var isSTTReady = false
     private var audioRecord: AudioRecord? = null
     @Volatile private var isRecording = false
     @Volatile private var destroyed = false
@@ -86,67 +120,182 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) : ReactContextBase
     // ─── STT METHODS ────────────────────────────────────────────────────
     // ════════════════════════════════════════════════════════════════════
 
+    /**
+     * Loads the speech model for `language` ("hi" for Hindi, anything else for
+     * English), freeing the other one. Resolves true once voice search can start.
+     */
     @ReactMethod
-    fun initSTT(promise: Promise) {
+    fun initSTT(language: String?, promise: Promise) {
         if (!nativeLibLoaded) {
             promise.reject("NATIVE_LIB_ERROR", "sherpa-onnx native library failed to load")
             return
         }
-        // H4 fix: prevent re-entry leak — release old model if re-initializing
-        if (isSTTReady && recognizer != null) {
+        val lang = if (language == "hi") "hi" else "en"
+        // H4 fix: prevent re-entry leak — the model for this language is loaded already
+        if (isSTTReady && loadedLanguage == lang) {
             promise.resolve(true)
             return
         }
         thread {
             try {
-                val whisperConfig = OfflineWhisperModelConfig(
-                    encoder = "models/whisper/base.en-encoder.int8.onnx",
-                    decoder = "models/whisper/base.en-decoder.int8.onnx",
-                    language = "en",
-                    task = "transcribe",
-                    tailPaddings = -1
-                )
-
-                val modelConfig = OfflineModelConfig(
-                    whisper = whisperConfig,
-                    tokens = "models/whisper/base.en-tokens.txt",
-                    numThreads = 2,
-                    debug = false,
-                    provider = "cpu",
-                    modelType = "whisper"
-                )
-
-                val featConfig = FeatureConfig(
-                    sampleRate = SAMPLE_RATE,
-                    featureDim = 80
-                )
-
-                val config = OfflineRecognizerConfig(
-                    featConfig = featConfig,
-                    modelConfig = modelConfig
-                )
-
-                recognizer = OfflineRecognizer(
-                    assetManager = reactApplicationContext.assets,
-                    config = config
-                )
-                
-                isSTTReady = true
-                android.util.Log.i("SherpaOnnxModule", "STT initialized successfully")
+                synchronized(modelLock) {
+                    releaseModels()
+                    if (lang == "hi") loadHindi() else loadWhisper()
+                    loadedLanguage = lang
+                    isSTTReady = true
+                }
+                android.util.Log.i("SherpaOnnxModule", "STT initialized successfully ($lang)")
                 promise.resolve(true)
             } catch (e: Throwable) {
                 // Catch Throwable (not just Exception) to handle OutOfMemoryError
                 // from loading the ~154 MB whisper model
                 isSTTReady = false
+                loadedLanguage = null
                 android.util.Log.e("SherpaOnnxModule", "STT init failed: ${e.javaClass.name}: ${e.message}", e)
                 promise.reject("STT_INIT_ERROR", "Failed to init STT: ${e.message}", if (e is Exception) e else Exception(e))
             }
         }
     }
 
+    /** Frees whichever model is loaded. Call with modelLock held. */
+    private fun releaseModels() {
+        isSTTReady = false
+        loadedLanguage = null
+        hotwordsUsable = false
+        try { recognizer?.release() } catch (_: Exception) {}
+        try { hindiRecognizer?.release() } catch (_: Exception) {}
+        recognizer = null
+        hindiRecognizer = null
+    }
+
+    private fun loadWhisper() {
+        val whisperConfig = OfflineWhisperModelConfig(
+            encoder = "models/whisper/base.en-encoder.int8.onnx",
+            decoder = "models/whisper/base.en-decoder.int8.onnx",
+            language = "en",
+            task = "transcribe",
+            tailPaddings = -1
+        )
+
+        val modelConfig = OfflineModelConfig(
+            whisper = whisperConfig,
+            tokens = "models/whisper/base.en-tokens.txt",
+            numThreads = 2,
+            debug = false,
+            provider = "cpu",
+            modelType = "whisper"
+        )
+
+        val featConfig = FeatureConfig(
+            sampleRate = SAMPLE_RATE,
+            featureDim = 80
+        )
+
+        val config = OfflineRecognizerConfig(
+            featConfig = featConfig,
+            modelConfig = modelConfig
+        )
+
+        recognizer = OfflineRecognizer(
+            assetManager = reactApplicationContext.assets,
+            config = config
+        )
+    }
+
+    private fun assetText(path: String): String? = try {
+        reactApplicationContext.assets.open(path).use { it.readBytes().toString(Charsets.UTF_8) }
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun assetExists(path: String): Boolean = try {
+        reactApplicationContext.assets.open(path).use { true }
+    } catch (_: Exception) {
+        false
+    }
+
+    private fun loadHindi() {
+        // sherpa-onnx exits the app on a missing model file instead of throwing: check first.
+        val missing = listOf(HINDI_ENCODER, HINDI_DECODER, HINDI_JOINER, HINDI_TOKENS).filterNot { assetExists(it) }
+        if (missing.isNotEmpty()) throw IllegalStateException("Hindi speech model files missing: $missing")
+        val withVocab = assetText(HINDI_VOCAB)?.let { SpeechText.vocabLooksRight(it) } == true
+
+        val config = OnlineRecognizerConfig(
+            featConfig = FeatureConfig(sampleRate = SAMPLE_RATE, featureDim = 80),
+            modelConfig = OnlineModelConfig(
+                transducer = OnlineTransducerModelConfig(
+                    encoder = HINDI_ENCODER,
+                    decoder = HINDI_DECODER,
+                    joiner = HINDI_JOINER,
+                ),
+                tokens = HINDI_TOKENS,
+                numThreads = 2,
+                provider = "cpu",
+                modelingUnit = if (withVocab) "bpe" else "",
+                bpeVocab = if (withVocab) HINDI_VOCAB else "",
+            ),
+            // The whole recording is decoded at the end, like Whisper: no endpoints.
+            enableEndpoint = false,
+            decodingMethod = if (withVocab) "modified_beam_search" else "greedy_search",
+            maxActivePaths = 4,
+            hotwordsScore = HOTWORDS_SCORE,
+        )
+        hindiRecognizer = OnlineRecognizer(assetManager = reactApplicationContext.assets, config = config)
+        hotwordsUsable = withVocab
+        if (!withVocab) android.util.Log.w("SherpaOnnxModule", "No usable $HINDI_VOCAB: Hindi without hotwords")
+    }
+
+    /**
+     * The words the Hindi model listens for: the Hindi words of the person's
+     * own papers, and the app's built-in search words at a gentler boost.
+     * Anything that isn't a short Devanagari word is dropped
+     * (SpeechText.hotwordsLine). Resolves how many were kept.
+     */
+    @ReactMethod
+    fun setHotwords(own: ReadableArray, builtIn: ReadableArray?, promise: Promise) {
+        try {
+            fun strings(array: ReadableArray?): List<String> =
+                if (array == null) emptyList() else (0 until array.size()).mapNotNull { i ->
+                    if (array.getType(i) == ReadableType.String) array.getString(i) else null
+                }
+            val line = SpeechText.hotwordsLine(strings(own), strings(builtIn))
+            hotwords = line
+            promise.resolve(SpeechText.hotwordCount(line))
+        } catch (e: Exception) {
+            promise.reject("HOTWORDS_ERROR", "Could not set hotwords: ${e.message}", e)
+        }
+    }
+
+    /** Whisper reads the whole recording at once. */
+    private fun transcribeEnglish(rec: OfflineRecognizer, samples: FloatArray): String {
+        // C5 fix: stream in try/finally to prevent native leak
+        val stream = rec.createStream()
+        try {
+            stream.acceptWaveform(samples, sampleRate = SAMPLE_RATE)
+            rec.decode(stream)
+            return rec.getResult(stream)?.text ?: ""
+        } finally {
+            stream.release()
+        }
+    }
+
+    /** The Hindi model is fed the whole recording, then a second of silence so it finishes the last word. */
+    private fun transcribeHindi(rec: OnlineRecognizer, samples: FloatArray): String {
+        val stream = rec.createStream(if (hotwordsUsable) hotwords else "")
+        try {
+            stream.acceptWaveform(samples, SAMPLE_RATE)
+            stream.acceptWaveform(FloatArray(SAMPLE_RATE), SAMPLE_RATE)
+            stream.inputFinished()
+            while (rec.isReady(stream)) rec.decode(stream)
+            return SpeechText.cleanHindiText(rec.getResult(stream).text)
+        } finally {
+            stream.release()
+        }
+    }
+
     @ReactMethod
     fun startRecognition(promise: Promise) {
-        if (!isSTTReady || recognizer == null) {
+        if (!isSTTReady || (recognizer == null && hindiRecognizer == null)) {
             promise.reject("STT_NOT_READY", "STT is not initialized yet")
             return
         }
@@ -246,13 +395,6 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) : ReactContextBase
 
                 emitEvent("onSpeechEnd", null)
 
-                // C5 fix: snapshot recognizer to prevent use-after-free
-                val rec = recognizer
-                if (destroyed || rec == null) {
-                    promise.reject("STT_NOT_READY", "Recognizer destroyed")
-                    return@thread
-                }
-
                 // Convert PCM (Int16) to FloatArray
                 val shorts = ByteBuffer.wrap(pcmData).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
                 val floatArray = FloatArray(shorts.capacity())
@@ -260,26 +402,27 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) : ReactContextBase
                     floatArray[i] = shorts.get(i).toFloat() / 32768.0f
                 }
 
-                // C5 fix: stream in try/finally to prevent native leak
-                val stream = rec.createStream()
-                if (stream != null) {
-                    try {
-                        stream.acceptWaveform(floatArray, sampleRate = SAMPLE_RATE)
-                        rec.decode(stream)
-                        val result = rec.getResult(stream)
-                        val text = result?.text ?: ""
-
-                        val args = Arguments.createMap().apply {
-                            putArray("value", Arguments.createArray().apply { pushString(text) })
-                        }
-                        emitEvent("onSpeechResults", args)
-                        promise.resolve(text)
-                    } finally {
-                        stream.release()
+                // C5 fix: decode under the model lock, so the model can't be freed underneath
+                val text = synchronized(modelLock) {
+                    val english = recognizer
+                    val hindi = hindiRecognizer
+                    when {
+                        destroyed -> null
+                        loadedLanguage == "hi" && hindi != null -> transcribeHindi(hindi, floatArray)
+                        english != null -> transcribeEnglish(english, floatArray)
+                        else -> null
                     }
-                } else {
-                    promise.reject("DECODE_ERROR", "Failed to create stream")
                 }
+                if (text == null) {
+                    promise.reject("STT_NOT_READY", "Recognizer destroyed")
+                    return@thread
+                }
+
+                val args = Arguments.createMap().apply {
+                    putArray("value", Arguments.createArray().apply { pushString(text) })
+                }
+                emitEvent("onSpeechResults", args)
+                promise.resolve(text)
 
             } catch (e: Exception) {
                 emitEvent("onSpeechError", "Failed to stop recording: ${e.message}")
@@ -323,9 +466,7 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) : ReactContextBase
         // C5 fix: set destroyed BEFORE releasing native resources
         destroyed = true
         isRecording = false
-        try {
-            recognizer?.release()
-        } catch (e: Exception) {}
+        synchronized(modelLock) { releaseModels() }
         cancelRecognition(PromiseImpl(null, null))
     }
 }

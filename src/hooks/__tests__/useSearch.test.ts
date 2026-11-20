@@ -30,11 +30,26 @@ import {
 
 jest.mock('../../database', () => ({
     searchDocuments: jest.fn(),
+    // The hybrid step awaits this; it hands over to the searchDocuments mock,
+    // so each test sets one mock for both steps.
+    searchDocumentsAsync: jest.fn(async (q: string, v?: Float32Array) =>
+        (jest.requireMock('../../database') as { searchDocuments: (q: string, v?: Float32Array) => unknown }).searchDocuments(q, v)),
+    // The real reading of date and "latest" words (without the database check for "new"/"last").
+    understandQuery: jest.fn((q: string) => {
+        const { parseDateQuery } = jest.requireActual('../../utils/DateQuery');
+        const { parseRecency } = jest.requireActual('../../utils/PaperSeries');
+        const dates = parseDateQuery(q);
+        return { dates, recency: parseRecency(dates ? dates.rest : q) };
+    }),
 }));
 
 jest.mock('../../services/EmbeddingService', () => ({
     encodeText: jest.fn(),
     warmUpText: jest.fn(),
+}));
+
+jest.mock('../../services/SpellingService', () => ({
+    rescueQuery: jest.fn(async () => null),
 }));
 
 jest.mock('../../utils/SearchHistory', () => ({
@@ -45,6 +60,7 @@ jest.mock('../../utils/SearchHistory', () => ({
 }));
 
 const mockSearchDocuments = searchDocuments as unknown as jest.Mock;
+const mockRescue = (jest.requireMock('../../services/SpellingService') as { rescueQuery: jest.Mock }).rescueQuery;
 const mockEncodeText = encodeText as unknown as jest.Mock;
 const mockWarmUpText = warmUpText as unknown as jest.Mock;
 const mockLoadSearchHistory = loadSearchHistory as unknown as jest.Mock;
@@ -176,12 +192,28 @@ describe('useSearch — debounced search (200ms)', () => {
         expect(result.current.searchResults).toEqual([doc(2, 'Beach'), likeOnly]);
     });
 
-    test('warms up the text encoder shortly after mount', async () => {
-        await renderHook(() => useSearch(true));
+    test('loads the text encoder when search opens, not at app start', async () => {
+        const { result } = await renderHook(() => useSearch(true));
         await flush();
+        await act(async () => { jest.advanceTimersByTime(60_000); });
         expect(mockWarmUpText).not.toHaveBeenCalled();
-        await act(async () => { jest.advanceTimersByTime(1500); });
+
+        await act(async () => { result.current.setIsSearching(true); });
         expect(mockWarmUpText).toHaveBeenCalledTimes(1);
+
+        // Typing doesn't ask again; closing and reopening search does
+        // (cheap when loaded: it only restarts the 10-minute countdown).
+        await typeAndWait(result, 'cat', 200);
+        expect(mockWarmUpText).toHaveBeenCalledTimes(1);
+        await act(async () => { result.current.setIsSearching(false); });
+        await act(async () => { result.current.setIsSearching(true); });
+        expect(mockWarmUpText).toHaveBeenCalledTimes(2);
+    });
+
+    test('does not load the text encoder before the database is ready', async () => {
+        const { result } = await renderHook(() => useSearch(false));
+        await act(async () => { result.current.setIsSearching(true); });
+        expect(mockWarmUpText).not.toHaveBeenCalled();
     });
 
     test('no search fires before the 200ms debounce elapses', async () => {
@@ -535,5 +567,119 @@ describe('useSearch — history handlers', () => {
         expect(result.current.handleSelectHistory).toBe(first.select);
         expect(result.current.handleDeleteHistory).toBe(first.del);
         expect(result.current.handleClearHistory).toBe(first.clear);
+    });
+});
+
+describe('useSearch — spelling rescue', () => {
+    test('when the typed words find nothing, shows results for the corrected words and says what was typed', async () => {
+        const found = [doc(1, 'Medicine slip')];
+        mockSearchDocuments.mockImplementation((q: string) => (q === 'medicine' ? found : []));
+        mockRescue.mockResolvedValueOnce({ query: 'medicine', corrections: [{ from: 'medicne', to: 'medicine' }] });
+        const { result } = await renderHook(() => useSearch(true));
+        await flush();
+        await typeAndWait(result, 'medicne', 200);
+        await flush();
+        expect(mockRescue).toHaveBeenCalledWith('medicne');
+        expect(result.current.searchResults).toEqual(found);
+        expect(result.current.debouncedSearchText).toBe('medicine');
+        expect(result.current.correctedFrom).toBe('medicne');
+        // The look-alike step uses the corrected words too.
+        expect(mockEncodeText.mock.calls[0][0]).toContain('medicine');
+        expect(mockEncodeText.mock.calls[0][0]).not.toContain('medicne');
+    });
+
+    test('does not correct anything when the typed words find something', async () => {
+        mockSearchDocuments.mockReturnValue([doc(2, 'Bill')]);
+        const { result } = await renderHook(() => useSearch(true));
+        await flush();
+        await typeAndWait(result, 'bill', 200);
+        await flush();
+        expect(mockRescue).not.toHaveBeenCalled();
+        expect(result.current.correctedFrom).toBeNull();
+    });
+
+    test('keeps "nothing found" when the correction finds nothing either', async () => {
+        mockSearchDocuments.mockReturnValue([]);
+        mockRescue.mockResolvedValueOnce({ query: 'ticket', corrections: [{ from: 'tikcet', to: 'ticket' }] });
+        const { result } = await renderHook(() => useSearch(true));
+        await flush();
+        await typeAndWait(result, 'tikcet', 200);
+        await flush();
+        expect(result.current.searchResults).toEqual([]);
+        expect(result.current.correctedFrom).toBeNull();
+        expect(result.current.debouncedSearchText).toBe('tikcet');
+    });
+});
+
+describe('useSearch — dates', () => {
+    test('a festival search says when, skips spelling rescue, and shows CLIP what the festival looks like', async () => {
+        mockSearchDocuments.mockReturnValue([]);
+        mockEncodeText.mockResolvedValue(VECTOR);
+        const { result } = await renderHook(() => useSearch(true));
+        await flush();
+        await typeAndWait(result, 'diwali photos', 200);
+        await flush();
+        expect(result.current.dateMeaning).toMatchObject({ kind: 'festival', festival: 'diwali' });
+        expect(mockRescue).not.toHaveBeenCalled();
+        expect(mockEncodeText).toHaveBeenCalledWith('diwali lamps and lights');
+    });
+
+    test('a date with nothing else to look for sends nothing to CLIP', async () => {
+        mockSearchDocuments.mockReturnValue([doc(1, 'Photo')]);
+        const { result } = await renderHook(() => useSearch(true));
+        await flush();
+        await typeAndWait(result, 'kal ki photo', 200);
+        await flush();
+        expect(result.current.dateMeaning).toEqual({ kind: 'relative', relative: 'yesterday' });
+        expect(mockEncodeText).not.toHaveBeenCalled();
+    });
+
+    test('no date words, no date meaning', async () => {
+        mockSearchDocuments.mockReturnValue([doc(1, 'Bill')]);
+        const { result } = await renderHook(() => useSearch(true));
+        await flush();
+        await typeAndWait(result, 'bill', 200);
+        await flush();
+        expect(result.current.dateMeaning).toBeNull();
+    });
+});
+
+describe('useSearch — newest first', () => {
+    test('"latest electricity bill" says newest first and shows CLIP only "electricity bill"', async () => {
+        mockSearchDocuments.mockReturnValue([doc(1, 'Bill')]);
+        mockEncodeText.mockResolvedValue(VECTOR);
+        const { result } = await renderHook(() => useSearch(true));
+        await flush();
+        await typeAndWait(result, 'latest electricity bill', 200);
+        await flush();
+        expect(result.current.newestFirst).toBe(true);
+        expect(result.current.dateMeaning).toBeNull();
+        expect(mockEncodeText).toHaveBeenCalledWith(expect.stringContaining('electricity bill'));
+        expect(mockEncodeText).not.toHaveBeenCalledWith(expect.stringContaining('latest'));
+    });
+
+    test('"latest photos" has nothing for CLIP to look for', async () => {
+        mockSearchDocuments.mockReturnValue([doc(1, 'Photo')]);
+        const { result } = await renderHook(() => useSearch(true));
+        await flush();
+        await typeAndWait(result, 'latest photos', 200);
+        await flush();
+        expect(result.current.newestFirst).toBe(true);
+        expect(mockEncodeText).not.toHaveBeenCalled();
+    });
+
+    test('an ordinary search is not newest first, and clearing the box resets it', async () => {
+        mockSearchDocuments.mockReturnValue([doc(1, 'Bill')]);
+        const { result } = await renderHook(() => useSearch(true));
+        await flush();
+        await typeAndWait(result, 'pichla bill', 200);
+        await flush();
+        expect(result.current.newestFirst).toBe(true);
+        await typeAndWait(result, 'bill', 200);
+        await flush();
+        expect(result.current.newestFirst).toBe(false);
+        await typeAndWait(result, '', 200);
+        await flush();
+        expect(result.current.newestFirst).toBe(false);
     });
 });

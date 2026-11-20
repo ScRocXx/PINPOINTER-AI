@@ -1,15 +1,35 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { NativeModules } from 'react-native';
-import { AppLogger } from '../utils/AppLogger';
-
-const { SherpaOnnxModule } = NativeModules;
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import {
+  ensureSpeechModel,
+  getSpeechModelState,
+  subscribeSpeechModel,
+  warmUpForVoiceUsers,
+  type SpeechModelState,
+} from './SpeechModel';
+import { useStrings } from '../i18n/LanguageContext';
 
 /**
- * ModelService — Initializes sherpa-onnx STT model on app mount.
+ * ModelService — the state of the on-device speech model, for the screens
+ * that show it (Settings, the voice and photo search sheet).
  *
- * The whisper model is bundled in the APK assets (downloaded at build time by download-models.js).
- * "Loading" here means loading model weights into memory — typically 1-3 seconds.
+ * The speech models ship in the APK (download-models.js): Whisper for English,
+ * a small Hindi model for Hindi. The one for the app's language is loaded into
+ * memory when voice search is first used; people who have used voice search
+ * before get it loaded shortly after start (see services/SpeechModel.ts).
  */
+
+/** What to tell people about voice search. */
+export type VoiceStatus = 'ready' | 'loading' | 'off';
+
+/**
+ * Not loaded yet still means it works: it loads at the first tap on the mic.
+ * Only a load that failed is "off".
+ */
+export const voiceStatusOf = (state: SpeechModelState): VoiceStatus =>
+  state === 'loading' ? 'loading' : state === 'failed' ? 'off' : 'ready';
+
+/** After start, how long to wait before loading the model for people who use voice search. */
+export const VOICE_WARMUP_DELAY_MS = 3000;
 
 interface ModelServiceState {
   isSTTDownloading: boolean;
@@ -21,6 +41,8 @@ interface ModelServiceState {
   isSTTLoaded: boolean;
   isTTSLoaded: boolean;
   isVoiceAgentReady: boolean;
+  /** Voice search in plain terms, for Settings and the helper sheet. */
+  voice: VoiceStatus;
   downloadAndLoadSTT: () => Promise<void>;
   downloadAndLoadTTS: () => Promise<void>;
   downloadAndLoadAllModels: () => Promise<void>;
@@ -43,32 +65,31 @@ interface ModelServiceProviderProps {
 }
 
 export const ModelServiceProvider: React.FC<ModelServiceProviderProps> = ({ children }) => {
-  const [isSTTLoading, setIsSTTLoading] = useState(true);
-  const [isSTTLoaded, setIsSTTLoaded] = useState(false);
+  const [speech, setSpeech] = useState<SpeechModelState>(getSpeechModelState);
+  const { lang } = useStrings();
+  const langRef = useRef(lang);
+  langRef.current = lang;
 
-  // Initialize STT model
-  const loadSTT = useCallback(async () => {
-    try {
-      setIsSTTLoading(true);
-      AppLogger.info('ModelService', 'Initializing STT (Whisper Base)...');
-      await SherpaOnnxModule.initSTT();
-      setIsSTTLoaded(true);
-      AppLogger.info('ModelService', 'STT initialized successfully');
-    } catch (error) {
-      AppLogger.error('ModelService', 'Failed to init STT', error);
-      setIsSTTLoaded(false);
-    } finally {
-      setIsSTTLoading(false);
-    }
+  useEffect(() => {
+    setSpeech(getSpeechModelState());
+    return subscribeSpeechModel(setSpeech);
   }, []);
 
-  // Initialize on mount with delay — let the UI render first before heavy model loading
+  const loadSTT = useCallback(async () => {
+    await ensureSpeechModel(langRef.current);
+  }, []);
+
+  // The model is not loaded at start any more. Only people who have used
+  // voice search get it ahead of time, after the first screen has drawn.
   useEffect(() => {
     const timer = setTimeout(() => {
-      loadSTT();
-    }, 3000);
+      warmUpForVoiceUsers(langRef.current);
+    }, VOICE_WARMUP_DELAY_MS);
     return () => clearTimeout(timer);
-  }, [loadSTT]);
+  }, []);
+
+  const isSTTLoading = speech === 'loading';
+  const isSTTLoaded = speech === 'ready';
 
   const noop = async () => {};
 
@@ -82,6 +103,7 @@ export const ModelServiceProvider: React.FC<ModelServiceProviderProps> = ({ chil
     isSTTLoaded,
     isTTSLoaded: false,
     isVoiceAgentReady: isSTTLoaded,
+    voice: voiceStatusOf(speech),
     downloadAndLoadSTT: loadSTT,
     downloadAndLoadTTS: noop,
     downloadAndLoadAllModels: loadSTT,

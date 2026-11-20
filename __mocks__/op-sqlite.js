@@ -233,6 +233,89 @@ class MockDB {
     }
 
     // Paged walk over the index (pruning deleted files)
+    // Duplicates: a file with the same bytes whose words are read
+    if (/^SELECT uri FROM files WHERE fingerprint = \? AND uri != \? AND ocr_status = 'done' LIMIT 1/i.test(q)) {
+      const [fp, except] = params;
+      const hit = [...this.files.values()].find((f) => f.fingerprint === fp && f.uri !== except && f.ocr_status === 'done');
+      return { rows: hit ? [{ uri: hit.uri }] : [] };
+    }
+    if (/^SELECT uri, fingerprint FROM files WHERE fingerprint IS NOT NULL AND uri IN \(/i.test(q)) {
+      const wanted = new Set(params);
+      const rows = [...this.files.values()]
+        .filter((f) => f.fingerprint && wanted.has(f.uri))
+        .map((f) => ({ uri: f.uri, fingerprint: f.fingerprint }));
+      return { rows };
+    }
+    if (/^SELECT embedding FROM vec_index WHERE document_id = \? LIMIT 1/i.test(q)) {
+      const [id] = params;
+      const hit = this.vectors.find((v) => v.document_id === id);
+      return { rows: hit ? [{ embedding: hit.embedding }] : [] };
+    }
+
+    // The newest photos and papers (listNewest), optionally one type
+    if (/FROM document_index\s+(WHERE type = \? )?ORDER BY taken_at DESC, id DESC\s+LIMIT \?/i.test(q)) {
+      const typed = /WHERE type = \?/i.test(q);
+      const type = typed ? params[0] : null;
+      const limit = params[params.length - 1];
+      const key = (r) => (typeof r.taken_at === 'number' ? r.taken_at : -Infinity);
+      const rows = this.documents
+        .filter((r) => !type || r.type === type)
+        .sort((a, b) => key(b) - key(a) || b.id - a.id)
+        .slice(0, limit);
+      return { rows: this._project(rows, this._selectList(q)) };
+    }
+
+    // Photos and papers from some time windows, newest first
+    if (/FROM document_index\s+WHERE \(taken_at >= \? AND taken_at < \?\)/i.test(q)) {
+      const limit = params[params.length - 1];
+      const windows = [];
+      for (let i = 0; i + 1 < params.length - 1; i += 2) windows.push([params[i], params[i + 1]]);
+      const rows = this.documents
+        .filter((r) => typeof r.taken_at === 'number' && windows.some(([a, b]) => r.taken_at >= a && r.taken_at < b))
+        .sort((a, b) => b.taken_at - a.taken_at)
+        .slice(0, limit);
+      return { rows: this._project(rows, this._selectList(q)) };
+    }
+    if (/^UPDATE document_index SET taken_at = \? WHERE filePath = \?/i.test(q)) {
+      const [takenAt, filePath] = params;
+      this.documents.filter((r) => r.filePath === filePath).forEach((r) => (r.taken_at = takenAt));
+      return { rows: [] };
+    }
+
+    // fts5vocab over the search index: every token with how many rows contain it
+    if (/^SELECT term, doc FROM temp\.fts_vocab (WHERE term >= \? AND term < \? AND doc >= \? )?ORDER BY doc DESC LIMIT \?/i.test(q)) {
+      const ranged = /WHERE term >= \?/i.test(q);
+      const [from, to, minDocs] = ranged ? params : [null, null, 0];
+      const limit = params[params.length - 1];
+      const counts = new Map();
+      for (const d of this.documents) {
+        const toks = new Set(
+          `${d.title || ''} ${d.content || ''}`
+            .normalize('NFC')
+            .split(/[^\p{L}\p{N}\p{Co}\p{Mn}\p{Mc}]+/u)
+            .filter(Boolean)
+            .map((t) => t.toLowerCase()),
+        );
+        toks.forEach((t) => counts.set(t, (counts.get(t) || 0) + 1));
+      }
+      const rows = [...counts]
+        .filter(([term, doc]) => !ranged || (term >= from && term < to && doc >= minDocs))
+        .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))
+        .slice(0, limit)
+        .map(([term, doc]) => ({ term, doc }));
+      return { rows };
+    }
+
+    // Re-keying the search tail: rows with their text, in id order
+    if (/^SELECT id, title, content FROM document_index WHERE id > \? ORDER BY id LIMIT \?/i.test(q)) {
+      const [afterId, limit] = params;
+      const rows = this.documents
+        .filter((r) => r.id > afterId)
+        .sort((a, b) => a.id - b.id)
+        .slice(0, limit)
+        .map((r) => ({ id: r.id, title: r.title, content: r.content }));
+      return { rows };
+    }
     if (/^SELECT id, filePath, type FROM document_index WHERE id > \? ORDER BY id LIMIT \?/i.test(q)) {
       const [afterId, limit] = params;
       const rows = this.documents
@@ -337,7 +420,33 @@ class MockDB {
       return { rows };
     }
 
-    // FTS5 MATCH (simple FTS path + hybrid WITH query)
+    // sqlite-vec: nearest photos (KNN) and the distance of the photo at an offset
+    if (/FROM vec_index\s+WHERE embedding MATCH vec_f32\(\?\) AND k = \?/i.test(q)) {
+      const [blob, k] = params;
+      return { rows: this._vectorDistances(blob).slice(0, k) };
+    }
+    // Sampled distances for the far-photo yardstick: every stride-th document_id.
+    if (/^SELECT vec_distance_l2\(embedding, vec_f32\(\?\)\) AS distance\s+FROM vec_index\s+WHERE document_id % \? = 0/i.test(q)) {
+      const [blob, stride] = params;
+      const rows = this._vectorDistances(blob).filter((r) => r.document_id % stride === 0);
+      this.sampledDistanceReads = (this.sampledDistanceReads || 0) + rows.length;
+      return { rows: rows.map((r) => ({ distance: r.distance })) };
+    }
+    if (/^SELECT vec_distance_l2\(embedding, vec_f32\(\?\)\) AS distance\s+FROM vec_index ORDER BY distance LIMIT 1 OFFSET \?/i.test(q)) {
+      const [blob, offset] = params;
+      const row = this._vectorDistances(blob)[offset];
+      return { rows: row ? [{ distance: row.distance }] : [] };
+    }
+
+    // Rows by id (look-alike photos)
+    if (/FROM document_index\s+WHERE (type = 'IMAGE' AND )?id IN \(/i.test(q)) {
+      const ids = new Set(params);
+      const imagesOnly = /type = 'IMAGE'/i.test(q);
+      const rows = this.documents.filter((r) => ids.has(r.id) && (!imagesOnly || r.type === 'IMAGE'));
+      return { rows: this._project(rows, this._selectList(q)) };
+    }
+
+    // FTS5 MATCH
     if (/\bMATCH\b/i.test(q)) return this._ftsSearch(q, params);
 
     // LIKE fallback
@@ -379,15 +488,32 @@ class MockDB {
     return isOr ? groups.some(groupHit) : groups.every(groupHit);
   }
 
+  /** Every stored vector's L2 distance to the query blob, closest first. */
+  _vectorDistances(blob) {
+    const floats = (b) => new Float32Array(b.buffer, b.byteOffset, Math.floor(b.byteLength / 4));
+    const query = floats(blob);
+    return this.vectors
+      .map((v) => {
+        const e = floats(v.embedding);
+        let sum = 0;
+        for (let i = 0; i < query.length; i++) sum += (query[i] - e[i]) ** 2;
+        return { document_id: v.document_id, distance: Math.sqrt(sum) };
+      })
+      .sort((a, b) => a.distance - b.distance);
+  }
+
   _ftsSearch(q, params) {
-    // params: [ftsTerms] for the simple path, [vectorBlob, ftsTerms] for hybrid
     const matchParam = String(params[params.length - 1] ?? '');
     const { groups, isOr } = this._matchTerms(matchParam);
-    const hybrid = /rrf_score/i.test(q);
     let rows = this.documents.filter((d) => this._docMatchesTerms(d, groups, isOr));
     rows = rows.slice(0, 50);
-    const extra = hybrid ? { rrf_score: 1.0 } : {};
-    return { rows: this._project(rows, this._selectList(q), extra) };
+    return { rows: this._withFingerprints(q, this._project(rows, this._selectList(q))) };
+  }
+
+  // `LEFT JOIN files fs ON fs.uri = d.filePath` + `fs.fingerprint`: fill it from the files table.
+  _withFingerprints(q, rows) {
+    if (!/LEFT JOIN files fs ON fs\.uri = d\.filePath/i.test(q)) return rows;
+    return rows.map((r) => ({ ...r, fingerprint: this.files.get(r.filePath)?.fingerprint ?? null }));
   }
 
   _likeSearch(q, params) {
@@ -407,7 +533,7 @@ class MockDB {
     });
     let rows = this.documents.filter((r) => groupTests.every((f) => f(r)));
     rows = rows.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)).slice(0, 50);
-    return { rows: this._project(rows, this._selectList(q)) };
+    return { rows: this._withFingerprints(q, this._project(rows, this._selectList(q))) };
   }
 }
 

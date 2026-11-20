@@ -40,4 +40,22 @@ describe('useReducedMotion', () => {
     await act(async () => {});
     expect(result.current).toBe(false);
   });
+
+  it('asks Android once and shares the answer, however many parts animate', async () => {
+    // The preset's mocks outlive spyOn/restore: count from here.
+    (AccessibilityInfo.isReduceMotionEnabled as jest.Mock).mockClear();
+    (AccessibilityInfo.addEventListener as jest.Mock).mockClear();
+    (AccessibilityInfo.isReduceMotionEnabled as jest.Mock).mockResolvedValue(true);
+    // Three animated parts in one tree, like one photo tile.
+    const { result, unmount } = await renderHook(() => [useReducedMotion(), useReducedMotion(), useReducedMotion()]);
+    await waitFor(() => expect(result.current).toEqual([true, true, true]));
+    expect(AccessibilityInfo.isReduceMotionEnabled).toHaveBeenCalledTimes(1);
+    expect(AccessibilityInfo.addEventListener).toHaveBeenCalledTimes(1);
+
+    await act(async () => handler?.(false));
+    expect(result.current).toEqual([false, false, false]);
+
+    await unmount();
+    expect(remove).toHaveBeenCalledTimes(1);
+  });
 });

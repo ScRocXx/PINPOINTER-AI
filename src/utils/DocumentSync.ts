@@ -7,10 +7,11 @@
  */
 import { Platform } from 'react-native';
 import RNFS from 'react-native-fs';
-import { isFileIndexed, noteFileSeen, markOcrDone, markStageFailed } from '../database';
+import { isFileIndexed, noteFileSeen, markOcrDone, markStageFailed, setTakenAt } from '../database';
 import { processPDF } from './DocumentPipeline';
 import { prepareImportedPdfs } from './PdfImport';
 import { AppLogger } from './AppLogger';
+import { isQuiet, waitForQuiet } from '../services/InteractionGate';
 
 const MAX_DEPTH = 4;
 
@@ -95,6 +96,9 @@ export const performDocumentSync = async (
     let processed = 0;
     for (const doc of docsToProcess) {
         if (cancelRef?.current) return { status: 'done', processed, total, wasCancelled: true };
+        // A PDF takes seconds of OCR: start the next one when nobody is using the phone.
+        if (!isQuiet()) await waitForQuiet(() => !!cancelRef?.current);
+        if (cancelRef?.current) return { status: 'done', processed, total, wasCancelled: true };
         const fileUri = fileUriOf(doc);
         // No transaction here: the pipeline awaits OCR for seconds, and its
         // only write is one synchronous indexDocument call at the end.
@@ -102,6 +106,8 @@ export const performDocumentSync = async (
             await processPDF(fileUri);
             // The pipeline logs and swallows save errors, so check the row landed.
             if (!isFileIndexed(fileUri)) throw new Error('PDF row was not written');
+            // "pichhle mahine ka bill": the paper dates from when the file last changed.
+            setTakenAt(fileUri, doc.mtime ? doc.mtime.getTime() : null);
             markOcrDone(fileUri, 'DOCUMENT');
             AppLogger.info('DocumentSync', `Pipeline complete for: ${doc.name}`);
         } catch (pipelineError) {

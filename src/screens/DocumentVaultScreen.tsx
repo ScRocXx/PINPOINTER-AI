@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Linking, NativeModules, ScrollView, StyleSheet, View } from 'react-native';
+import { ScrollView, StyleSheet, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import {
@@ -26,11 +26,13 @@ import { Colors, GUTTER, Radius, Space, Touch } from '../theme';
 import { formatWhen, useStrings } from '../i18n';
 import { RootStackParamList } from '../navigation/types';
 import { getAllDocuments, searchDocuments } from '../database';
-import { usePinpointerShared } from '../hooks/PinpointerContext';
+import { type PinpointerState, usePinpointerShared } from '../hooks/PinpointerContext';
+import { noteInteraction } from '../services/InteractionGate';
 import { usePinnedItems } from '../hooks/usePinnedItems';
 import { describePlaces, usePdfPlaces } from '../hooks/usePdfPlaces';
 import { useScreenFocus } from '../hooks/useScreenFocus';
 import { forgetIfGone } from '../utils/MissingFiles';
+import { openPdf } from '../utils/OpenPdf';
 import { AppLogger } from '../utils/AppLogger';
 import {
   PAPER_GROUPS,
@@ -47,15 +49,14 @@ import {
 export const PAPERS_PAGE = 30;
 const SEARCH_DELAY_MS = 250;
 
-const openPdf = (filePath: string): void => {
-  const { StorageModule } = NativeModules;
-  if (StorageModule?.openPDF) {
-    StorageModule.openPDF(filePath.replace('file://', ''));
-    return;
-  }
-  const uri = filePath.startsWith('file://') ? filePath : `file://${filePath}`;
-  Linking.openURL(uri).catch(e => AppLogger.warn('Papers', 'Could not open the PDF', e));
-};
+/** Papers reads only PDF progress, so typing in search or photo progress doesn't redraw it. */
+const selectPapersSync = (s: PinpointerState) => ({
+  isSyncingDocs: s.isSyncingDocs,
+  docSyncCount: s.docSyncCount,
+  totalDocs: s.totalDocs,
+  lastDocSyncTime: s.lastDocSyncTime,
+  handleDocumentSync: s.handleDocumentSync,
+});
 
 /**
  * Papers: every PDF Pinpointer has read, newest first. Six big tiles (ID
@@ -70,7 +71,8 @@ export const DocumentVaultScreen: React.FC = () => {
   const focused = useScreenFocus();
   const { isPinned, toggle } = usePinnedItems();
   const places = usePdfPlaces();
-  const { isSyncingDocs, docSyncCount, totalDocs, lastDocSyncTime, handleDocumentSync } = usePinpointerShared();
+  const { isSyncingDocs, docSyncCount, totalDocs, lastDocSyncTime, handleDocumentSync } =
+    usePinpointerShared(selectPapersSync);
 
   const [papers, setPapers] = useState<Paper[]>([]);
   const [group, setGroup] = useState<PaperGroup | null>(null);
@@ -133,7 +135,7 @@ export const DocumentVaultScreen: React.FC = () => {
         return;
       }
       try {
-        openPdf(paper.doc.filePath);
+        await openPdf(paper.doc.filePath);
       } catch (e) {
         AppLogger.warn('Papers', 'Could not open the PDF', e);
         toast.show(t('papers.openFailed'), { icon: 'alert' });
@@ -206,7 +208,13 @@ export const DocumentVaultScreen: React.FC = () => {
 
   return (
     <Screen wash testID="papers-screen">
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" testID="papers-scroll">
+      <ScrollView
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled"
+        onScroll={noteInteraction}
+        scrollEventThrottle={100}
+        testID="papers-scroll"
+      >
         <ScreenHeader
           title={t('papers.title')}
           subtitle={total > 0 ? t('papers.count', { n: total }) : undefined}

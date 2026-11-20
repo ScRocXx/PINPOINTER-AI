@@ -85,7 +85,8 @@ export const SmartClipboardScreen: React.FC = () => {
     setText('');
     setPhase('reading');
     try {
-      const result = await analyzeImage(uri);
+      // Scan only shows the words: no CLIP vector needed.
+      const result = await analyzeImage(uri, { embed: false });
       if (!alive.current || id !== request.current) {
         return;
       }

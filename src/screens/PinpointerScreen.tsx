@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
-import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
+import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../navigation/types';
 import type { MainTabNavigationOptions } from '../navigation/MainTabs';
@@ -41,7 +41,7 @@ export const PinpointerScreen: React.FC = () => {
 
     const {
         searchText, setSearchText,
-        searchResults,
+        searchResults, resultsQuery, correctedFrom, dateMeaning, newestFirst,
         isSearching, setIsSearching, isSearchPending,
         isRecording, isTranscribing, isModelLoading,
         startListening, stopListening, cancelListening,
@@ -49,12 +49,19 @@ export const PinpointerScreen: React.FC = () => {
         searchHistory, handleSelectHistory, handleDeleteHistory, handleClearHistory,
     } = usePinpointerShared();
 
-    const route = useRoute<RouteProp<RootStackParamList, 'Pinpointer'>>();
-
     // What is being got ready right now, whoever started it (Home, the first
     // run, the charging-time job). Counted again when photo access changes.
     const { access: photoAccess } = usePhotoAccess();
     const progress = useIndexingProgress(photoAccess);
+    // The search screen's "N of M ready" line; the same object while nothing changes.
+    const photosRunning = progress.photos.running;
+    const photosDone = progress.photos.done;
+    const photosTotal = progress.photos.total;
+    const overlayIndexing = useMemo(
+        () => (photosRunning ? { done: photosDone, total: photosTotal ?? undefined } : null),
+        [photosRunning, photosDone, photosTotal],
+    );
+
     // The photos as they were when one was tapped, so a re-rank underneath
     // doesn't move the viewer to another photo.
     const [viewer, setViewer] = useState<{ items: ViewerItem[]; index: number; query: string } | null>(null);
@@ -105,21 +112,12 @@ export const PinpointerScreen: React.FC = () => {
         return () => backHandler.remove();
     }, [isSearching, closeSearch]);
 
-    // Another screen can ask for a look through all photos (startUniversalSync)
-    useEffect(() => {
-        if (route.params?.startUniversalSync) {
-            // Automatically launch the heavy gallery sync
-            handleDeepSync();
-            // Clear parameter so it doesn't re-trigger on subsequent un-related mounts
-            navigation.setParams({ startUniversalSync: false });
-        }
-    }, [route.params?.startUniversalSync, handleDeepSync, navigation]);
-
     // The mic is the tab bar's middle button, on every tab. Listening always
-    // shows on the search screen, so open it when the mic starts.
+    // shows on the search screen, so open it when the mic starts, or while the
+    // speech model loads on its first use (the search bar then says so).
     useEffect(() => {
-        if (isRecording) setIsSearching(true);
-    }, [isRecording, setIsSearching]);
+        if (isRecording || isModelLoading) setIsSearching(true);
+    }, [isRecording, isModelLoading, setIsSearching]);
 
     const openScan = useCallback(() => navigation.navigate('SmartClipboard'), [navigation]);
 
@@ -163,11 +161,10 @@ export const PinpointerScreen: React.FC = () => {
 
     const searchBar = (
         <SearchBar
-            isTop
             searchText={searchText}
             onChangeText={setSearchText}
             onFocus={handleSearchFocus}
-            autoFocus={isSearching && !isRecording && !isTranscribing}
+            autoFocus={isSearching && !isRecording && !isTranscribing && !isModelLoading}
             isRecording={isRecording}
             isTranscribing={isTranscribing}
             isModelLoading={isModelLoading}
@@ -196,6 +193,10 @@ export const PinpointerScreen: React.FC = () => {
                     visible={isSearching}
                     searchText={searchText}
                     results={searchResults}
+                    resultsQuery={resultsQuery}
+                    correctedFrom={correctedFrom}
+                    dateMeaning={dateMeaning}
+                    newestFirst={newestFirst}
                     isSearchPending={isSearchPending}
                     history={searchHistory}
                     onSelectHistory={handleSelectHistory}
@@ -208,9 +209,7 @@ export const PinpointerScreen: React.FC = () => {
                     isTranscribing={isTranscribing}
                     onStopListening={stopListening}
                     onCancelListening={cancelListening}
-                    indexing={progress.photos.running
-                        ? { done: progress.photos.done, total: progress.photos.total ?? undefined }
-                        : null}
+                    indexing={overlayIndexing}
                     searchBar={searchBar}
                 />
             </View>

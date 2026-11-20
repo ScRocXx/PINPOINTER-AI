@@ -1,6 +1,6 @@
 /**
- * Tests for src/database/search.ts — FTS5 search, LIKE fallback, hybrid
- * vector search, synonym expansion, soundex phonetics, relevance ranking,
+ * Tests for src/database/search.ts — FTS5 search, LIKE fallback, photos that
+ * look like the query (vector search) and their merge with word matches, synonym expansion, soundex phonetics, relevance ranking,
  * deduplication, and snippet extraction.
  *
  * Strategy: runs against the REAL database modules (connection + documents)
@@ -8,6 +8,7 @@
  * Mock behaviors these tests rely on:
  *   - DDL is a no-op → isFtsAvailable()/isVecAvailable() are true after setup
  *   - FTS5 MATCH → case-insensitive substring over title+content (AND/OR honored)
+ *   - vec_index → real L2 distances between the stored vectors and the query
  *   - LIKE → the generated WHERE clause is actually evaluated
  *   - open() caches per DB name → reset via __resetAll + closeDatabase
  * To reach the LIKE/ranking code while FTS is available, tests either use
@@ -15,9 +16,10 @@
  */
 import * as connection from '../connection';
 import { indexDocument } from '../documents';
-import { getEmbeddingCount, indexEmbedding } from '../vectors';
+import { setFingerprint } from '../fileState';
+import { getEmbeddingCount, indexEmbedding, MIN_PHOTOS_FOR_STAND_OUT } from '../vectors';
 import { soundex } from '../../utils/Soundex';
-import { extractSnippet, searchDocuments, MAX_VECTOR_DISTANCE } from '../search';
+import { mergeByRank, searchDocuments, searchDocumentsAsync, understandQuery, MAX_VECTOR_DISTANCE, RANK_K, TEXT_WEIGHT } from '../search';
 import type { DocumentRecord } from '../types';
 
 // Top-level import: jest's moduleNameMapper routes this to the SAME mock
@@ -240,29 +242,299 @@ describe('searchDocuments — dedup and limits', () => {
   });
 });
 
-describe('searchDocuments — hybrid vector path', () => {
-  test('queryVector returns hybrid hits without crashing', () => {
-    // The mock resolves the hybrid WITH query via its FTS substring matcher;
-    // docs containing "aadhaar" (aadhaar.pdf, notes.pdf) come back as hits.
-    const res = searchDocuments('aadhaar', new Float32Array(512));
-    expect(Array.isArray(res)).toBe(true);
-    expect(res).toHaveLength(2);
+// A unit vector at a chosen cosine to the query vector QUERY (the first axis).
+const QUERY = (() => {
+  const v = new Float32Array(512);
+  v[0] = 1;
+  return v;
+})();
+const atCosine = (cosine: number, axis: number): Float32Array => {
+  const v = new Float32Array(512);
+  v[0] = cosine;
+  v[axis] = Math.sqrt(1 - cosine * cosine);
+  return v;
+};
+
+/** Index a photo with no words in common with any query here, at `cosine` to QUERY. */
+const addPhoto = (name: string, cosine: number, axis: number): string => {
+  const path = `/photos/${name}.jpg`;
+  const id = indexDocument(null, `label${name}`, path, 'IMAGE', 'OBJECT');
+  indexEmbedding(id!, atCosine(cosine, axis));
+  return path;
+};
+
+describe('searchDocumentsAsync — photos that look like the query', () => {
+  test('with no photo vectors, a query vector changes nothing', async () => {
+    expect(paths(await searchDocumentsAsync('aadhaar', QUERY))).toEqual(paths(searchDocuments('aadhaar')));
+    expect(await searchDocumentsAsync('zzz-no-match-qqq', QUERY)).toEqual([]);
   });
 
-  test('queryVector with no matching terms falls through gracefully to []', () => {
-    expect(searchDocuments('zzz-no-match-qqq', new Float32Array(512))).toEqual([]);
+  test('photos that stand out from the rest are found without any matching word, closest first', async () => {
+    for (let i = 0; i < MIN_PHOTOS_FOR_STAND_OUT + 4; i++) addPhoto(`far${i}`, 0.05, 2 + i);
+    const close = addPhoto('close', 0.3, 100);
+    const closest = addPhoto('closest', 0.4, 101);
+    expect(paths(await searchDocumentsAsync('zzzlook', QUERY))).toEqual([closest, close]);
   });
 
-  test('vector matches are limited by a distance cutoff', () => {
+  test('when every photo is about as close as the others, none is shown', async () => {
+    // Nonsense text sits close to all photos alike: each one here is inside
+    // the old fixed limit, and none stands out.
+    for (let i = 0; i < MIN_PHOTOS_FOR_STAND_OUT + 4; i++) addPhoto(`same${i}`, 0.25 + i * 0.001, 2 + i);
+    expect(Math.sqrt(2 - 2 * 0.25)).toBeLessThan(MAX_VECTOR_DISTANCE);
+    expect(await searchDocumentsAsync('hzjsbsjd', QUERY)).toEqual([]);
+  });
+
+  test('a gallery where most photos match still finds them', async () => {
+    const matches: string[] = [];
+    for (let i = 0; i < 20; i++) matches.push(addPhoto(`family${i}`, 0.32 - i * 0.001, 2 + i));
+    for (let i = 0; i < 6; i++) addPhoto(`other${i}`, 0.05, 40 + i);
+    expect(paths(await searchDocumentsAsync('zzzlook', QUERY))).toEqual(matches);
+  });
+
+  test('a very small gallery falls back to the fixed limit', async () => {
+    const close = addPhoto('close', 0.3, 2);
+    addPhoto('far', 0.05, 3);
+    expect(paths(await searchDocumentsAsync('zzzlook', QUERY))).toEqual([close]);
+  });
+
+  test('a photo that matches the words and the look comes first', async () => {
+    for (let i = 0; i < MIN_PHOTOS_FOR_STAND_OUT + 4; i++) addPhoto(`far${i}`, 0.05, 2 + i);
+    const lookOnly = addPhoto('lookonly', 0.4, 100);
+    const goaId = connection.getDb().executeSync('SELECT id FROM document_index WHERE filePath = ? LIMIT 1', ['/photos/goa.jpg']);
+    indexEmbedding((goaId.rows[0] as { id: number }).id, atCosine(0.3, 101));
+    // "trip" is only in the goa photo's text; "lookonly" is closer by look.
+    expect(paths(await searchDocumentsAsync('trip', QUERY))).toEqual(['/photos/goa.jpg', lookOnly]);
+  });
+
+  test('every word must match, with or without a query vector', async () => {
+    // /docs/notes.pdf has "aadhaar" but not "card": one matching word is not enough.
+    expect(paths(await searchDocumentsAsync('aadhaar card', QUERY))).toEqual(['/docs/aadhaar.pdf']);
+  });
+});
+
+describe('searchDocumentsAsync — the look-alike scan off the JS thread', () => {
+  test('without a query vector it finds what searchDocuments finds, in the same order', async () => {
+    for (let i = 0; i < MIN_PHOTOS_FOR_STAND_OUT + 4; i++) addPhoto(`far${i}`, 0.05, 2 + i);
+    addPhoto('lookonly', 0.4, 100);
+
+    for (const q of ['trip', 'zzzlook', 'aadhaar card', 'goa', '']) {
+      expect(paths(await searchDocumentsAsync(q))).toEqual(paths(searchDocuments(q)));
+    }
+  });
+
+  test('an empty query finds nothing, even with a query vector', async () => {
+    for (let i = 0; i < MIN_PHOTOS_FOR_STAND_OUT + 4; i++) addPhoto(`far${i}`, 0.05, 2 + i);
+    addPhoto('lookonly', 0.4, 100);
+    expect(await searchDocumentsAsync('', QUERY)).toEqual([]);
+    expect(await searchDocumentsAsync('   ', QUERY)).toEqual([]);
+  });
+
+  test('runs the vector queries on the read connection, never with executeSync', async () => {
+    for (let i = 0; i < MIN_PHOTOS_FOR_STAND_OUT + 4; i++) addPhoto(`far${i}`, 0.05, 2 + i);
+    const closest = addPhoto('closest', 0.4, 101);
     const db = connection.getDb();
-    const spy = jest.spyOn(db, 'executeSync');
-    searchDocuments('aadhaar', new Float32Array(512));
-    const hybridCall = spy.mock.calls.find(([sql]) => /rrf_score/.test(String(sql)));
-    expect(hybridCall).toBeDefined();
-    expect(String(hybridCall![0])).toMatch(/WHERE distance <= \?/);
-    expect(hybridCall![1]).toEqual([expect.any(Uint8Array), MAX_VECTOR_DISTANCE, expect.any(String)]);
-    expect(MAX_VECTOR_DISTANCE).toBeGreaterThan(0);
-    expect(MAX_VECTOR_DISTANCE).toBeLessThan(Math.SQRT2); // stricter than "any non-opposite vector"
+    const real = db.executeSync.bind(db);
+    const vecOnJsThread: string[] = [];
+    jest.spyOn(db, 'executeSync').mockImplementation(((sql: string, params?: unknown[]) => {
+      if (/vec_index|vec_distance/.test(sql)) vecOnJsThread.push(sql);
+      return real(sql, params as never);
+    }) as never);
+    expect(paths(await searchDocumentsAsync('zzzlook', QUERY))).toEqual([closest]);
+    expect(vecOnJsThread).toEqual([]);
+  });
+
+  test('a failing read connection still returns the word matches', async () => {
+    jest.spyOn(connection.getReadDb(), 'execute').mockImplementation((() => Promise.reject(new Error('no vec0'))) as never);
+    expect(paths(await searchDocumentsAsync('goa', QUERY))).toEqual(['/photos/goa.jpg']);
+  });
+});
+
+describe('searchDocuments — words OCR misread', () => {
+  const add = (content: string, filePath: string) => indexDocument(null, content, filePath, 'IMAGE', 'TEXT');
+
+  test('finds an English word with a misread letter, after exact matches', () => {
+    add('rnedicine twice a day', '/photos/misread.jpg');
+    add('medicine after food', '/photos/exact.jpg');
+    expect(paths(searchDocuments('medicine'))).toEqual(['/photos/exact.jpg', '/photos/misread.jpg']);
+  });
+
+  test('finds a Hindi word with a look-alike letter, typed in Hindi or Hinglish', () => {
+    add('मुगतान रसीद', '/photos/receipt.jpg');
+    expect(paths(searchDocuments('भुगतान'))).toEqual(['/photos/receipt.jpg']);
+    expect(paths(searchDocuments('bhugtan'))).toEqual(['/photos/receipt.jpg']);
+  });
+
+  test('finds a word OCR split in two', () => {
+    add('elec tricity board', '/photos/split.jpg');
+    expect(paths(searchDocuments('electricity'))).toEqual(['/photos/split.jpg']);
+  });
+
+  test('finds a Hindi word whose vowel sign OCR dropped', () => {
+    add('बजली का बिल', '/photos/bijli.jpg');
+    expect(paths(searchDocuments('बिजली'))).toEqual(['/photos/bijli.jpg']);
+  });
+
+  test('every word must still match, exactly or as a misreading', () => {
+    add('rnedicine twice a day', '/photos/misread.jpg');
+    expect(searchDocuments('medicine passport')).toEqual([]);
+  });
+
+  test('leaves unrelated words alone', () => {
+    add('rnedicine twice a day', '/photos/misread.jpg');
+    expect(searchDocuments('ticket')).toEqual([]);
+  });
+
+  test('a collection search adds papers whose words OCR misread, and only for that collection', () => {
+    add('rnedicine twice a day', '/photos/misread.jpg');
+    add('tablet after food prescription', '/photos/rx.jpg');
+    expect(paths(searchDocuments('medicine'))).toEqual(['/photos/rx.jpg', '/photos/misread.jpg']);
+    expect(paths(searchDocuments('ID cards'))).not.toContain('/photos/misread.jpg');
+  });
+
+  test('misread matches never push out exact ones', () => {
+    add('rnedicine twice a day', '/photos/misread.jpg');
+    add('passport renewal', '/photos/passport2.jpg');
+    const found = paths(searchDocuments('passport'));
+    expect(found[0]).toBe('/docs/passport.pdf');
+    expect(found).not.toContain('/photos/misread.jpg');
+  });
+});
+
+describe('searchDocuments — dates ("Diwali photos", "pichhle mahine ka bill")', () => {
+  const at = (y: number, m: number, d: number) => new Date(y, m - 1, d, 19).getTime();
+  const photo = (content: string, filePath: string, takenAt: number | null) =>
+    indexDocument(null, content, filePath, 'IMAGE', 'TEXT', takenAt);
+
+  beforeEach(() => {
+    photo('lamps rangoli', '/photos/diwali23.jpg', at(2023, 11, 12));
+    photo('sweets box', '/photos/diwali22.jpg', at(2022, 10, 24));
+    photo('electricity bill amount', '/photos/bill-nov.jpg', at(2023, 11, 13));
+    photo('electricity bill amount', '/photos/bill-jun.jpg', at(2023, 6, 2));
+    photo('random', '/photos/no-date.jpg', null);
+  });
+
+  test('a festival alone lists everything from its days, every year, newest first', () => {
+    expect(paths(searchDocuments('diwali photos'))).toEqual(['/photos/bill-nov.jpg', '/photos/diwali23.jpg', '/photos/diwali22.jpg']);
+    expect(paths(searchDocuments('दिवाली 2022'))).toEqual(['/photos/diwali22.jpg']);
+  });
+
+  test('other words are looked for only in that time', () => {
+    expect(paths(searchDocuments('diwali bill'))).toEqual(['/photos/bill-nov.jpg']);
+    expect(paths(searchDocuments('bill'))).toEqual(expect.arrayContaining(['/photos/bill-nov.jpg', '/photos/bill-jun.jpg']));
+  });
+
+  test('rows without a date are left out of date searches', () => {
+    expect(paths(searchDocuments('june 2023'))).toEqual(['/photos/bill-jun.jpg']);
+    expect(paths(searchDocuments('2023'))).not.toContain('/photos/no-date.jpg');
+  });
+
+  test('the async search does the same', async () => {
+    expect(paths(await searchDocumentsAsync('diwali bill'))).toEqual(['/photos/bill-nov.jpg']);
+  });
+});
+
+describe('searchDocuments — newest first ("latest electricity bill", "pichla bill")', () => {
+  const at = (y: number, m: number, d: number) => new Date(y, m - 1, d, 12).getTime();
+  const bill = (text: string, filePath: string, takenAt: number | null = null) =>
+    indexDocument(null, text, filePath, 'DOCUMENT', 'TEXT', takenAt);
+  const LATEST = ['/docs/bses-oct.pdf', '/docs/shop-sep.pdf', '/docs/bses-sep.pdf', '/docs/bses-aug.pdf'];
+
+  beforeEach(() => {
+    // Not indexed in date order, so word order isn't date order.
+    bill('BSES electricity bill Consumer No: 150123456 Bill Date: 05/08/2025', '/docs/bses-aug.pdf');
+    bill('BSES electricity bill Consumer No: 150123456 Bill Date: 05/10/2025', '/docs/bses-oct.pdf');
+    bill('BSES electricity bill Consumer No: 150123456 Bill Date: 05/09/2025', '/docs/bses-sep.pdf');
+    bill('Shop electricity bill Consumer No: 999888777 Bill Date: 07/09/2025', '/docs/shop-sep.pdf');
+    bill('The New India Assurance policy schedule', '/docs/nia.pdf', at(2024, 3, 1));
+  });
+
+  test('"latest" is an order, not a word: each connection\'s newest bill first, then the older ones', () => {
+    expect(paths(searchDocuments('latest electricity bill'))).toEqual(LATEST);
+    // "bill" also finds the March invoice (a synonym): the newest of its own kind, so among the first.
+    expect(paths(searchDocuments('pichla bill'))).toEqual([
+      '/docs/bses-oct.pdf', '/docs/shop-sep.pdf', '/docs/invoice.pdf', '/docs/bses-sep.pdf', '/docs/bses-aug.pdf',
+    ]);
+    expect(paths(searchDocuments('सबसे नया electricity bill'))).toEqual(LATEST);
+  });
+
+  test('without "latest" the words keep their own order', () => {
+    expect(paths(searchDocuments('electricity bill'))).toEqual([
+      '/docs/bses-aug.pdf', '/docs/bses-oct.pdf', '/docs/bses-sep.pdf', '/docs/shop-sep.pdf',
+    ]);
+  });
+
+  test('"new" stays a word when a paper says it ("New India Assurance")', () => {
+    expect(understandQuery('new india assurance').recency).toBeNull();
+    expect(paths(searchDocuments('new india assurance'))).toEqual(['/docs/nia.pdf']);
+    // No paper says "naya": newest first.
+    expect(understandQuery('naya electricity bill').recency).not.toBeNull();
+    expect(paths(searchDocuments('naya electricity bill'))).toEqual(LATEST);
+  });
+
+  test('"latest photos" and "naye papers" list the newest of that kind', () => {
+    expect(paths(searchDocuments('latest photos'))).toEqual(['/photos/goa.jpg']);
+    // By the printed dates, not the order the PDFs arrived in.
+    const papers = paths(searchDocuments('naye papers'));
+    expect(papers.slice(0, 2)).toEqual(['/docs/bses-oct.pdf', '/docs/shop-sep.pdf']);
+    expect(papers.slice(-2)).toEqual(['/docs/bses-sep.pdf', '/docs/bses-aug.pdf']);
+    expect(papers).not.toContain('/photos/goa.jpg');
+  });
+
+  test('look-alike photos come after the word matches, newest first too', async () => {
+    for (let i = 0; i < MIN_PHOTOS_FOR_STAND_OUT + 4; i++) addPhoto(`far${i}`, 0.05, 2 + i);
+    const lookOnly = addPhoto('lookonly', 0.4, 100);
+    expect(paths(await searchDocumentsAsync('latest electricity bill', QUERY))).toEqual([...LATEST, lookOnly]);
+  });
+});
+
+describe('searchDocuments — byte-identical copies', () => {
+  test('shows a photo once however many copies the phone keeps, and keeps look-alike bills', () => {
+    indexDocument(null, 'gas cylinder booking receipt', '/whatsapp/a.jpg', 'IMAGE', 'TEXT');
+    indexDocument(null, 'gas cylinder booking receipt', '/sent/a.jpg', 'IMAGE', 'TEXT');
+    indexDocument(null, 'gas cylinder booking receipt', '/camera/other.jpg', 'IMAGE', 'TEXT');
+    setFingerprint('/whatsapp/a.jpg', 'same:100');
+    setFingerprint('/sent/a.jpg', 'same:100');
+    setFingerprint('/camera/other.jpg', 'other:100');
+    expect(paths(searchDocuments('cylinder'))).toEqual(['/whatsapp/a.jpg', '/camera/other.jpg']);
+  });
+});
+
+describe('searchDocuments — filler words', () => {
+  test('"photo of goa" searches for goa, not for "photo" and "of"', () => {
+    expect(paths(searchDocuments('photo of goa'))).toEqual(['/photos/goa.jpg']);
+    expect(paths(searchDocuments('the goa'))).toEqual(['/photos/goa.jpg']);
+  });
+
+  test('"of" does not match documents that merely contain it', () => {
+    // "proof" (aadhaar.pdf) contains "of"; with a real word in the query it must not count.
+    expect(paths(searchDocuments('photo of zzzqq'))).toEqual([]);
+  });
+});
+
+describe('mergeByRank', () => {
+  const doc = (name: string): DocumentRecord => ({ filePath: `/${name}` } as DocumentRecord);
+  const names = (docs: DocumentRecord[]) => docs.map(d => d.filePath.slice(1));
+
+  test('word matches lead, and the best look-alike still makes the first screens', () => {
+    const text = Array.from({ length: 50 }, (_, i) => doc(`t${i + 1}`));
+    const merged = names(mergeByRank(text, [doc('look1'), doc('look2')]));
+    expect(merged).toHaveLength(52);
+    expect(merged[0]).toBe('t1');
+    // 1 / (RANK_K + 1) ties with word match number RANK_K + 2; the word match stays ahead.
+    expect(merged.indexOf('look1')).toBe(RANK_K + 2);
+    expect(merged.indexOf('look1')).toBeLessThan(15);
+    expect(merged.indexOf('look2')).toBeGreaterThan(merged.indexOf('look1'));
+  });
+
+  test('a file in both lists outranks files in one', () => {
+    const merged = names(mergeByRank([doc('t1'), doc('t2'), doc('both')], [doc('look1'), doc('both')]));
+    expect(merged[0]).toBe('both');
+    expect(merged).toHaveLength(4);
+  });
+
+  test('each file appears once, and words weigh more than looks', () => {
+    expect(names(mergeByRank([doc('a'), doc('a')], [doc('b')]))).toEqual(['a', 'b']);
+    expect(TEXT_WEIGHT).toBeGreaterThan(1);
   });
 });
 
@@ -297,73 +569,5 @@ describe('test isolation — mock state resets between tests', () => {
     // Would fail if __resetAll() cleared a different mock instance than the
     // one the database modules use (the jest.requireMock double-eval trap).
     expect(getEmbeddingCount()).toBe(0);
-  });
-});
-
-describe('extractSnippet', () => {
-  test('match in the middle → windowed with ... on both sides', () => {
-    const content = 'x'.repeat(100) + 'needle' + 'y'.repeat(100);
-    const expected = '...' + 'x'.repeat(40) + 'needle' + 'y'.repeat(40) + '...';
-    expect(extractSnippet(content, 'needle')).toBe(expected);
-  });
-
-  test('match at the start → no leading ...', () => {
-    const content = 'needle ' + 'z'.repeat(100);
-    const expected = 'needle ' + 'z'.repeat(39) + '...';
-    const res = extractSnippet(content, 'needle');
-    expect(res).toBe(expected);
-    expect(res.startsWith('...')).toBe(false);
-  });
-
-  test('match near the end → leading ... only', () => {
-    const content = 'x'.repeat(200) + 'needle';
-    const expected = '...' + 'x'.repeat(40) + 'needle';
-    const res = extractSnippet(content, 'needle');
-    expect(res).toBe(expected);
-    expect(res.endsWith('...')).toBe(false);
-  });
-
-  test('no match in long content → first 80 chars + ...', () => {
-    const content = 'a'.repeat(100);
-    expect(extractSnippet(content, 'zzz')).toBe('a'.repeat(80) + '...');
-  });
-
-  test('no match in short content → content as-is, no ...', () => {
-    expect(extractSnippet('short text', 'zzz')).toBe('short text');
-  });
-
-  test('empty content or query → empty string', () => {
-    expect(extractSnippet('', 'needle')).toBe('');
-    expect(extractSnippet('some content', '')).toBe('');
-    expect(extractSnippet('', '')).toBe('');
-  });
-
-  test('custom snippetLen is respected', () => {
-    const content = 'x'.repeat(100) + 'needle' + 'y'.repeat(100);
-    const expected = '...' + 'x'.repeat(10) + 'needle' + 'y'.repeat(10) + '...';
-    expect(extractSnippet(content, 'needle', 20)).toBe(expected);
-  });
-
-  test('newlines in the window are replaced with spaces', () => {
-    const content = 'line one\nline two needle here\nline three';
-    expect(extractSnippet(content, 'needle')).toBe('line one line two needle here line three');
-  });
-
-  test('multi-word query centers on the earliest matching word', () => {
-    // Long enough that the 80-char window truncates the tail.
-    const content = 'the second word appears before the first word here ' + 'z'.repeat(100);
-    const res = extractSnippet(content, 'second first');
-    expect(res.startsWith('the second')).toBe(true);
-    expect(res.startsWith('...')).toBe(false);
-    expect(res.endsWith('...')).toBe(true);
-    expect(res).toContain('second');
-  });
-
-  test('matching is case-insensitive', () => {
-    expect(extractSnippet('The Quick Brown Fox', 'QUICK')).toBe('The Quick Brown Fox');
-  });
-
-  test('whole short content with a match returns the content unchanged', () => {
-    expect(extractSnippet('hello world', 'world')).toBe('hello world');
   });
 });

@@ -465,6 +465,43 @@ const SearchResultsStory = () => {
   );
 };
 
+// "latest electricity bill": newest first, each connection's latest bill leading.
+const LATEST_BILLS: DocumentRecord[] = [
+  ['October', '05/10/2025', '1,240', '20/10/2025', 'Home', 150123456],
+  ['September', '07/09/2025', '860', '22/09/2025', 'Shop', 999888777],
+  ['September', '05/09/2025', '1,180', '20/09/2025', 'Home', 150123456],
+  ['August', '05/08/2025', '1,320', '20/08/2025', 'Home', 150123456],
+].map(([month, billDate, amount, due, place, consumer], i) => ({
+  id: 20 + i,
+  type: 'DOCUMENT' as const,
+  title: `Electricity bill ${month} (${place})`,
+  content: `BSES Rajdhani. Consumer No: ${consumer}. Bill Date: ${billDate}. Amount payable Rs. ${amount}. Due Date: ${due}.`,
+  filePath: `file:///Download/bses_${String(month).toLowerCase()}_${String(place).toLowerCase()}.pdf`,
+  detection_type: 'TEXT' as const,
+  timestamp: SEARCH_NOW - (i + 1) * 86400000,
+}));
+
+const searchLatest = () => <SearchLatestStory />;
+const SearchLatestStory = () => {
+  const { t } = useStrings();
+  const q = 'latest electricity bill';
+  return (
+    <SearchFrame query={q}>
+      <ScrollView contentContainerStyle={styles.searchList}>
+        <View style={styles.stack}>
+          <AppText variant="label" color="textSecondary">
+            {t('search.found', { n: LATEST_BILLS.length })}
+          </AppText>
+          <AppText variant="bodyStrong">{t('search.newestFirst')}</AppText>
+          {LATEST_BILLS.map((item, i) => (
+            <ResultItem key={item.id} item={item} query={q} index={i} pinned={false} onPress={noop} />
+          ))}
+        </View>
+      </ScrollView>
+    </SearchFrame>
+  );
+};
+
 const searchHistory = () => (
   <SearchFrame>
     <RecentSearches
@@ -602,6 +639,8 @@ export const STORIES: Record<string, { title: string; lang: 'en' | 'hi'; render:
   'scan-empty': { title: 'Scan: no words found', lang: 'en', render: () => <Scan photo={`${fakePhoto(3)}#empty`} /> },
   'search-results': { title: 'Search: results with filters', lang: 'en', render: searchResults },
   'search-results-hi': { title: 'Search: results with filters (Hindi)', lang: 'hi', render: searchResults },
+  'search-latest': { title: 'Search: latest bill, newest first', lang: 'en', render: searchLatest },
+  'search-latest-hi': { title: 'Search: latest bill, newest first (Hindi)', lang: 'hi', render: searchLatest },
   'search-history': { title: 'Search: recent searches', lang: 'en', render: searchHistory },
   'search-history-hi': { title: 'Search: recent searches (Hindi)', lang: 'hi', render: searchHistory },
   'search-listening': { title: 'Search: listening', lang: 'en', render: searchListening },

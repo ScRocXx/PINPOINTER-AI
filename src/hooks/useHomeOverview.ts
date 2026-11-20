@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CameraRoll } from '@react-native-camera-roll/camera-roll';
-import { countCheckedFiles, getCollectionPreview, getSimilarPhotos } from '../database';
-import { encodeText } from '../services/EmbeddingService';
+import { countCheckedFiles, getCollectionPreview, getSimilarPhotosAsync } from '../database';
+import { encodeText, isTextModelReady, onTextModelReady } from '../services/EmbeddingService';
 import { AppLogger } from '../utils/AppLogger';
 import { COLLECTIONS, CollectionId, getCollection } from '../utils/Collections';
 import { getRecentPhotos, subscribeRecentPhotos } from '../utils/RecentPhotos';
@@ -38,8 +38,6 @@ const RECENT_LIMIT = 8;
 /** While indexing runs, recount at most this often. */
 const CHECKED_REFRESH_MS = 2000;
 const TILES_REFRESH_MS = 8000;
-/** Ask CLIP for Family photos after search's own encoder warm-up (1.5s). */
-const SEMANTIC_DELAY_MS = 3000;
 /** Collections found by look (CLIP) as well as by words. */
 const SEMANTIC_COLLECTIONS: CollectionId[] = ['family'];
 
@@ -77,7 +75,8 @@ const readAlbums = async (): Promise<{ total: number | null; screenshots: string
 /** Photos that look like a collection (Family), closest first. */
 const readSimilar = async (id: CollectionId): Promise<string[]> => {
   const vector = await encodeText(getCollection(id).clip);
-  return vector ? getSimilarPhotos(vector, PHOTOS_PER_TILE * 3) : [];
+  // Off the JS thread: it runs 3 s after start, just when people first tap around.
+  return vector ? getSimilarPhotosAsync(vector, PHOTOS_PER_TILE * 3) : [];
 };
 
 /**
@@ -134,24 +133,34 @@ export const useHomeOverview = ({ busy, progressTick = 0 }: HomeOverviewOptions)
     }
   }, [loadChecked, mergeTiles]);
 
-  // First load once the first frame is up, then Family by look.
+  // First load once the first frame is up.
   useEffect(() => {
     alive.current = true;
     const frame = requestAnimationFrame(() => {
       loadAll().catch(e => AppLogger.warn('Home', 'Home overview failed', e));
     });
-    const timer = setTimeout(async () => {
+    return () => {
+      alive.current = false;
+      cancelAnimationFrame(frame);
+    };
+  }, [loadAll]);
+
+  // Family by look needs the CLIP text model, which only loads when search
+  // opens (it is about 64 MB; loading it at start slowed every launch). So
+  // the tile fills in once the model is ready, and keeps its photos after the
+  // model is freed. Until the first search it shows the photos found by words.
+  useEffect(() => {
+    const readFamily = async () => {
       for (const id of SEMANTIC_COLLECTIONS) {
         similar.current[id] = await readSimilar(id).catch(() => []);
       }
       if (alive.current && SEMANTIC_COLLECTIONS.some(id => (similar.current[id] ?? []).length > 0)) mergeTiles();
-    }, SEMANTIC_DELAY_MS);
-    return () => {
-      alive.current = false;
-      cancelAnimationFrame(frame);
-      clearTimeout(timer);
     };
-  }, [loadAll, mergeTiles]);
+    if (isTextModelReady()) readFamily();
+    return onTextModelReady(() => {
+      readFamily();
+    });
+  }, [mergeTiles]);
 
   // A photo opened anywhere (search, Photos, here) goes to the front at once.
   useEffect(

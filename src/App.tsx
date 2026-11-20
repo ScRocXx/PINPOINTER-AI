@@ -27,6 +27,7 @@ import { useFirstRunGate } from './hooks/useFirstRun';
 import { useMicButton } from './hooks/useMicButton';
 import { AppLogger } from './utils/AppLogger';
 import { scheduleBackgroundIndexing } from './services/BackgroundIndexingTask';
+import { noteInteraction } from './services/InteractionGate';
 
 const Stack = createStackNavigator<StackParamList>();
 const Tabs = createMainTabNavigator<MainTabParamList>();
@@ -92,7 +93,8 @@ const App: React.FC = () => {
   const firstRun = useFirstRunGate();
 
   return (
-    <GestureHandlerRootView style={styles.root}>
+    // Every touch anywhere tells indexing to wait a moment (InteractionGate).
+    <GestureHandlerRootView style={styles.root} onTouchStart={noteInteraction} onTouchMove={noteInteraction}>
       <SafeAreaProvider>
       <LanguageProvider>
       <ToastProvider>
@@ -108,6 +110,7 @@ const App: React.FC = () => {
           <Stack.Navigator
             // A new install starts with the welcome; otherwise the tabs (Home first)
             initialRouteName={firstRun === 'show' ? 'FirstRun' : 'Main'}
+            // No screen shows the stack's own header: each draws its own.
             screenOptions={{
               // Every screen draws its own header.
               headerShown: false,

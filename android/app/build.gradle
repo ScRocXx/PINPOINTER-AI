@@ -17,6 +17,77 @@ react {
 def enableProguardInReleaseBuilds = true
 
 /**
+ * Release signing. The keystore and its passwords live outside the repo:
+ * set these four as Gradle properties (~/.gradle/gradle.properties, or -P on
+ * the command line) or as environment variables of the same name.
+ *
+ *   PINPOINTER_RELEASE_STORE_FILE      path to the keystore (.jks / .keystore)
+ *   PINPOINTER_RELEASE_STORE_PASSWORD
+ *   PINPOINTER_RELEASE_KEY_ALIAS
+ *   PINPOINTER_RELEASE_KEY_PASSWORD
+ *
+ * Without them a release build is signed with the debug key, which is fine
+ * for trying a build on your own phone and nothing else.
+ */
+def releaseSigning = { String name ->
+    providers.gradleProperty(name).orElse(providers.environmentVariable(name)).getOrNull()
+}
+def releaseStoreFile = releaseSigning('PINPOINTER_RELEASE_STORE_FILE')
+
+/**
+ * sherpa-onnx (voice search) comes as an AAR in libs/, fetched by `npm install`
+ * (download-models.js). It carries its own libonnxruntime.so, but the app
+ * already gets ONNX Runtime from onnxruntime-android (see dependencies), and
+ * an APK can hold only one. The app therefore links a copy of the AAR without
+ * that file, so the one in the APK is always onnxruntime-android's (the one
+ * with XNNPACK, which MobileCLIPModule asks for).
+ *
+ * The two must be built for the SAME ONNX Runtime version: each library asks
+ * for libonnxruntime.so by exact version tag, and a mismatch builds fine but
+ * leaves voice search or photo search unable to load on the phone. The pair
+ * is checked by __tests__/nativeLibraries.test.js.
+ */
+def sherpaAars = fileTree(dir: 'libs', include: ['sherpa-onnx-*.aar'])
+def slimSherpaAar = tasks.register('slimSherpaAar', Zip) {
+    description = 'Copies the sherpa-onnx AAR without its bundled libonnxruntime.so and unused API libraries.'
+    doFirst {
+        if (sherpaAars.files.size() != 1) {
+            throw new GradleException(
+                "Expected exactly one sherpa-onnx AAR in android/app/libs, found ${sherpaAars.files.size()}. " +
+                "Run `npm install` (it runs download-models.js).")
+        }
+    }
+    from({ sherpaAars.files.collect { zipTree(it) } }) {
+        exclude 'jni/*/libonnxruntime.so'
+        // The AAR also carries sherpa-onnx's C and C++ API libraries. The
+        // Kotlin classes only load libsherpa-onnx-jni.so, which does not
+        // depend on them, so they would be dead weight on every phone.
+        exclude 'jni/*/libsherpa-onnx-c-api.so'
+        exclude 'jni/*/libsherpa-onnx-cxx-api.so'
+    }
+    archiveFileName = 'sherpa-onnx-slim.aar'
+    destinationDirectory = layout.buildDirectory.dir('sherpa-onnx')
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+}
+
+/**
+ * Which CPU types go into the APK. Phones are ARM: arm64-v8a, plus
+ * armeabi-v7a for the many low-end phones that still run 32-bit Android.
+ * x86 and x86_64 only exist on emulators, and each adds about 80 MB, so a
+ * release APK leaves them out. Debug builds keep all four, so
+ * `npm run android` works on any emulator.
+ *
+ * To try a release build on an emulator, name the CPU types yourself:
+ *   ./gradlew assembleRelease -PpinpointerAbis=arm64-v8a,armeabi-v7a,x86_64
+ */
+def phoneAbis = ['arm64-v8a', 'armeabi-v7a']
+def emulatorAbis = ['x86_64', 'x86']
+def requestedAbis = (providers.gradleProperty('pinpointerAbis').getOrNull() ?: '')
+        .split(',').collect { it.trim() }.findAll { it }
+def abisFor = { List<String> defaults -> requestedAbis ?: defaults }
+
+/**
  * The preferred build flavor of JavaScriptCore (JSC)
  */
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
@@ -43,9 +114,6 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
         versionName "1.0"
-        ndk {
-            abiFilters "arm64-v8a", "x86_64", "x86", "armeabi-v7a"
-        }
     }
     signingConfigs {
         debug {
@@ -54,29 +122,45 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
+        release {
+            if (releaseStoreFile) {
+                storeFile file(releaseStoreFile)
+                storePassword releaseSigning('PINPOINTER_RELEASE_STORE_PASSWORD')
+                keyAlias releaseSigning('PINPOINTER_RELEASE_KEY_ALIAS')
+                keyPassword releaseSigning('PINPOINTER_RELEASE_KEY_PASSWORD')
+            }
+        }
     }
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
+            ndk {
+                abiFilters(*abisFor(phoneAbis + emulatorAbis))
+            }
         }
         release {
-            // Caution! In production, you need to generate your own keystore file.
-            // see https://reactnative.dev/docs/signed-apk-android.
-            signingConfig signingConfigs.debug
+            ndk {
+                abiFilters(*abisFor(phoneAbis))
+            }
+            // Signed with your own keystore when one is configured (see the
+            // top of this file), otherwise with the debug key.
+            signingConfig releaseStoreFile ? signingConfigs.release : signingConfigs.debug
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
         }
     }
 
-    // Handle duplicate native libraries from different sources
+    // Handle duplicate native libraries from different sources.
+    // libonnxruntime.so is deliberately NOT here: there must be exactly one
+    // (see slimSherpaAar above), and a second copy should fail the build
+    // instead of being picked at random.
     packagingOptions {
         pickFirsts = [
             "**/libc++_shared.so",
             "**/libjsi.so",
             "**/libfbjni.so",
             "**/libfolly_runtime.so",
-            "**/libreactnative.so",
-            "**/libonnxruntime.so"
+            "**/libreactnative.so"
         ]
     }
 }
@@ -99,13 +183,21 @@ dependencies {
     // 2. The "Devanagari" model (for Hindi)
     implementation 'com.google.mlkit:text-recognition-devanagari:16.0.0'
 
-    // 4. ONNX Runtime Android - Java/Kotlin API for MobileCLIP inference
-    // Must come BEFORE fileTree so pickFirst grabs the full libonnxruntime.so from this package
-    // and NOT the stripped one from sherpa-onnx.aar
-    implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.20.0'
+    // 2b. Image labels, for PhotoReaderModule (labels the bitmap it already
+    // decoded). The same version @react-native-ml-kit/image-labeling bundles,
+    // so nothing new goes into the APK.
+    implementation 'com.google.mlkit:image-labeling:17.0.9'
 
-    // 3. sherpa-onnx for on-device STT + TTS
-    implementation fileTree(dir: 'libs', include: ['*.aar'])
+    // 3. ONNX Runtime Android - Java/Kotlin API for MobileCLIP inference, and
+    // the one libonnxruntime.so in the APK. The version must be the ONNX
+    // Runtime that the sherpa-onnx AAR is built against (download-models.js).
+    implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.27.0'
+
+    // 4. sherpa-onnx for on-device speech-to-text, without its own libonnxruntime.so
+    implementation files(slimSherpaAar)
+
+    // JVM unit tests (src/test, ./gradlew testDebugUnitTest): never in the APK.
+    testImplementation 'junit:junit:4.13.2'
 
 
     // The version of react-native is set by the React Native Gradle Plugin

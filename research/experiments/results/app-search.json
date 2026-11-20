@@ -1,0 +1,134 @@
+{
+ "recall": {
+  "hindi typed in Hindi: today": {
+   "matra": [
+    164,
+    210
+   ],
+   "lookalike": [
+    45,
+    190
+   ],
+   "split": [
+    0,
+    174
+   ],
+   "conjunct": [
+    76,
+    76
+   ],
+   "diacritic": [
+    21,
+    44
+   ],
+   "unknown_kha": [
+    0,
+    10
+   ]
+  },
+  "hindi typed in Hindi: app": {
+   "matra": [
+    210,
+    210
+   ],
+   "lookalike": [
+    190,
+    190
+   ],
+   "split": [
+    137,
+    174
+   ],
+   "conjunct": [
+    76,
+    76
+   ],
+   "diacritic": [
+    44,
+    44
+   ],
+   "unknown_kha": [
+    10,
+    10
+   ]
+  },
+  "hindi typed in Hinglish: today": {
+   "matra": [
+    164,
+    210
+   ],
+   "lookalike": [
+    45,
+    190
+   ],
+   "split": [
+    0,
+    174
+   ],
+   "conjunct": [
+    76,
+    76
+   ],
+   "diacritic": [
+    21,
+    44
+   ],
+   "unknown_kha": [
+    0,
+    10
+   ]
+  },
+  "hindi typed in Hinglish: app": {
+   "matra": [
+    164,
+    210
+   ],
+   "lookalike": [
+    88,
+    190
+   ],
+   "split": [
+    137,
+    174
+   ],
+   "conjunct": [
+    76,
+    76
+   ],
+   "diacritic": [
+    27,
+    44
+   ],
+   "unknown_kha": [
+    0,
+    10
+   ]
+  },
+  "english: today": {
+   "glyph": [
+    9,
+    204
+   ],
+   "split": [
+    0,
+    186
+   ]
+  },
+  "english: app": {
+   "glyph": [
+    153,
+    204
+   ],
+   "split": [
+    153,
+    186
+   ]
+  }
+ },
+ "falseMatches": {
+  "today: hindi per query": 6.401709401709402,
+  "today: english per query": 3.463768115942029,
+  "app: hindi per query": 7.794871794871795,
+  "app: english per query": 3.710144927536232
+ }
+}

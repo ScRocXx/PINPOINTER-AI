@@ -1,10 +1,8 @@
-import { Linking, NativeModules } from 'react-native';
 import RNFS from 'react-native-fs';
 import { DocumentRecord } from '../../database';
 import { AppLogger } from '../../utils/AppLogger';
 import { forgetIfGone } from '../../utils/MissingFiles';
-
-const { StorageModule } = NativeModules;
+import { openPdf } from '../../utils/OpenPdf';
 
 export type OpenOutcome = 'open' | 'gone' | 'failed';
 
@@ -23,11 +21,7 @@ export const openResult = async (item: DocumentRecord): Promise<OpenOutcome> => 
     // decides that), so don't take it out of search here.
     const exists = await RNFS.exists(cleanPath).catch(() => false);
     if (!exists) return 'failed';
-    if (StorageModule?.openPDF) {
-      StorageModule.openPDF(cleanPath);
-    } else {
-      await Linking.openURL(item.filePath);
-    }
+    await openPdf(item.filePath);
     return 'open';
   } catch (e) {
     AppLogger.error('Search', 'Could not open a result', e);

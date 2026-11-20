@@ -236,6 +236,12 @@ export const romanize = (text: string): string => {
 
 // ─── Bhasha key ──────────────────────────────────────────────────────────────
 
+// Search rows mark matched words by sound in every visible result, and
+// indexing keys every word it reads; the same words come up again and
+// again. About 20 regex passes per word, so remember recent answers.
+const KEY_CACHE_LIMIT = 4096;
+const keyCache = new Map<string, string>();
+
 /**
  * Spelling-insensitive sound key for ONE word, in any script.
  *
@@ -253,6 +259,15 @@ export const romanize = (text: string): string => {
  * matched as numbers, and digit-bearing tokens may be masked PII).
  */
 export const bhashaKey = (word: string): string => {
+    const cached = keyCache.get(word);
+    if (cached !== undefined) return cached;
+    const key = computeBhashaKey(word);
+    if (keyCache.size >= KEY_CACHE_LIMIT) keyCache.clear();
+    keyCache.set(word, key);
+    return key;
+};
+
+const computeBhashaKey = (word: string): string => {
     if (!word || /\d/.test(word)) return '';
     let s = containsIndic(word) ? romanize(word) : word;
     s = s.toLowerCase().replace(/[^a-z]/g, '');

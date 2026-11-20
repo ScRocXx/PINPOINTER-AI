@@ -9,14 +9,14 @@
 import { AppLogger } from '../utils/AppLogger';
 import type { Collection } from '../utils/Collections';
 import { collectionTerms } from './collectionTerms';
-import { getDb, isFtsAvailable, isVecAvailable } from './connection';
-import { MAX_VECTOR_DISTANCE } from './search';
+import { getDb, getReadDb, isFtsAvailable, isVecAvailable } from './connection';
+import { findLookAlikesAsync } from './vectors';
 
 /** Collections are counted up to this many files; more shows as "999+". */
 export const COLLECTION_COUNT_CAP = 999;
 
 export interface CollectionPreview {
-  /** Distinct files (photos and papers) in the collection, up to the cap. */
+  /** Distinct files (photos and papers) in the collection, copies once, up to the cap. */
   count: number;
   /** True when there may be more than `count`. */
   capped: boolean;
@@ -30,6 +30,8 @@ interface PreviewRow {
   filePath: string;
   type: string;
   timestamp: number | null;
+  /** files.fingerprint: the same value for byte-identical copies. */
+  fingerprint?: string | null;
 }
 
 /**
@@ -47,28 +49,33 @@ export const getCollectionPreview = (collection: Collection, photoLimit = 3): Co
     const db = getDb();
     const result = isFtsAvailable()
       ? db.executeSync(
-          `SELECT d.filePath, d.type, d.timestamp
+          `SELECT d.filePath, d.type, d.timestamp, fs.fingerprint
            FROM fts_index f
            JOIN document_index d ON d.id = f.rowid
+           LEFT JOIN files fs ON fs.uri = d.filePath
            WHERE f.fts_index MATCH ?
            ORDER BY f.rowid DESC
            LIMIT ${limit}`,
           [terms.fts],
         )
       : db.executeSync(
-          `SELECT filePath, type, timestamp FROM document_index
-           WHERE ${terms.like.map(() => 'content LIKE ? COLLATE NOCASE').join(' OR ')}
-           ORDER BY id DESC
+          `SELECT d.filePath, d.type, d.timestamp, fs.fingerprint
+           FROM document_index d
+           LEFT JOIN files fs ON fs.uri = d.filePath
+           WHERE ${terms.like.map(() => 'd.content LIKE ? COLLATE NOCASE').join(' OR ')}
+           ORDER BY d.id DESC
            LIMIT ${limit}`,
           terms.like,
         );
     const rows = (result?.rows ?? []) as unknown as PreviewRow[];
 
+    // A byte-identical copy (WhatsApp keeps several) counts once, as search shows it.
     const seen = new Set<string>();
     const photos: PreviewRow[] = [];
     for (const row of rows) {
-      if (!row?.filePath || seen.has(row.filePath)) continue;
-      seen.add(row.filePath);
+      const key = row?.fingerprint || row?.filePath;
+      if (!row?.filePath || !key || seen.has(key)) continue;
+      seen.add(key);
       if (row.type === 'IMAGE') photos.push(row);
     }
     photos.sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0));
@@ -84,29 +91,30 @@ export const getCollectionPreview = (collection: Collection, photoLimit = 3): Co
   }
 };
 
+const PATHS_BY_IDS_SQL = (count: number) =>
+  `SELECT id, filePath FROM document_index
+       WHERE type = 'IMAGE' AND id IN (${Array.from({ length: count }, () => '?').join(', ')})`;
+
+const pathsInIdOrder = (ids: number[], result: { rows?: Array<Record<string, unknown>> } | null | undefined): string[] => {
+  const rows = (result?.rows ?? []) as unknown as Array<{ id: number; filePath?: string }>;
+  const pathById = new Map(rows.map(r => [r.id, r.filePath]));
+  return [...new Set(ids.map(id => pathById.get(id)).filter((p): p is string => !!p))];
+};
+
 /**
- * Photos whose CLIP vector is close to `queryVector`, closest first. Empty
- * when the vector index isn't available. Same cutoff as search.
+ * Photos whose CLIP vector is close to `queryVector`, closest first (Home's
+ * Family tile). Empty when the vector index isn't available. Same rule as
+ * search: only photos that stand out for this query. On the read connection,
+ * off the JS thread.
  */
-export const getSimilarPhotos = (queryVector: Float32Array, limit = 12): string[] => {
+export const getSimilarPhotosAsync = async (queryVector: Float32Array, limit = 12): Promise<string[]> => {
   if (!isVecAvailable()) return [];
   try {
-    const blob = new Uint8Array(queryVector.buffer);
-    const result = getDb().executeSync(
-      `WITH knn AS (
-         SELECT document_id, distance FROM vec_index
-         WHERE embedding MATCH vec_f32(?) AND k = ?
-       )
-       SELECT d.filePath
-       FROM knn JOIN document_index d ON d.id = knn.document_id
-       WHERE knn.distance <= ? AND d.type = 'IMAGE'
-       ORDER BY knn.distance ASC`,
-      [blob, Math.max(1, Math.floor(limit)), MAX_VECTOR_DISTANCE],
-    );
-    const rows = (result?.rows ?? []) as unknown as Array<{ filePath?: string }>;
-    return [...new Set(rows.map(r => r.filePath).filter((p): p is string => !!p))];
+    const ids = (await findLookAlikesAsync(queryVector, limit)).map(l => l.documentId);
+    if (ids.length === 0) return [];
+    return pathsInIdOrder(ids, await getReadDb().execute(PATHS_BY_IDS_SQL(ids.length), ids));
   } catch (e) {
-    AppLogger.warn('DB', 'getSimilarPhotos failed:', e);
+    AppLogger.warn('DB', 'getSimilarPhotosAsync failed:', e);
     return [];
   }
 };

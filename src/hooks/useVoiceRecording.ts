@@ -11,13 +11,19 @@ import {
 import { AppLogger } from '../utils/AppLogger';
 import { tNow } from '../i18n/current';
 import { createSilenceDetector, subscribeMicLevel } from '../utils/MicLevel';
+import { ensureSpeechModel, isSpeechModelReady, noteVoiceSearchUsed, type VoiceLanguage } from '../services/SpeechModel';
+import { useStrings } from '../i18n/LanguageContext';
 
 const { SherpaOnnxModule } = NativeModules;
 const sherpaEmitter = new NativeEventEmitter(SherpaOnnxModule);
 
 /**
- * useVoiceRecording — handles mic recording and STT via sherpa-onnx (on-device Whisper).
+ * useVoiceRecording — handles mic recording and STT via sherpa-onnx, in the
+ * app's language: Whisper for English, the small Hindi model for Hindi.
  * 100% offline. No internet needed. No Google dependency.
+ *
+ * The speech model is loaded on the first tap on the mic (`isModelLoading`
+ * is true meanwhile); see services/SpeechModel.ts.
  *
  * Listening ends by itself after the person stops speaking (or cancels when
  * nothing was said), so a tap on stop is optional. The live mic level is not
@@ -30,7 +36,12 @@ const sherpaEmitter = new NativeEventEmitter(SherpaOnnxModule);
 export const useVoiceRecording = (onTranscription: (text: string) => void) => {
     const [isRecording, setIsRecording] = useState(false);
     const [isTranscribing, setIsTranscribing] = useState(false);
-    const [isModelLoading] = useState(false);
+    // True while the speech model loads, on the first use of the mic.
+    const [isModelLoading, setIsModelLoading] = useState(false);
+    // Voice search listens in the app's language (read when the mic is tapped).
+    const { lang } = useStrings();
+    const langRef = useRef<VoiceLanguage>(lang);
+    langRef.current = lang;
 
     // Set while we cancel on purpose: the "end" event that follows must not
     // show "Understanding…", because no words will come.
@@ -176,7 +187,25 @@ export const useVoiceRecording = (onTranscription: (text: string) => void) => {
                 }
             }
 
+            // The speech model is loaded on first use, not at app start, in
+            // the app's language (a switch of language loads the other one).
+            const voiceLang = langRef.current;
+            if (!isSpeechModelReady(voiceLang)) {
+                setIsModelLoading(true);
+                let ready = false;
+                try {
+                    ready = await ensureSpeechModel(voiceLang);
+                } finally {
+                    setIsModelLoading(false);
+                }
+                if (!ready) throw new Error('The speech model could not be loaded');
+            } else {
+                // Ready already: the Hindi model's words are re-read now and then.
+                ensureSpeechModel(voiceLang).catch(() => undefined);
+            }
+
             await SherpaOnnxModule.startRecognition();
+            noteVoiceSearchUsed();
         } catch (error) {
             AppLogger.error('VoiceRecording', 'Start failed', error);
             Vibration.vibrate([0, 30, 50, 30]);

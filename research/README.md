@@ -1,0 +1,433 @@
+# Branch `feat/smart-search`: what changes from `fix/low-end-smoothness`
+
+`fix/low-end-smoothness` made the app smooth on 2–3 GB phones (fewer
+re-renders, indexing that steps aside while you use the phone, photo search off
+the JS thread, the CLIP text model loaded only for search).
+
+This branch works on what makes Pinpointer different: **finding the words in
+your papers and photos**, in Hindi, Hinglish and English, for people who type
+slowly and make mistakes, from text that OCR doesn't always read right.
+
+The research behind it is in [`notes.md`](notes.md); the experiments that
+measured the problem are in [`experiments/`](experiments/README.md). In short,
+with the search as it is on `fix/low-end-smoothness`:
+
+- one OCR misreading in a Hindi word leaves it findable only about **47%** of
+  the time, and in an English word only about **2%** ("rnedicine", "bi11");
+- one typo in the search box finds the intended paper only **22–31%** of the
+  time.
+
+This file is updated as each part lands. Status: **planned**, **in progress**,
+**done** (with tests), **on a phone** (checked on a real device).
+
+| # | Change | What people notice | Status |
+|---|---|---|---|
+| 1 | Misread-proof search | Papers are found even when OCR misread a letter or split a word | **done** |
+| 2 | Spelling rescue from your own words | "bijki bil" or "medicne" still finds the paper, with "Showing results for …" | **done** |
+| 3 | Memory anchors: dates and festivals | "Diwali photos", "papers from last month", "kal ki photo" | **done** |
+| 4 | Answer cards | A bill result shows "Amount ₹1,240 · Pay by 5 April" without opening it | **done** |
+| 5 | Words-first photo reader (native) | Indexing reads each photo once; screenshots' small text stays readable | **done** (needs a phone build) |
+| 6 | Hindi voice tuned to your words (native) | In a Hindi app, speak Hindi; words from your own papers are listened for | **done** (needs a phone build) |
+| 7 | Series and duplicates | WhatsApp copies read once and shown once; "latest electricity bill" newest first | **done** (7a needs a phone build) |
+
+## 1. Misread-proof search (done)
+
+**What people notice.** A paper is found even when OCR misread a letter
+("rnedicine", "मुगतान" for भुगतान, "बजली" for बिजली) or split a word in two
+("elec tricity"). Exact matches still come first; papers found through a
+misreading come after them, with the misread word marked.
+
+**How.** `src/utils/OcrTolerance.ts` adds three hidden keys per word to the
+search tail (`SearchKeys.buildSearchTail`):
+
+- `qv…` shape key: how the word looks. Letters OCR confuses become one (ब/व,
+  म/भ, घ/ध/द, त/ट, ष/प, थ/य, vowel lengths; 1/l/i, 0/o, 5/s, rn/m, cl/d, vv/w),
+  and the marks OCR drops are left out (nukta, halant, anusvara,
+  chandrabindu). A query also looks for its shape with each vowel sign left
+  out.
+- `qf…` folded sound key, for Indian-script words: the sound key with b/v/m,
+  g/d and a nasal before a consonant folded. It works across scripts, so a
+  query typed in Hinglish ("bhugtan") finds a misread Hindi word.
+- `qj…` joined neighbours: the sound key of two neighbouring words joined,
+  when one is short (4 letters or fewer) and neither is a very common word.
+
+`src/database/search.ts` runs the misread pass only to add results after the
+exact ones (`searchMisread`), collections ("Medicine") included.
+`MatchTerms.matchTermsIn` marks the misread word when nothing matched
+outright. `SEARCH_KEYS_VERSION` in `SearchKeys.ts` is now 2.
+
+**Existing indexes.** A new background job, `rekey` in `IndexingService`
+(`src/utils/SearchRekey.ts`), rebuilds the tail of older rows from their
+stored (already masked) text: no file is read again. 25 rows per
+transaction, waits while someone uses the phone, resumes from where it
+stopped. It runs 5 s after start (before the CLIP backfill) and in the
+charging-time job.
+
+**Measured** with the shipped code (`research/experiments/app-search.exp.ts`,
+same simulated misreadings as experiment 1):
+
+| A misread word, searched by… | Before | Now |
+|---|---|---|
+| Hindi, typed in Hindi | 47% found | 99% |
+| Hindi, typed in Hinglish | 47% | 62% |
+| English | 2% | 78% |
+| Other real words a query also finds (Hindi / English) | 6.4 / 3.5 | 7.8 / 3.7 |
+
+**Cost.** Each row's stored text grows about 1.6x (Hindi 1.66x, English
+1.56x; it was 1.8–2.1x before trimming the joins and the English keys). The
+search itself adds one more FTS query, run only to fill the results after the
+exact matches.
+
+**Known limits, and what refines them next**
+
+- The misreadings are simulated from published Devanagari OCR studies, not
+  measured from ML Kit. Next: collect real misreadings (render known words
+  into images and read them back with ML Kit on a phone; and count a result
+  opened from the misread pass as a confirmed misreading).
+- English: e/c and h/b are not folded, and words under 4 letters get no
+  shape key, to keep the index small (that is most of the 99% → 78% gap
+  against experiment 1).
+- Joined neighbours are restricted by word length; with OCR's word positions
+  (part 5) only words that sit unusually close need joining, which is both
+  smaller and more accurate.
+- Hinglish typing against a misread Hindi word stays the hard case (62%);
+  part 2 (spelling rescue) helps from the query side.
+
+## 2. Spelling rescue (done)
+
+**What people notice.** A search with a typo ("medicne", "bijki bil") shows
+the papers anyway, with "Showing results for “medicine”" and, smaller, "You
+typed “medicne”". Correct searches are never touched.
+
+**How.** When the typed words find nothing,
+`services/SpellingService.rescueQuery` corrects each word that isn't in the
+index against the person's own words, not a generic dictionary (which knows
+neither "Telmisartan", nor the shop's name, nor "bijlee"):
+
+- `database/vocabulary.ts` reads the index's words with SQLite's
+  `fts5vocab`, as a TEMP table on the read connection (no schema change; the
+  scan runs on op-sqlite's thread). Up to 40,000 terms, most common first,
+  kept in memory while searches happen and freed after 10 idle minutes.
+- `utils/SpellingRescue.ts` finds the correction two ways: **spelling** (an
+  indexed word within 1 edit for words up to 4 letters, 2 for longer, same
+  script) and **sound** (an indexed Bhasha sound key within 1 edit of the
+  word's key; the word is then looked up in a row that holds that key). Sound
+  is what turns "bijki" into बिजली.
+- `useSearch` searches the corrected query, uses it for the CLIP step too,
+  and exposes `correctedFrom`; `SearchOverlay` shows the line.
+
+**Measured** with the shipped code (`research/experiments/app-typos.exp.ts`,
+same typos as experiment 2, policy as shipped: correct only when nothing is
+found):
+
+| One typo in the search box | Before | Now |
+|---|---|---|
+| Hinglish, index of 2k / 10k words | 28% / 31% found | 92% / 84% |
+| English, index of 2k / 10k words | 24% / 22% | 97% / 92% |
+| Correct queries "corrected" | | 0 of 121 |
+
+**Known limits, and what refines them next**
+
+- A typo that happens to match some other paper ("bil" → "bilkul") shows
+  those results and is not corrected; that is most of the remaining gap
+  (experiment 2 reached 99–100% with the top three suggestions). Next: a
+  "Did you mean …?" chip when a typed word is not in the vocabulary, shown
+  without replacing the results (only once the person stops typing, since a
+  half-typed word is not a typo).
+- The typos are simulated (neighbouring, missed, extra and swapped keys), not
+  collected from elderly users yet.
+
+## 3. Memory anchors (done)
+
+**What people notice.** "Diwali photos", "दिवाली 2022", "pichhli rakhi",
+"kal ki photo", "pichhle mahine ka bill", "march 2024 bill", "2023 photos"
+all work. The results say when they are from ("When: Diwali, every year",
+"कब: पिछले महीने"). A date alone lists everything from those days, newest
+first; other words are looked for only within those days. For a festival,
+photos that look like it (CLIP: "diwali lamps and lights") rise to the top.
+
+**How.**
+
+- **When a photo was taken** is stored now (`document_index.taken_at`,
+  migration 3, with an index). Photos get the gallery's taken time; PDFs their
+  file date. Rows indexed before get the file time sync had recorded.
+- **`utils/DateQuery.ts`** reads the date words (English, Hinglish, Hindi):
+  today/aaj, kal, parso, this/last week, month and year, month names (March
+  and May only next to a year), years (alone only, so "bill 2023" still means
+  the words), and 15 festivals.
+- **Festivals are computed, not listed**, so the app never goes out of date:
+  - Moon phases: Meeus' algorithm (ch. 49).
+  - Hindu months: the lunar month is named by the sun's sidereal sign at its
+    new moon, worked out at that moment (Meeus ch. 25 minus the Lahiri
+    ayanamsa).
+  - The extra (adhik) months of 2020 and 2023: the last new moon in the sign
+    counts.
+  - Eid and Bakrid: the arithmetic Islamic calendar, a day wider.
+  - Tested against the real festival days of 2016–2025: Diwali, Holi, Raksha
+    Bandhan, Ganesh Chaturthi, Navratri, Dussehra, Karva Chauth, Chhath, Eid
+    and Bakrid all land inside their windows every year.
+- **`database/search.ts`**: `listByDate` (uses the index) for a date alone;
+  word and look-alike results filtered to the windows otherwise.
+  `useSearch` exposes `dateMeaning` and skips spelling rescue for dates
+  (nothing from then is not a typo).
+
+**Known limits, and what refines them next**
+
+- Photos and papers not indexed yet don't show in date searches; the Photos
+  tab's own date chips still show every photo. Next: fill a date search from
+  the phone's gallery (MediaStore can filter by date) when the index has few.
+- Festivals use Indian dates and IST; regional festivals beyond these 15 (Onam,
+  Pongal's days, Bihu, Durga Puja's days) are next, each tested like these.
+- "kal" is read as yesterday (nobody searches tomorrow's photos).
+
+## 4. Answer cards (done)
+
+**What people notice.** A result shows the answer itself, in bold, in English
+or Hindi: "Amount ₹1,240 · Pay by 5 April" (or "Was due …" once past),
+"Valid till 31 March 2025" / "Expired on …", "Take: morning, night, after
+food" (रकम, … तक भरें, … तक मान्य, लेना है: सुबह, रात, खाने के बाद). Question
+words are left out of the search ("bijli bill kitna", "policy kab tak",
+"बिल कितना"), so the answer line replies to them.
+
+**How.** `utils/AnswerCards.ts` reads the stored (already masked) text with a
+few rules, no model:
+
+- **Amount:** after the most telling label ("amount payable", "net payable",
+  "total", "कुल देय", "देय राशि", "राशि"), else the largest amount written with
+  ₹/Rs/INR. Indian grouping (1,24,500.50); long numbers that are IDs are left
+  alone.
+- **Due date:** after "due date", "pay by", "last date", "अंतिम तिथि", "देय
+  तिथि". Dates are dd/mm/yyyy (Indian order), dd-mm-yy, "5th April 2024",
+  "April 5, 2024", "5 अप्रैल 2024". Impossible dates are rejected.
+- **Valid till:** after "valid till/upto", "expiry", "वैधता", "समाप्ति";
+  "12/2025" means the end of that month.
+- **Medicine times:** only on prescriptions (tab, cap, syrup, mg, दवा, गोली):
+  1-0-1 shorthand, OD/BD/TDS/HS/SOS, after or before food, Hindi
+  instructions (सुबह शाम, खाने के बाद).
+
+`screens/pinpointer/answerLine.ts` words it, past dates differently;
+`resultInfo` reads it once per row; `ResultItem` shows it (and TalkBack reads
+it).
+
+**Known limits, and what refines them next**
+
+- Rules see the text as one line; on a busy bill, the amount next to "Total"
+  can be a subtotal. Next: OCR's text positions (part 5), so a label and its
+  value are paired by where they sit on the page.
+- A date without a year is taken as this year.
+- Next: read the answer aloud with the phone's own Hindi voice (Android
+  text-to-speech, offline), for people who find reading hard.
+
+## 5. Words-first photo reader (done; needs a phone build)
+
+**What people notice.** Indexing is lighter on the phone, and small text in
+screenshots is read more often: a 1080x2400 screenshot was shrunk to 461x1024
+before OCR, now it keeps 720x1600.
+
+**How.** A new native module, `PhotoReaderModule.kt`:
+
+- **One decode per photo**, downsampling while decoding, at most 1,600 px on
+  the longer side. The old path decoded 3–4 times and wrote and deleted a JPEG
+  for every photo.
+- **ML Kit recognizers made once and reused.** The RN library made a new one
+  per call and never closed it.
+- **Background-priority threads**, so reading never competes with drawing.
+- **The photo's rotation** is passed with the bitmap (MediaStore's orientation
+  for gallery photos, EXIF for files; `ImageOrientation.kt`).
+- **Labels** for photos with little text come from the same bitmap. ML Kit's
+  file loader would decode the full 12 MP original, about 48 MB.
+- **Each line** comes back with its confidence and position, for later use.
+
+`MobileCLIPModule` now turns photos upright too. This also fixes the CLIP
+backfill, which gave the model sideways originals. Vectors already stored are
+kept: re-encoding every photo for this isn't worth the battery.
+
+`utils/ScriptPlanner.ts` decides the scripts per photo:
+
+- both while it learns the gallery (the first 100 photos read with
+  Devanagari);
+- both always if Devanagari turns up in 2% or more of photos;
+- otherwise Latin, plus Devanagari on any photo where Latin finds fewer than
+  15 characters, and both on every 10th photo.
+
+When both scripts run, only the Devanagari pass's Hindi lines are kept (it
+reads English too, which was being stored twice). `VisionPipeline` uses
+PhotoReader when it is there and falls back to the old path otherwise.
+
+**Checked:** the Kotlin compiles against the real classes of react-android
+0.83.1, onnxruntime-android 1.27.0 and ML Kit (text recognition 16.0.0,
+Devanagari 16.0.0, image labeling 17.0.9). Not yet: `assembleDebug`, and a
+run on a phone (speed, memory, and whether the 1,600 px reads screenshots
+better).
+
+`android/app/build.gradle` now names `com.google.mlkit:image-labeling:17.0.9`
+for the app's own code: the version the RN library already bundles, so the
+APK doesn't grow.
+
+## 6. Hindi voice tuned to your words (done; needs a phone build)
+
+Decision: **both**. Voice search listens in the app's language: Whisper
+base.en for English (as before), and for Hindi a small streaming Hindi model,
+[indic-lekhan](https://huggingface.co/Henil1/indic-lekhan) (Zipformer
+transducer, 25.8M parameters, CC BY 4.0, trained on AI4Bharat IndicVoices,
+Kathbath and Shrutilipi). The APK grows by about 28.5 MB. Only one model is in
+memory at a time; switching the app's language loads the other on the next tap
+on the mic and frees the first.
+
+**What people notice.** In a Hindi app, the mic understands Hindi ("बिजली का
+बिल", "पिछले महीने का बिजली बिल"), and words from the person's own papers, like
+a company name, are listened for.
+
+**How.**
+
+- **The model.** The 640 ms INT8 export (Hindi word error 15.4% on the
+  author's 100 IndicVoices dev clips; their numbers, not ours). It is fed the
+  whole recording at the end, like Whisper, plus a second of silence, and its
+  `<hi>` tag is removed. `download-models.js` pins one revision and checks the
+  SHA-256 of every file, and writes the CC BY notice next to it; Settings →
+  About credits it. It is new (published days before this branch) by one
+  person: it needs real Hindi speech on a phone before release.
+- **Your words as hotwords.** Up to 80 Devanagari words from the person's
+  own index (in two papers or more, three letters or more), read from
+  fts5vocab on the read connection, go to the model with beam search
+  (`services/VoiceHotwords.ts`, at most every 30 minutes). The same words then
+  find the paper, and the typo rescue corrects what is still misheard.
+- **Built-in words too.** About 120 words people search for in any gallery
+  (आधार, गैस, वोटर, पर्ची, दिवाली, कार्ड...), taken from the app's own concept
+  table and festival names, are always given to the model, so a new phone
+  and a gallery of English papers are helped as well. They get a gentler
+  boost (1.0) than the person's own words (1.5), and a common word found in
+  the person's papers is left to this list: at 1.5 "आधार" turned "आधार
+  कार्ड" into "आधार कार" and "आधा किलो" into "आधार किलो". The first
+  version of this part had that flaw for anyone with "आधार" in two papers.
+- **Hotwords that can actually fire.** sherpa-onnx splits a hotword by the
+  highest total score; this model's BPE splits words by merge order. With the
+  model's own scores 75.0% of 26,604 common Hindi words split the same way
+  (80.1% of the top 2,000); with "fewest pieces, then earliest merge" scores,
+  79.5% (88.9%). `bpe.vocab` ships with those scores
+  (`research/experiments/hotword-split.exp.py`).
+- **No crashes from the library.** sherpa-onnx exits the app on a vocabulary
+  line it can't read and on missing model files, and crashes on hotwords
+  without beam search and the vocabulary. The native side checks the files
+  first, checks the vocabulary, passes hotwords only when both are in place,
+  and keeps only Devanagari words (`SpeechText.kt`, with a JUnit test; the
+  app's first Android unit test).
+
+**Measured** (synthetic Hindi speech from the Piper Hindi voice, run with the
+app's exact settings, `research/experiments/hindi-voice.exp.py` and
+`hindi-seeds.exp.py`; a check of the set-up and of what hotwords do, not of
+accuracy):
+
+| | Result |
+|---|---|
+| 16 everyday searches, beam search | 13 exactly right (greedy: 12); "दिवाली" came out "दीवाली", which search matches anyway |
+| "बीएसईएस का बिल" | "बी एस एस का बिल" without hotwords, right with them |
+| Hotword boost 1.5 to 3.0 | No right phrase changed (in a run with the voice's sampling noise on, 2.0 and up turned "आधार कार्ड" into "पधार कार्ड": the default 1.5 is kept) |
+| How many hotwords | 50 and 200 changed nothing; at 500 one phrase got worse ("पर्ची" → "पारची"): the cap is 200 |
+| Built-in words, 40 everyday searches × 3 speeds | 82 → 91 of 120 exactly right, none broken ("कैश सिलेंडर" → "गैस सिलेंडर", "वाटर कार्ड" → "वोटर कार्ड"); at boost 1.5 instead: 89, and "आधार कार्ड" broken |
+| Built-in words, 35 sound-alike controls × 3 speeds | 86 → 87 of 105; one change, "रेलगाड़ी" → "रेल गाड़ी" (still found) |
+| Names (own words 1.5 + built-in 1.0), 11 searches × 3 speeds | 12 → 20 of 33, none broken; own words alone at 1.5 (the first version): 12, with "आधार कार्ड" and "आधा किलो" broken |
+| Speed on this server CPU, 2 threads | well under a tenth of the audio's length per decode; a phone will be several times slower |
+
+**Checked:** the Kotlin compiles against sherpa-onnx 1.13.4 (the pinned AAR),
+react-android 0.83.1 and AndroidX core; `SpeechTextTest` passes on a JVM; the
+download step ran end to end (files verified, `bpe.vocab` identical to the
+tested one, a second run downloads nothing). Not yet: `assembleDebug`, and
+real Hindi speech on a phone (accuracy, speed with beam search, memory).
+
+Fixed on the way: the download script followed only absolute redirects;
+Hugging Face sends small files with a relative one.
+
+## 7. Series and duplicates
+
+### 7a. WhatsApp copies: read once, shown once (done; needs a phone build)
+
+**What people notice.** A forwarded photo that sits in WhatsApp's received
+and sent folders and in Downloads used to be read, encoded and listed three
+times: three identical rows in a search, three of the same thumbnail on a
+Home tile, and a count that didn't match. Now each copy after the first is
+indexed in milliseconds, and results, tiles and counts show it once.
+
+**How.**
+
+- `PhotoReader.fingerprint(uri)`: SHA-1 of the file's first 64 KB plus its
+  size from the file system. It reads 64 KB and decodes nothing. Copies
+  WhatsApp makes are byte-identical, so they get the same fingerprint.
+  (Two different photos would need the same size *and* the same first 64 KB:
+  the header, the time it was taken and the start of the picture.)
+- Migration 4 adds `files.fingerprint` (indexed). `GallerySync.indexPhoto`
+  fingerprints each new photo first; when another file with the same
+  fingerprint is already read (`findTwin`), the new one gets a copy of its
+  stored words (already masked) and its vector in one transaction, and both
+  stages are marked done. OCR and CLIP don't run.
+- Search keeps each fingerprint once, where it ranks first
+  (`utils/Duplicates.collapseCopies`, one small lookup per search). Home's
+  "Find quickly" counts and thumbnails do the same in their own query (a
+  `LEFT JOIN files`), so a tile's count still matches its search.
+- Only true copies are merged. Two papers that merely say the same thing,
+  like this month's bill and last month's, both stay.
+- Without the native module (older builds, tests) nothing changes: no
+  fingerprint, every photo read as before.
+
+A bug caught before it shipped: the first version counted the file's size
+by skipping to the end. `FileInputStream.skip()` on Android happily moves past
+the end of a file, so that loop would never have ended and indexing would
+have stalled on the first photo. The size now comes from the file system.
+
+**Checked:** Jest (copy takes its twin's words and vector without OCR;
+different files are each read; fingerprints survive later state changes;
+search, tiles and counts show copies once; two look-alike bills both stay),
+tsc, lint, and the Kotlin compiles. Not yet: a phone run.
+
+### 7b. "Latest electricity bill": newest first (done)
+
+**What people notice.** "latest electricity bill", "pichla bill",
+"सबसे नया बिजली बिल", "naye papers" or "latest photos" now answer with the
+newest one at the top and a "Newest first" line. Before, "latest" was a word
+every result had to contain; papers almost never print it, so these searches
+found nothing.
+
+**How** (`utils/PaperSeries.ts`, pure, on the stored masked text):
+
+- **"Latest" words are an order, not words.** Words that only mean newest
+  ("latest", "recent", "pichla", "aakhri", "पिछला", "आखिरी", "ताज़ा") always
+  count. Words that also mean other things ("new", "naya", "last", "नया")
+  count only when no paper found for the query says them, so "New India
+  Assurance" and "last date" stay word searches. "Most", "sabse", "सबसे" go
+  with them. Nothing left but "photos" or "papers" lists the newest of that
+  kind.
+- **The paper's own date.** A labelled bill / invoice / statement / issue
+  date ("बिल दिनांक" too), else the bill month ("Bill Month: OCT-2025"), else
+  the due date, else the billing period. An unlabelled date is not trusted,
+  and a printed date more than 120 days after the photo (a misread year) is
+  dropped. Without one: when the photo was taken, then when it was indexed.
+- **Series.** The account number printed on every bill of a connection
+  (consumer no., CA no., K no., policy no., card no., उपभोक्ता संख्या...)
+  groups papers. The newest of each series comes first, then the older ones,
+  so the shop's September bill shows right after the home's October bill,
+  and a yearly policy doesn't sink under eleven older electricity bills.
+  Masked numbers still group ("******3210" is the same on every bill), and
+  OCR's O/0 and I/l/1 slips are folded so one misread digit doesn't split a
+  series.
+- **In search.** `understandQuery` reads date words, then "latest" words;
+  both search paths use it. Word results are re-ordered (up to 500 read, as
+  for date searches); look-alike photos come after them, newest first too.
+  CLIP is shown the query without the "latest" words. The typo rescue
+  leaves them alone (it would have "corrected" "latest" to a word like
+  "latex" from the person's own papers).
+
+**Checked:** Jest (the words, printed dates in English and Hindi, account
+numbers including masked and spaced ones, series order with two connections,
+"New India Assurance" kept as words, the hook, the screen line, the typo
+rescue), tsc, lint, and a preview screenshot in English and Hindi.
+
+**Known limits.** Series need a labelled account number; bills without one
+are ordered by date alone. A date query plus "latest" ("latest bill from
+September") still picks the time by when the photo was taken, not by the
+printed date.
+
+## What stays the same
+
+- Everything still runs offline, on the phone.
+- Personal numbers are still masked before anything is stored.
+- Word matches still rank above photo look-alikes.

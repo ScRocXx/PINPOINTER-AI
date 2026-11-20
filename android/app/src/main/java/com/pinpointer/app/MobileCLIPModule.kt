@@ -134,7 +134,10 @@ class MobileCLIPModule(reactContext: ReactApplicationContext) : ReactContextBase
             var result: OrtSession.Result? = null
             try {
                 val path = if (imagePath.startsWith("file://")) imagePath.substring(7) else imagePath
-                val bitmap = loadSquareBitmap(path)
+                // Upright, as people see it: a sideways portrait photo looks like something else.
+                val bitmap = loadSquareBitmap(path)?.let {
+                    ImageOrientation.rotate(it, ImageOrientation.rotationDegrees(reactApplicationContext, path))
+                }
                 if (bitmap == null) {
                     promise.reject("IMAGE_ERROR", "Failed to load image from path")
                     return@execute
@@ -208,6 +211,28 @@ class MobileCLIPModule(reactContext: ReactApplicationContext) : ReactContextBase
                 Log.e(TAG, "Text encoder warm-up failed", e)
                 promise.reject("WARMUP_ERROR", "Text encoder warm-up failed: ${e.message}", e)
             }
+        }
+    }
+
+    /**
+     * Free the text encoder and tokenizer (about 64 MB) after a long time
+     * without a search; the next query loads them again. Runs on the text
+     * thread, so it never closes the session under a running query. Resolves
+     * true when something was freed.
+     */
+    @ReactMethod
+    fun unloadText(promise: Promise) {
+        textExecutor.execute {
+            val loaded = textSession != null || bpeTokenizer != null
+            try {
+                textSession?.close()
+            } catch (e: Exception) {
+                Log.w(TAG, "Closing the text encoder failed", e)
+            }
+            textSession = null
+            bpeTokenizer = null
+            if (loaded) Log.i(TAG, "Text encoder unloaded")
+            promise.resolve(loaded)
         }
     }
 

@@ -31,13 +31,15 @@ alive after the run finishes. `testTimeout` is 15s per test.
 jest.config.js          # preset, transforms, mocks, coverage gates
 jest.setup.js           # NativeModules stubs, jest-native matchers, warning filter
 __mocks__/              # manual mocks for native packages (ML Kit, RNFS, SQLite…)
-src/utils/__tests__/    # 459 unit tests — pure logic, 11 modules
-src/hooks/__tests__/    # 171 hook tests — renderHook + act
-src/database/__tests__/ # 135 tests — in-memory op-sqlite mock
-src/screens/__tests__/  # 177 tests — React Native Testing Library components
+src/utils/__tests__/    # unit tests — pure logic
+src/hooks/__tests__/    # hook tests — renderHook + act
+src/database/__tests__/ # in-memory op-sqlite mock
+src/screens/__tests__/  # React Native Testing Library components
 ```
 
-**30 suites, 946 tests.** Overall coverage: ~90% statements, ~76% branches.
+Tests sit in `__tests__/` next to the code they cover (also under `services/`,
+`components/`, `i18n/`, `theme/`, `navigation/`). The current suite and test
+counts are in `CLAUDE.md` under Commands.
 
 ## Coverage gates (enforced by jest)
 

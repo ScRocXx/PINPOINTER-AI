@@ -5,9 +5,15 @@ import RNFS from 'react-native-fs';
 import { SearchOverlay, SearchOverlayProps } from '../SearchOverlay';
 import type { DocumentRecord } from '../../../database';
 import { forgetIfGone } from '../../../utils/MissingFiles';
+import { describeResult } from '../resultInfo';
 
 jest.mock('react-native-svg', () => require('../../../components/ui/__tests__/svgMock').default);
 jest.mock('../../../utils/MissingFiles', () => ({ forgetIfGone: jest.fn(async () => false) }));
+// Real behaviour, counted: each call is one row working out its matched words.
+jest.mock('../resultInfo', () => {
+  const actual = jest.requireActual('../resultInfo');
+  return { ...actual, describeResult: jest.fn(actual.describeResult) };
+});
 
 const photo = (over: Partial<DocumentRecord> = {}): DocumentRecord => ({
   id: 1,
@@ -74,6 +80,61 @@ describe('SearchOverlay', () => {
     expect(screen.getAllByTestId('result-item')).toHaveLength(2);
     expect(screen.getByTestId('search-count')).toHaveTextContent('2 found');
     expect(screen.getByTestId('search-also')).toHaveTextContent(/Also searched.*बिजली/);
+  });
+
+  it('marks the words of the query the results were found for, not the half-typed one', async () => {
+    // "bill" found these; the person has typed on to "billx" and the new
+    // search hasn't answered yet.
+    const looks = photo({ id: 9, content: 'a dog on grass', filePath: 'file:///photos/dog.jpg' });
+    await setup({ searchText: 'billx', resultsQuery: 'bill', results: [looks] });
+    expect(screen.getByText('Looks like “bill”')).toBeTruthy();
+    expect(screen.queryByText('Looks like “billx”')).toBeNull();
+  });
+
+  it('rows do not redo their word matching while typing ahead of the results', async () => {
+    const view = await setup({ searchText: 'bill', resultsQuery: 'bill', results: [photo(), paper()] });
+    expect(describeResult).toHaveBeenCalledTimes(2);
+    (describeResult as jest.Mock).mockClear();
+
+    await view.rerender(<SearchOverlay {...view.props} searchText="bill p" />);
+    await view.rerender(<SearchOverlay {...view.props} searchText="bill pa" />);
+    expect(describeResult).not.toHaveBeenCalled();
+
+    // The new results arrive for the new query: now the rows update.
+    await view.rerender(<SearchOverlay {...view.props} searchText="bill pa" resultsQuery="bill pa" />);
+    expect(describeResult).toHaveBeenCalledTimes(2);
+  });
+
+  it('says when it shows results for corrected words', async () => {
+    await setup({ searchText: 'medicne', resultsQuery: 'medicine', correctedFrom: 'medicne', results: [photo()] });
+    expect(screen.getByTestId('search-corrected')).toHaveTextContent(/Showing results for “medicine”/);
+    expect(screen.getByText('You typed “medicne”')).toBeTruthy();
+  });
+
+  it('says when the results are from', async () => {
+    await setup({ searchText: 'diwali photos', dateMeaning: { kind: 'festival', festival: 'diwali' }, results: [photo()] });
+    expect(screen.getByTestId('search-when')).toHaveTextContent('When: Diwali, every year');
+  });
+
+  it('says when the results are newest first, and only then', async () => {
+    await setup({ searchText: 'latest bill', newestFirst: true, results: [photo()] });
+    expect(screen.getByTestId('search-newest')).toHaveTextContent('Newest first');
+  });
+
+  it('has no newest-first line for an ordinary search', async () => {
+    await setup({ searchText: 'bill', results: [photo()] });
+    expect(screen.queryByTestId('search-newest')).toBeNull();
+  });
+
+  it('shows the answer a paper holds, without opening it', async () => {
+    const bill = paper({ id: 7, content: 'Amount Payable Rs. 1,240 Due Date 05/04/2099', filePath: 'file:///docs/b7.pdf' });
+    await setup({ searchText: 'bill', results: [bill] });
+    expect(screen.getByTestId('result-item-answer')).toHaveTextContent('Amount ₹1,240 · Pay by 5 April 2099');
+  });
+
+  it('shows no correction line for words found as typed', async () => {
+    await setup({ searchText: 'bill', results: [photo()] });
+    expect(screen.queryByTestId('search-corrected')).toBeNull();
   });
 
   it('filters photos and papers, with counts on the chips', async () => {

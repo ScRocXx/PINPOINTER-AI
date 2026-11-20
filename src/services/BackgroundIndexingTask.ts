@@ -55,6 +55,10 @@ export const runBackgroundIndexing = async (data?: { budgetMs?: number }): Promi
             const removed = await IndexingService.pruneMissing();
             AppLogger.info('BackgroundIndexing', `Removed ${removed} deleted files`);
             if (!stopped) {
+                const rekeyed = await IndexingService.rekey();
+                if (rekeyed > 0) AppLogger.info('BackgroundIndexing', `Updated search keys on ${rekeyed} rows`);
+            }
+            if (!stopped) {
                 const added = await IndexingService.backfill();
                 AppLogger.info('BackgroundIndexing', `Backfill added ${added} embeddings`);
             }

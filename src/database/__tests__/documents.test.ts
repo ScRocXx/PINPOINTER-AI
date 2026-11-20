@@ -26,6 +26,7 @@ import {
   getDocumentByPath,
   removeDocument,
   listIndexedFiles,
+  setTakenAt,
 } from '../documents';
 import { getFileState, noteFileSeen } from '../fileState';
 import { searchDocuments } from '../search';
@@ -112,6 +113,7 @@ describe('processResults', () => {
       type: 'IMAGE',
       detection_type: 'TEXT',
       timestamp: 123456789,
+      takenAt: null,
     });
     expect(out[1].title).toBeNull();
     expect(out[1].type).toBe('DOCUMENT');
@@ -471,7 +473,17 @@ describe('getAllDocuments', () => {
       type: 'DOCUMENT',
       detection_type: 'OBJECT',
       timestamp: fakeNow,
+      takenAt: null,
     });
+  });
+
+  test('stores and reads back when the photo was taken', () => {
+    indexDocument(null, 'diwali puja', '/photos/d.jpg', 'IMAGE', 'TEXT', 1699780000000);
+    indexDocument('Bill', 'bill text', '/bill.pdf', 'DOCUMENT', 'TEXT');
+    setTakenAt('/bill.pdf', 1700000000000);
+    setTakenAt('/bill.pdf', undefined); // nothing known: keeps the value
+    expect(getDocumentByPath('/photos/d.jpg')?.takenAt).toBe(1699780000000);
+    expect(getAllDocuments()[0].takenAt).toBe(1700000000000);
   });
 
   test('excludes re-indexed IMAGE rows that share a path pattern with DOCUMENT rows', () => {

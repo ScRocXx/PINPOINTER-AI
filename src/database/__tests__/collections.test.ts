@@ -5,8 +5,9 @@
 import * as connection from '../connection';
 import { indexDocument } from '../documents';
 import { searchDocuments } from '../search';
-import { getCollectionPreview, getSimilarPhotos } from '../collections';
-import { countCheckedFiles, markOcrDone, markStageFailed, noteFileSeen } from '../fileState';
+import { getCollectionPreview, getSimilarPhotosAsync } from '../collections';
+import { indexEmbedding } from '../vectors';
+import { countCheckedFiles, markOcrDone, markStageFailed, noteFileSeen, setFingerprint } from '../fileState';
 import { getCollection } from '../../utils/Collections';
 import { __resetAll } from '@op-engineering/op-sqlite';
 
@@ -71,6 +72,26 @@ describe('getCollectionPreview', () => {
     expect(getCollectionPreview(getCollection('bill')).count).toBe(1);
   });
 
+  test('counts a WhatsApp copy (same bytes, another folder) once, and shows it once', () => {
+    indexDocument(null, 'INCOME TAX DEPARTMENT Permanent Account Number Card', '/whatsapp/pan.jpg', 'IMAGE', 'TEXT');
+    expect(getCollectionPreview(getCollection('id')).count).toBe(4); // not yet known to be copies
+    setFingerprint('/photos/pan.jpg', 'pan:2048');
+    setFingerprint('/whatsapp/pan.jpg', 'pan:2048');
+    const preview = getCollectionPreview(getCollection('id'));
+    expect(preview.count).toBe(3);
+    expect(preview.photos).toHaveLength(2);
+    expect(preview.photos).toContain('/photos/aadhaar.jpg');
+  });
+
+  test('copies count once on the LIKE path too', () => {
+    jest.spyOn(connection, 'isFtsAvailable').mockReturnValue(false);
+    indexDocument(null, 'Permanent Account Number Card copy', '/whatsapp/pan.jpg', 'IMAGE', 'TEXT');
+    expect(getCollectionPreview(getCollection('id')).count).toBe(4);
+    setFingerprint('/photos/pan.jpg', 'pan:2048');
+    setFingerprint('/whatsapp/pan.jpg', 'pan:2048');
+    expect(getCollectionPreview(getCollection('id')).count).toBe(3);
+  });
+
   test('a database error gives an empty preview', () => {
     jest.spyOn(connection, 'getDb').mockImplementation(() => {
       throw new Error('locked');
@@ -87,31 +108,32 @@ describe('getCollectionPreview', () => {
   });
 });
 
-describe('getSimilarPhotos', () => {
-  test('is empty without the vector index', () => {
+describe('getSimilarPhotosAsync', () => {
+  const unit = (cosine: number, axis: number): Float32Array => {
+    const v = new Float32Array(512);
+    v[0] = cosine;
+    v[axis] = Math.sqrt(1 - cosine * cosine);
+    return v;
+  };
+
+  test('returns photo paths, closest first, only those that stand out', async () => {
+    const query = unit(1, 1);
+    const add = (path: string, type: 'IMAGE' | 'DOCUMENT', cosine: number, axis: number) =>
+      indexEmbedding(indexDocument(null, 'words', path, type, 'TEXT')!, unit(cosine, axis));
+    for (let i = 0; i < 24; i++) add(`/photos/far${i}.jpg`, 'IMAGE', 0.05, 2 + i);
+    add('/photos/b.jpg', 'IMAGE', 0.3, 100);
+    add('/photos/a.jpg', 'IMAGE', 0.4, 101);
+    add('/docs/paper.pdf', 'DOCUMENT', 0.5, 102); // close, but not a photo
+    await expect(getSimilarPhotosAsync(query, 9)).resolves.toEqual(['/photos/a.jpg', '/photos/b.jpg']);
+    await expect(getSimilarPhotosAsync(query, 1)).resolves.toEqual([]); // the one nearest row is the paper
+  });
+
+  test('is empty without the vector index or when the read connection fails', async () => {
     jest.spyOn(connection, 'isVecAvailable').mockReturnValue(false);
-    expect(getSimilarPhotos(new Float32Array(512))).toEqual([]);
-  });
-
-  test('returns unique photo paths, closest first, within the search cutoff', () => {
-    jest.spyOn(connection, 'isVecAvailable').mockReturnValue(true);
-    const spy = jest.spyOn(connection.getDb(), 'executeSync').mockReturnValue({
-      rows: [{ filePath: '/photos/a.jpg' }, { filePath: '/photos/b.jpg' }, { filePath: '/photos/a.jpg' }],
-    } as never);
-    expect(getSimilarPhotos(new Float32Array(512), 9)).toEqual(['/photos/a.jpg', '/photos/b.jpg']);
-    const [sql, params] = spy.mock.calls[0] as [string, unknown[]];
-    expect(sql).toMatch(/k = \?/);
-    expect(sql).toMatch(/d\.type = 'IMAGE'/);
-    expect(params[1]).toBe(9);
-    expect(params[2]).toBe(1.26);
-  });
-
-  test('a vector query error gives no photos', () => {
-    jest.spyOn(connection, 'isVecAvailable').mockReturnValue(true);
-    jest.spyOn(connection.getDb(), 'executeSync').mockImplementation(() => {
-      throw new Error('no vec0');
-    });
-    expect(getSimilarPhotos(new Float32Array(512))).toEqual([]);
+    await expect(getSimilarPhotosAsync(new Float32Array(512))).resolves.toEqual([]);
+    jest.restoreAllMocks();
+    jest.spyOn(connection.getReadDb(), 'execute').mockImplementation((() => Promise.reject(new Error('no vec0'))) as never);
+    await expect(getSimilarPhotosAsync(new Float32Array(512))).resolves.toEqual([]);
   });
 });
 

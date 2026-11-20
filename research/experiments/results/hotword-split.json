@@ -1,0 +1,18 @@
+{
+  "words": 26604,
+  "pieces": 1500,
+  "same_split_share": {
+    "exported scores (BPE ranks)": {
+      "all": 0.7495,
+      "top_2000": 0.801
+    },
+    "fewest pieces": {
+      "all": 0.7182,
+      "top_2000": 0.8375
+    },
+    "fewest pieces, then earliest merge (shipped)": {
+      "all": 0.7954,
+      "top_2000": 0.8895
+    }
+  }
+}

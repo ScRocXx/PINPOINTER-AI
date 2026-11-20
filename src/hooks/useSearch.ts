@@ -1,7 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { searchDocuments, DocumentRecord } from '../database';
+import { searchDocuments, searchDocumentsAsync, understandQuery, DocumentRecord } from '../database';
 import { encodeText, warmUpText } from '../services/EmbeddingService';
+import { rescueQuery } from '../services/SpellingService';
+import { parseDateQuery, pictureTextFor, type DateMeaning } from '../utils/DateQuery';
 import { AppLogger } from '../utils/AppLogger';
+import { noteInteraction } from '../services/InteractionGate';
 import { clipTextForQuery } from '../utils/ConceptTable';
 import { queryWords } from '../utils/SearchKeys';
 import {
@@ -11,7 +14,6 @@ import {
 
 const SEARCH_DEBOUNCE_MS = 200;
 const HISTORY_DEBOUNCE_MS = 800;
-const WARMUP_DELAY_MS = 1500;
 
 /**
  * Hybrid results first, then any text-only matches (synonyms, Soundex, LIKE
@@ -42,10 +44,20 @@ export const useSearch = (isDbReady: boolean) => {
     const [searchText, setSearchText] = useState('');
     const [debouncedSearchText, setDebouncedSearchText] = useState('');
     const [searchResults, setSearchResults] = useState<DocumentRecord[]>([]);
+    // What was typed, when the results shown are for a corrected query.
+    const [correctedFrom, setCorrectedFrom] = useState<string | null>(null);
+    // What the date words meant ("Diwali, every year"), when the query has some.
+    const [dateMeaning, setDateMeaning] = useState<DateMeaning | null>(null);
+    const [newestFirst, setNewestFirst] = useState(false);
     const [isSearching, setIsSearching] = useState(false);
     const [isSearchPending, setIsSearchPending] = useState(false);
     const [searchHistory, setSearchHistory] = useState<SearchHistoryItem[]>([]);
     const lastResultRef = useRef<{ query: string; count: number } | null>(null);
+
+    // Typing holds indexing back for a moment, like a touch (InteractionGate).
+    useEffect(() => {
+        if (searchText) noteInteraction();
+    }, [searchText]);
 
     // Load history on mount
     useEffect(() => {
@@ -53,13 +65,14 @@ export const useSearch = (isDbReady: boolean) => {
         loadSearchHistory().then(setSearchHistory);
     }, [isDbReady]);
 
-    // Load the CLIP text encoder in the background shortly after startup, so the
-    // first search doesn't wait for the model to load.
+    // Load the CLIP text encoder when search opens, not at app start: it
+    // loads while the person types (word results never wait for it), and
+    // people who never search don't pay ~64 MB for it. EmbeddingService frees
+    // it again after 10 minutes without a search.
     useEffect(() => {
-        if (!isDbReady) return;
-        const timer = setTimeout(() => { warmUpText(); }, WARMUP_DELAY_MS);
-        return () => clearTimeout(timer);
-    }, [isDbReady]);
+        if (!isDbReady || !isSearching) return;
+        warmUpText();
+    }, [isDbReady, isSearching]);
 
     // Debounced search — 200ms after last keystroke.
     // Step 1 runs the text index right away (a few ms) and shows those results.
@@ -68,6 +81,9 @@ export const useSearch = (isDbReady: boolean) => {
     useEffect(() => {
         if (!isDbReady || !searchText.trim()) {
             setSearchResults([]);
+            setCorrectedFrom(null);
+            setDateMeaning(null);
+            setNewestFirst(false);
             setIsSearchPending(false);
             return;
         }
@@ -76,20 +92,50 @@ export const useSearch = (isDbReady: boolean) => {
         setIsSearchPending(true);
         const timer = setTimeout(async () => {
             try {
-                const textResults = searchDocuments(searchText);
+                let query = searchText;
+                let textResults = searchDocuments(searchText);
+                let typed: string | null = null;
+                const dates = parseDateQuery(searchText);
+                // Nothing found by words: correct the typed words against the
+                // person's own index ("bijki bil" → "बिजली bill") and search that.
+                // Not for a date ("Diwali photos"): nothing from then is not a typo.
+                if (textResults.length === 0 && !dates) {
+                    const rescue = await rescueQuery(searchText);
+                    if (!isCurrent) return;
+                    const rescued = rescue ? searchDocuments(rescue.query) : [];
+                    if (rescue && rescued.length > 0) {
+                        query = rescue.query;
+                        textResults = rescued;
+                        typed = searchText;
+                    }
+                }
                 if (!isCurrent) return;
                 lastResultRef.current = { query: searchText, count: textResults.length };
                 setSearchResults(textResults);
-                setDebouncedSearchText(searchText);
+                setDebouncedSearchText(query);
+                // What the results' query asks besides its words: a time, the newest first.
+                const meaning = understandQuery(query);
+                setCorrectedFrom(typed);
+                setDateMeaning(meaning.dates?.meaning ?? null);
+                setNewestFirst(meaning.recency !== null);
                 setIsSearchPending(false);
 
                 // Hindi and other Indian-script words never reach the
                 // English-only CLIP tokenizer: known concepts become English,
-                // unknown ones are dropped (null = skip semantic search).
-                const clipText = clipTextForQuery(searchText, queryWords(searchText));
+                // unknown ones are dropped (null = skip semantic search). A
+                // date query shows CLIP its other words, or what the festival
+                // looks like ("diwali lamps and lights"). "Latest" words are
+                // left out: they are an order, not something a photo shows.
+                const words = meaning.recency ? meaning.recency.rest : null;
+                const lookFor = meaning.dates
+                    ? pictureTextFor({ ...meaning.dates, rest: words ?? meaning.dates.rest })
+                    : words ?? query;
+                const clipText = lookFor ? clipTextForQuery(lookFor, queryWords(lookFor)) : null;
                 const queryVector = clipText ? await encodeText(clipText) : null;
                 if (!isCurrent || !queryVector) return;
-                const hybridResults = mergeResults(searchDocuments(searchText, queryVector), textResults);
+                // The look-alike scan reads every photo's vector: off the JS
+                // thread, so typing and scrolling stay smooth while it runs.
+                const hybridResults = mergeResults(await searchDocumentsAsync(query, queryVector), textResults);
                 if (!isCurrent) return;
                 lastResultRef.current = { query: searchText, count: hybridResults.length };
                 setSearchResults(hybridResults);
@@ -146,7 +192,7 @@ export const useSearch = (isDbReady: boolean) => {
 
     return {
         searchText, setSearchText, debouncedSearchText,
-        searchResults,
+        searchResults, correctedFrom, dateMeaning, newestFirst,
         isSearching, setIsSearching, isSearchPending,
         searchHistory,
         handleSelectHistory, handleDeleteHistory, handleClearHistory,

@@ -28,6 +28,8 @@ Object.assign(NativeModules, {
   MobileCLIPModule: {
     encodeImage: jest.fn(async () => []),
     encodeText: jest.fn(async () => []),
+    warmUpText: jest.fn(async () => true),
+    unloadText: jest.fn(async () => true),
   },
   NativePdfModule: {
     getPdfInfo: jest.fn(async () => ({ pageCount: 0, title: '' })),
@@ -39,6 +41,7 @@ Object.assign(NativeModules, {
     startRecognition: jest.fn(async () => true),
     stopRecognition: jest.fn(async () => ({ text: '' })),
     cancelRecognition: jest.fn(async () => true),
+    setHotwords: jest.fn(async (own, builtIn) => own.length + (builtIn ? builtIn.length : 0)),
   },
   StorageModule: {
     openPDF: jest.fn(),

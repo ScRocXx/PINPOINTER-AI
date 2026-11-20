@@ -11,13 +11,13 @@
  */
 import { CameraRoll } from '@react-native-camera-roll/camera-roll';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { NativeModules } from 'react-native';
 
 import {
   performQuickSync,
   performFullGallerySync,
   loadSavedCursor,
   clearSyncCursor,
-  getGallerySyncLimit,
   getGalleryTotalCount,
   backfillEmbeddings,
   indexPhoto,
@@ -40,7 +40,10 @@ import {
   markEmbedDone,
 } from '../../database';
 import { MAX_ATTEMPTS } from '../../database/fileState';
+import { getDocumentByPath, getDocumentId } from '../../database/documents';
+import { getEmbedding } from '../../database/vectors';
 import { AppLogger } from '../AppLogger';
+import { QUIET_AFTER_MS, __resetInteractionGate, noteInteraction } from '../../services/InteractionGate';
 
 jest.mock('../VisionPipeline', () => ({
   analyzeImage: jest.fn(),
@@ -121,6 +124,7 @@ beforeEach(() => {
   asyncStoreReset.__reset();
   clearIndex();
   __resetEncoderProven();
+  __resetInteractionGate();
   analyzeImageMock.mockImplementation(async (uri: string) => visionResult(uri));
   // default: empty gallery
   getPhotosMock.mockResolvedValue({
@@ -331,6 +335,93 @@ describe('performQuickSync', () => {
 
 // ─── performFullGallerySync ─────────────────────────────────────────────────
 
+describe('when each photo was taken', () => {
+  test('stores the gallery\'s taken time (seconds) as ms, for date searches', async () => {
+    getPhotosMock.mockResolvedValue({
+      edges: [{ node: { image: { uri: uriFor(0) }, timestamp: 1699780000, modificationTimestamp: 1699790000 } }],
+      page_info: { has_next_page: false, end_cursor: undefined },
+    });
+    const indexSpy = jest.spyOn(DatabaseDocuments, 'indexDocument');
+    await performQuickSync(jest.fn(), undefined, { background: false });
+    expect(indexSpy.mock.calls[0][5]).toBe(1699780000000);
+  });
+});
+
+describe('byte-identical copies (WhatsApp keeps several)', () => {
+  afterEach(() => {
+    delete NativeModules.PhotoReader;
+  });
+
+  test('a copy takes its twin\'s words and vector instead of being read again', async () => {
+    NativeModules.PhotoReader = { fingerprint: jest.fn(async () => 'abc:1234') };
+    const vector = new Float32Array(512).fill(0.5);
+    analyzeImageMock.mockImplementation(async (uri: string) => visionResult(uri, { embedding: vector }));
+    mockGallery(2);
+
+    await performQuickSync(jest.fn(), undefined, { background: false });
+
+    expect(analyzeImageMock).toHaveBeenCalledTimes(1);
+    expect(isFileIndexed(uriFor(0))).toBe(true);
+    expect(isFileIndexed(uriFor(1))).toBe(true);
+    const [first, copy] = [0, 1].map(i => getDocumentByPath(uriFor(i)));
+    expect(copy?.content).toBe(first?.content);
+    expect(getEmbedding(getDocumentId(uriFor(1))!)).toEqual(vector);
+    expect(getFileState(uriFor(1))).toMatchObject({ ocr_status: 'done', embed_status: 'done', fingerprint: 'abc:1234' });
+  });
+
+  test('a vector from an older model is not copied: the backfill encodes the copy', async () => {
+    NativeModules.PhotoReader = { fingerprint: jest.fn(async () => 'abc:1234') };
+    analyzeImageMock.mockImplementation(async (uri: string) => visionResult(uri, { embedding: new Float32Array(512).fill(0.5) }));
+    mockGallery(1);
+    await performQuickSync(jest.fn(), undefined, { background: false });
+    markEmbedDone(uriFor(0), 'old-model');
+
+    mockGallery(2);
+    await performQuickSync(jest.fn(), undefined, { background: false });
+
+    expect(analyzeImageMock).toHaveBeenCalledTimes(1);
+    expect(getFileState(uriFor(1))).toMatchObject({ ocr_status: 'done', embed_status: 'pending' });
+    expect(getEmbedding(getDocumentId(uriFor(1))!)).toBeNull();
+  });
+
+  test('different files are each read', async () => {
+    let n = 0;
+    NativeModules.PhotoReader = { fingerprint: jest.fn(async () => `fp${n++}:1`) };
+    mockGallery(2);
+    await performQuickSync(jest.fn(), undefined, { background: false });
+    expect(analyzeImageMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('stepping aside while the phone is in use', () => {
+  test('the next photo waits while someone is scrolling, then indexing carries on', async () => {
+    mockGallery(3);
+    noteInteraction();
+    const p = performQuickSync(jest.fn(), undefined, { background: false });
+
+    await jest.advanceTimersByTimeAsync(QUIET_AFTER_MS / 2);
+    expect(analyzeImageMock).not.toHaveBeenCalled();
+
+    await jest.advanceTimersByTimeAsync(QUIET_AFTER_MS);
+    await expect(p).resolves.toMatchObject({ processed: 3, wasCancelled: false });
+    expect(analyzeImageMock).toHaveBeenCalledTimes(3);
+  });
+
+  test('pausing while it waits stops deep sync and keeps the cursor', async () => {
+    mockGallery(25);
+    const cancel = { current: false };
+    noteInteraction();
+    const p = performFullGallerySync(jest.fn(), cancel);
+    p.catch(() => {});
+    await jest.advanceTimersByTimeAsync(100);
+    cancel.current = true;
+    await jest.advanceTimersByTimeAsync(1000);
+
+    await expect(p).resolves.toEqual({ processed: 0, wasCancelled: true });
+    expect(analyzeImageMock).not.toHaveBeenCalled();
+  });
+});
+
 describe('performFullGallerySync', () => {
   test('indexes all photos across multiple 10-photo batches', async () => {
     mockGallery(25);
@@ -437,7 +528,7 @@ describe('performFullGallerySync', () => {
 
     await runFullSync(jest.fn());
 
-    expect(indexSpy).toHaveBeenCalledWith(null, 'image', uriFor(0), 'IMAGE', 'OBJECT');
+    expect(indexSpy).toHaveBeenCalledWith(null, 'image', uriFor(0), 'IMAGE', 'OBJECT', null);
     expect(isFileIndexed(uriFor(0))).toBe(true);
   });
 
@@ -551,10 +642,6 @@ describe('cursor helpers', () => {
 });
 
 describe('sync limits', () => {
-  test('getGallerySyncLimit returns -1 (unlimited)', async () => {
-    await expect(getGallerySyncLimit()).resolves.toBe(-1);
-  });
-
   test('getGalleryTotalCount adds up the photo albums', async () => {
     (CameraRoll.getAlbums as jest.Mock).mockResolvedValueOnce([
       { id: '1', title: 'Camera', count: 2100, type: 'Album' },

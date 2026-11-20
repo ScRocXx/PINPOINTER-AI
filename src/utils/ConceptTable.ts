@@ -143,8 +143,22 @@ const stemHindi = (w: string): string => {
     return w;
 };
 
+/** Recent answers: result rows ask for every word of every visible result. */
+const WORD_CACHE_LIMIT = 4096;
+const wordCache = new Map<string, string[]>();
+
 /** Concept ids for one word in any script or spelling. */
 export const conceptsForWord = (word: string): string[] => {
+    let ids = wordCache.get(word);
+    if (!ids) {
+        ids = lookUpConcepts(word);
+        if (wordCache.size >= WORD_CACHE_LIMIT) wordCache.clear();
+        wordCache.set(word, ids);
+    }
+    return ids.length > 0 ? [...ids] : [];
+};
+
+const lookUpConcepts = (word: string): string[] => {
     const f = lowerForm(word);
     if (!f || /\d/.test(f)) return [];
     const hit = exactIndex.get(f)

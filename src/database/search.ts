@@ -1,15 +1,21 @@
 /**
- * Search: FTS5 full-text search with LIKE fallback, hybrid vector search
- * via Reciprocal Rank Fusion, synonym expansion, phonetic matching,
- * relevance ranking, and snippet extraction.
+ * Search: FTS5 full-text search with LIKE fallback (synonyms, phonetic
+ * matching, relevance ranking), photos that look like the query (CLIP), and
+ * the merge of the two. (Snippets come from utils/MatchTerms.)
  */
 import { soundex } from '../utils/Soundex';
-import { queryWords, termsForQueryWord } from '../utils/SearchKeys';
+import { searchWords, termsForQueryWord } from '../utils/SearchKeys';
+import { tolerantTermsForQueryWord } from '../utils/OcrTolerance';
+import { parseDateQuery, type DateQuery, type DateWindow } from '../utils/DateQuery';
+import { collapseCopies } from '../utils/Duplicates';
+import { newestFirst, parseRecency, saysAnyOf, type Recency } from '../utils/PaperSeries';
+import { fingerprintsFor } from './fileState';
 import { collectionForQuery } from '../utils/Collections';
 import { AppLogger } from '../utils/AppLogger';
-import { getDb, isFtsAvailable, isVecAvailable } from './connection';
+import { getDb, getReadDb, isFtsAvailable } from './connection';
 import { processResults } from './documents';
 import { collectionTerms } from './collectionTerms';
+import { findLookAlikesAsync } from './vectors';
 import type { DocumentRecord } from './types';
 
 // ─── Synonym Map for Indian Documents ───────────────────────────────────────
@@ -31,13 +37,55 @@ const SYNONYM_GROUPS: string[][] = [
   ['property', 'deed', 'rent agreement', 'lease'],
 ];
 
-// ─── Semantic relevance cutoff ──────────────────────────────────────────────
-// vec_index uses L2 distance. Both CLIP vectors are unit length, so
-// distance = sqrt(2 - 2·cosine). Without a cutoff the 50 nearest photos are
-// returned for every query, even nonsense. 1.26 keeps matches with cosine
-// similarity ≳ 0.21, a typical floor for a real CLIP text→image match.
-// Tune on device: lower = stricter, fewer semantic results.
-export const MAX_VECTOR_DISTANCE = 1.26;
+// The rule for which photos count as look-alikes lives in vectors.ts.
+export { MAX_VECTOR_DISTANCE } from './vectors';
+
+// ─── Merging word matches with look-alikes ──────────────────────────────────
+// Reciprocal rank fusion: a result scores weight / (RANK_K + its rank) in each
+// list it is in, and the sums are sorted. Words count double, so the first
+// eleven word matches come before the best look-alike; after that one
+// look-alike follows every two word matches. A photo in both lists rises to
+// the top. (With the usual RANK_K of 60 every one of 50 word matches outranked
+// the best look-alike, so look-alikes never made the list.)
+export const RANK_K = 10;
+export const TEXT_WEIGHT = 2;
+
+/** Word matches and look-alikes as one list, best first, each file once. */
+export const mergeByRank = (textHits: DocumentRecord[], lookAlikes: DocumentRecord[]): DocumentRecord[] => {
+  const scores = new Map<string, { doc: DocumentRecord; score: number }>();
+  const add = (docs: DocumentRecord[], weight: number) => {
+    const ranked = new Set<string>();
+    for (const doc of docs) {
+      if (ranked.has(doc.filePath)) continue;
+      ranked.add(doc.filePath);
+      const points = weight / (RANK_K + ranked.size);
+      const entry = scores.get(doc.filePath);
+      if (entry) entry.score += points;
+      else scores.set(doc.filePath, { doc, score: points });
+    }
+  };
+  add(textHits, TEXT_WEIGHT);
+  add(lookAlikes, 1);
+  // Array.sort is stable: equal scores keep word matches ahead of look-alikes.
+  return [...scores.values()].sort((x, y) => y.score - x.score).map(e => e.doc);
+};
+
+const BY_IDS_SQL = (count: number) =>
+  `SELECT id, title, content, filePath, type, detection_type, timestamp, taken_at
+     FROM document_index WHERE id IN (${Array.from({ length: count }, () => '?').join(', ')})`;
+
+/** The rows for `ids`, in the order of `ids`. */
+const inIdOrder = (ids: number[], result: Parameters<typeof processResults>[0]): DocumentRecord[] => {
+  const byId = new Map(processResults(result).map(doc => [doc.id, doc]));
+  return ids.map(id => byId.get(id)).filter((doc): doc is DocumentRecord => !!doc);
+};
+
+/** The photos that look like the query vector, closest first (read connection, off the JS thread). */
+const searchByLookAsync = async (queryVector: Float32Array, limit?: number): Promise<DocumentRecord[]> => {
+  const ids = (await findLookAlikesAsync(queryVector, limit)).map(l => l.documentId);
+  if (ids.length === 0) return [];
+  return inIdOrder(ids, await getReadDb().execute(BY_IDS_SQL(ids.length), ids));
+};
 
 /**
  * Expand a search word with synonyms if it matches any group.
@@ -68,16 +116,202 @@ const ftsGroup = (word: string): string => {
 };
 
 /**
- * Search documents — uses FTS5 if available, falls back to LIKE.
- *
- * Improvements:
- *  1. Searches BOTH title and content columns
- *  2. Multi-word queries are split and AND-matched
- *  3. Synonym expansion for common Indian document terms
- *  4. A query that names a Home collection ("ID cards", "पहचान पत्र") finds
- *     every concept in it (Aadhaar, PAN, voter ID...) instead of the words
+ * The same group plus the tokens that find OCR misreadings of the word: its
+ * shape keys, its folded sound key and the joined-neighbour key. e.g. भुगतान →
+ *   ("भुगतान"* OR … OR "qvमुगतान" OR "qfbudtn" OR "qkbudtn" OR "qjbugtn")
  */
-export const searchDocuments = (query: string, queryVector?: Float32Array): DocumentRecord[] => {
+const tolerantFtsGroup = (word: string): string => {
+  const exact = ftsGroup(word);
+  const t = tolerantTermsForQueryWord(word);
+  const extra = [...t.shapes, ...t.folded, ...t.joined].map(term => `"${term}"`);
+  if (extra.length === 0) return exact;
+  const inner = exact.startsWith('(') ? exact.slice(1, -1) : exact;
+  return `(${[inner, ...extra].join(' OR ')})`;
+};
+
+/** Most results one search shows. */
+const RESULT_LIMIT = 50;
+
+/**
+ * Papers and photos whose words were misread by OCR: each query word matched
+ * exactly or as a likely misreading. Only what the exact search didn't find,
+ * so these always come after it.
+ */
+const searchMisread = (
+  db: ReturnType<typeof getDb>,
+  words: string[],
+  exact: DocumentRecord[],
+  limit = RESULT_LIMIT,
+): DocumentRecord[] => {
+  const room = limit - exact.length;
+  if (room <= 0 || words.length === 0) return [];
+  const found = new Set(exact.map(d => d.id));
+  const result = db.executeSync(
+    `SELECT d.id, d.title, d.content, d.filePath, d.type, d.detection_type, d.timestamp, d.taken_at
+     FROM fts_index f
+     JOIN document_index d ON d.id = f.rowid
+     WHERE f.fts_index MATCH ?
+     ORDER BY rank
+     LIMIT ${limit}`,
+    [words.map(tolerantFtsGroup).join(' AND ')],
+  );
+  return processResults(result).filter(d => !found.has(d.id)).slice(0, room);
+};
+
+// ─── Dates ("Diwali photos", "pichhle mahine ka bill") ──────────────────────
+
+/** Rows read for words + a date, before keeping those from that time. */
+const DATE_SEARCH_LIMIT = 500;
+/** Most photos and papers listed for a date alone. */
+const DATE_LIST_LIMIT = 100;
+/** Look-alikes read for a date search, before keeping those from that time. */
+const DATE_LOOK_LIMIT = 400;
+
+const inWindows = (doc: DocumentRecord, windows: ReadonlyArray<DateWindow>): boolean =>
+  typeof doc.takenAt === 'number' && windows.some(w => doc.takenAt! >= w.from && doc.takenAt! < w.to);
+
+/** Photos and papers from any of these times, newest first (rows without a date are left out). */
+export const listByDate = (windows: ReadonlyArray<DateWindow>, limit = DATE_LIST_LIMIT): DocumentRecord[] => {
+  if (windows.length === 0) return [];
+  try {
+    const result = getDb().executeSync(
+      `SELECT id, title, content, filePath, type, detection_type, timestamp, taken_at
+       FROM document_index
+       WHERE ${windows.map(() => '(taken_at >= ? AND taken_at < ?)').join(' OR ')}
+       ORDER BY taken_at DESC
+       LIMIT ?`,
+      [...windows.flatMap(w => [w.from, w.to]), limit],
+    );
+    return processResults(result);
+  } catch (e) {
+    AppLogger.warn('DB', 'listByDate failed:', e);
+    return [];
+  }
+};
+
+/** The newest photos and papers (or one kind only), by when they were taken. */
+export const listNewest = (limit = DATE_LIST_LIMIT, type?: 'IMAGE' | 'DOCUMENT'): DocumentRecord[] => {
+  try {
+    const result = getDb().executeSync(
+      `SELECT id, title, content, filePath, type, detection_type, timestamp, taken_at
+       FROM document_index
+       ${type ? 'WHERE type = ? ' : ''}ORDER BY taken_at DESC, id DESC
+       LIMIT ?`,
+      type ? [type, limit] : [limit],
+    );
+    return processResults(result);
+  } catch (e) {
+    AppLogger.warn('DB', 'listNewest failed:', e);
+    return [];
+  }
+};
+
+/** The word matches from that time, or everything from then when only a date was asked. */
+const dateTextHits = (dq: DateQuery): DocumentRecord[] =>
+  dq.rest.trim()
+    ? searchByWords(dq.rest, DATE_SEARCH_LIMIT).filter(d => inWindows(d, dq.windows)).slice(0, RESULT_LIMIT)
+    : listByDate(dq.windows);
+
+// ─── "Latest" ("latest electricity bill", "pichla bill", "सबसे नया बिल") ─────
+
+/** What a query asks besides its words: a time, and the newest first. */
+export interface QueryMeaning {
+  dates: DateQuery | null;
+  recency: Recency | null;
+}
+
+/**
+ * A query's date words ("Diwali", "last month"), then its "latest" words.
+ * Words that also mean something else ("new", "naya", "last") count only
+ * when no paper found for the query says them: "New India Assurance" and
+ * "last date" stay word searches.
+ */
+export const understandQuery = (query: string): QueryMeaning => {
+  const dates = parseDateQuery(query);
+  const words = dates ? dates.rest : query;
+  let recency = parseRecency(words);
+  if (recency?.weakOnly) {
+    const said = recency.words;
+    if (searchByWords(words).some(d => saysAnyOf(d, said))) recency = null;
+  }
+  return { dates, recency };
+};
+
+/** The word results, with the query's time and "latest" words understood. */
+const textHitsFor = (query: string, { dates, recency }: QueryMeaning): DocumentRecord[] => {
+  if (!recency) return dates ? dateTextHits(dates) : searchByWords(query);
+  if (recency.rest.trim()) {
+    const found = searchByWords(recency.rest, DATE_SEARCH_LIMIT);
+    return newestFirst(dates ? found.filter(d => inWindows(d, dates.windows)) : found).slice(0, RESULT_LIMIT);
+  }
+  const only = recency.only;
+  const listed = dates
+    ? listByDate(dates.windows, DATE_SEARCH_LIMIT).filter(d => !only || d.type === only)
+    : listNewest(DATE_LIST_LIMIT, only);
+  return newestFirst(listed).slice(0, DATE_LIST_LIMIT);
+};
+
+/** Word and look-alike results: merged by rank, or for "latest" the words first and each part newest first. */
+const combine = (textHits: DocumentRecord[], lookAlikes: DocumentRecord[], recency: Recency | null): DocumentRecord[] => {
+  if (lookAlikes.length === 0) return textHits;
+  if (!recency) return mergeByRank(textHits, lookAlikes);
+  const found = new Set(textHits.map(d => d.id));
+  return [...textHits, ...newestFirst(lookAlikes.filter(d => !found.has(d.id)))];
+};
+
+/** Results with byte-identical copies (WhatsApp keeps several) shown once. */
+const withoutCopies = (docs: DocumentRecord[]): DocumentRecord[] =>
+  collapseCopies(docs, fingerprintsFor(docs.map(d => d.filePath)));
+
+/**
+ * Search documents by their words: FTS5 if available, else LIKE. Title and
+ * content, every word of the query must match (filler words like "of" are
+ * left out), synonym expansion for common Indian document terms. A query
+ * that names a Home collection ("ID cards", "पहचान पत्र") finds every concept
+ * in it (Aadhaar, PAN, voter ID...) instead of the words. Dates and "latest"
+ * words are understood (see textHitsFor); byte-identical copies show once.
+ *
+ * Sync and quick (an FTS query capped at 50 rows, a few ms): what search
+ * shows right away. Look-alikes are added by searchDocumentsAsync.
+ */
+export const searchDocuments = (query: string): DocumentRecord[] =>
+  withoutCopies(textHitsFor(query, understandQuery(query)));
+
+/**
+ * searchDocuments plus, when `queryVector` is given, the photos that look
+ * like the query:
+ *
+ *  1. Words, as in searchDocuments.
+ *  2. Look: photos that stand out as close to the query vector. This scan
+ *     reads every photo's vector, so it runs on the read connection, off the
+ *     JS thread.
+ *  3. The two lists merged by rank (see mergeByRank). "Latest" words
+ *     ("latest bill", "pichla bill") put each list newest first instead
+ *     (utils/PaperSeries), words before look-alikes.
+ *  4. Byte-identical copies shown once.
+ */
+export const searchDocumentsAsync = async (query: string, queryVector?: Float32Array): Promise<DocumentRecord[]> =>
+  withoutCopies(await searchDocumentsAsyncWithCopies(query, queryVector));
+
+const searchDocumentsAsyncWithCopies = async (query: string, queryVector?: Float32Array): Promise<DocumentRecord[]> => {
+  const meaning = understandQuery(query);
+  const dq = meaning.dates;
+  const textHits = textHitsFor(query, meaning);
+  if (!queryVector || !query.trim()) return textHits;
+  const t0 = Date.now();
+  try {
+    const lookAlikes = dq
+      ? (await searchByLookAsync(queryVector, DATE_LOOK_LIMIT)).filter(d => inWindows(d, dq.windows))
+      : await searchByLookAsync(queryVector);
+    AppLogger.info('DB', `Look-alike search took ${Date.now() - t0}ms (off the JS thread). Found ${lookAlikes.length} photos.`);
+    return combine(textHits, lookAlikes, meaning.recency);
+  } catch (e) {
+    AppLogger.warn('DB', 'Look-alike search failed, showing word matches only:', e);
+    return textHits;
+  }
+};
+
+const searchByWords = (query: string, limit = RESULT_LIMIT): DocumentRecord[] => {
   const t0 = Date.now();
   try {
     const db = getDb();
@@ -86,83 +320,35 @@ export const searchDocuments = (query: string, queryVector?: Float32Array): Docu
 
     let results: DocumentRecord[] = [];
     // Split query into individual words for multi-word AND matching
-    const words = queryWords(trimmed);
+    const words = searchWords(trimmed);
     const safeQuery = words.join(' ');
     // "ID cards" means any ID card: match the collection's concept tokens
     // and phrases (any of them) instead of the words "id" AND "cards".
     const collection = collectionTerms(collectionForQuery(trimmed));
     const collectionFts = collection?.fts ?? '';
 
-    // ── Hybrid Search: FTS5 + Vector via Reciprocal Rank Fusion ──────────
-    if (isFtsAvailable() && isVecAvailable() && queryVector && safeQuery) {
-      try {
-        const ftsTerms = collectionFts || words.map(ftsGroup).join(' OR ');
-        const vectorBlob = new Uint8Array(queryVector.buffer);
-
-        const hybridResults = db.executeSync(`
-          WITH
-          vector_knn AS (
-            SELECT document_id, distance
-            FROM vec_index
-            WHERE embedding MATCH vec_f32(?)
-              AND k = 50
-          ),
-          vector_matches AS (
-            SELECT
-              document_id AS rowid,
-              ROW_NUMBER() OVER (ORDER BY distance ASC) AS vec_rank
-            FROM vector_knn
-            WHERE distance <= ?
-          ),
-          fts_matches AS (
-            SELECT
-              rowid,
-              ROW_NUMBER() OVER (ORDER BY rank ASC) AS fts_rank
-            FROM fts_index
-            WHERE fts_index MATCH ?
-            LIMIT 50
-          ),
-          combined AS (
-            SELECT rowid, fts_rank AS rank, 'fts' AS source FROM fts_matches
-            UNION ALL
-            SELECT rowid, vec_rank AS rank, 'vec' AS source FROM vector_matches
-          )
-          SELECT
-            d.id, d.title, d.content, d.filePath, d.type,
-            d.detection_type, d.timestamp,
-            SUM(CASE WHEN c.source = 'fts' THEN 2.0 / (60.0 + c.rank)
-                     ELSE 1.0 / (60.0 + c.rank) END) AS rrf_score
-          FROM combined c
-          JOIN document_index d ON d.id = c.rowid
-          GROUP BY c.rowid
-          ORDER BY rrf_score DESC
-          LIMIT 50
-        `, [vectorBlob, MAX_VECTOR_DISTANCE, ftsTerms]);
-
-        const hybridHits = processResults(hybridResults);
-        if (hybridHits.length > 0) {
-          AppLogger.info('DB', `Hybrid Search for "${safeQuery}" took ${Date.now() - t0}ms. Found ${hybridHits.length} hits.`);
-          return hybridHits;
-        }
-      } catch (err) {
-        AppLogger.warn('DB', 'Hybrid search failed, falling back to FTS5:', err);
-      }
-    }
-
     if (isFtsAvailable() && safeQuery) {
       try {
         // Build FTS5 query: each word with wildcard, AND-joined
         const ftsTerms = collectionFts || words.map(ftsGroup).join(' AND ');
         const ftsResults = db.executeSync(
-          `SELECT d.id, d.title, d.content, d.filePath, d.type, d.detection_type, d.timestamp
+          `SELECT d.id, d.title, d.content, d.filePath, d.type, d.detection_type, d.timestamp, d.taken_at
            FROM fts_index f
            JOIN document_index d ON d.id = f.rowid
            WHERE f.fts_index MATCH ?
            ORDER BY rank
-           LIMIT 50`,
+           LIMIT ${limit}`,
           [ftsTerms]
         );
         results = processResults(ftsResults);
+        // Then the typed words as OCR may have misread them ("rnedicine",
+        // "मुगतान"), after the exact ones. A collection ("Medicine") too: a
+        // paper that says "rnedicine" belongs in it.
+        try {
+          results = [...results, ...searchMisread(db, words, results, limit)];
+        } catch (err) {
+          AppLogger.warn('DB', `Misread search failed for "${trimmed}":`, err);
+        }
         if (results.length > 0) {
           AppLogger.info('DB', `FTS5 Search for "${safeQuery}" took ${Date.now() - t0}ms. Found ${results.length} hits.`);
           return results;
@@ -209,11 +395,11 @@ export const searchDocuments = (query: string, queryVector?: Float32Array): Docu
 
     const whereSQL = whereClauses.join(' AND ');
     const likeResults = db.executeSync(
-      `SELECT id, title, content, filePath, type, detection_type, timestamp
+      `SELECT id, title, content, filePath, type, detection_type, timestamp, taken_at
        FROM document_index
        WHERE ${whereSQL}
        ORDER BY timestamp DESC
-       LIMIT 50`,
+       LIMIT ${limit}`,
       params
     );
     results = processResults(likeResults);
@@ -276,38 +462,4 @@ const rankResults = (results: DocumentRecord[], query: string, words: string[]):
 
   scored.sort((a, b) => b.score - a.score);
   return scored.map(s => s.doc);
-};
-
-/**
- * Extract a text snippet (~80 chars) around the first match of the query keyword.
- * Used by the UI to show WHERE the match was found.
- */
-export const extractSnippet = (content: string, query: string, snippetLen = 80): string => {
-  if (!content || !query) return '';
-  const lower = content.toLowerCase();
-  const words = query.toLowerCase().split(/\s+/).filter(w => w.length > 0);
-
-  // Find the position of the first matching word
-  let matchPos = -1;
-  let matchWord = '';
-  for (const w of words) {
-    const pos = lower.indexOf(w);
-    if (pos !== -1 && (matchPos === -1 || pos < matchPos)) {
-      matchPos = pos;
-      matchWord = w;
-    }
-  }
-
-  if (matchPos === -1) return content.substring(0, snippetLen) + (content.length > snippetLen ? '...' : '');
-
-  // Extract a window around the match
-  const halfLen = Math.floor(snippetLen / 2);
-  let start = Math.max(0, matchPos - halfLen);
-  let end = Math.min(content.length, matchPos + matchWord.length + halfLen);
-
-  let snippet = content.substring(start, end).replace(/\n/g, ' ').trim();
-  if (start > 0) snippet = '...' + snippet;
-  if (end < content.length) snippet += '...';
-
-  return snippet;
 };

@@ -165,6 +165,14 @@ describe('useIndexingProgress', () => {
     expect(result.current.photos.total).toBe(2400);
   });
 
+  it('gives the same object back while nothing shown changes', async () => {
+    const { result, rerender } = await renderHook(() => useIndexingProgress('full'));
+    await act(async () => {});
+    const first = result.current;
+    await rerender({});
+    expect(result.current).toBe(first);
+  });
+
   it('stops listening when it goes', async () => {
     const { unmount } = await renderHook(() => useIndexingProgress());
     await unmount();

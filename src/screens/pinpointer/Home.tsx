@@ -1,14 +1,14 @@
 import React, { useCallback } from 'react';
-import { Linking, NativeModules } from 'react-native';
 import { useToast } from '../../components/ui';
 import { useStrings } from '../../i18n';
-import { usePinpointerShared } from '../../hooks/PinpointerContext';
+import { type PinpointerState, usePinpointerShared } from '../../hooks/PinpointerContext';
 import { useHomeOverview } from '../../hooks/useHomeOverview';
 import type { IndexingProgress } from '../../hooks/useIndexingProgress';
 import { usePinnedItems } from '../../hooks/usePinnedItems';
 import { AppLogger } from '../../utils/AppLogger';
 import type { CollectionId } from '../../utils/Collections';
 import { forgetIfGone } from '../../utils/MissingFiles';
+import { openPdf } from '../../utils/OpenPdf';
 import type { PinnedItem } from '../../utils/PinnedItems';
 import { HomeView } from './HomeView';
 import { TILE_LOOK } from './HomeParts';
@@ -22,22 +22,37 @@ export interface HomeProps {
   progress: IndexingProgress;
 }
 
-
-/** Open a PDF in the phone's PDF app. */
+/** Open a starred paper in the phone's PDF app. */
 const openPaper = (filePath: string) => {
-  const { StorageModule } = NativeModules;
-  if (StorageModule?.openPDF) {
-    StorageModule.openPDF(filePath.replace('file://', ''));
-    return;
-  }
-  Linking.openURL(filePath).catch(e => AppLogger.error('Home', 'Could not open the paper', e));
+  openPdf(filePath).catch(e => AppLogger.error('Home', 'Could not open the paper', e));
 };
+
+/**
+ * What Home shows. Search text, results and the mic are left out: Home sits
+ * under the search screen and must not redraw on every keystroke. (The mic is
+ * the tab bar's; indexing progress comes in as a prop.)
+ */
+const selectHome = (s: PinpointerState) => ({
+  setSearchText: s.setSearchText,
+  setIsSearching: s.setIsSearching,
+  isSyncing: s.isSyncing,
+  isPaused: s.isPaused,
+  isDeepSync: s.isDeepSync,
+  syncCount: s.syncCount,
+  lastSyncTime: s.lastSyncTime,
+  handleQuickSync: s.handleQuickSync,
+  handleDeepSync: s.handleDeepSync,
+  handlePauseSync: s.handlePauseSync,
+  handleResumeSync: s.handleResumeSync,
+  lastDocSyncTime: s.lastDocSyncTime,
+  handleDocumentSync: s.handleDocumentSync,
+});
 
 /**
  * Home's wiring: the shared Pinpointer state, the Important stars and the
  * Home overview (tiles, photo totals, recent photos) into `HomeView`.
  */
-export const Home: React.FC<HomeProps> = ({ onOpenImage, onScan, progress }) => {
+const HomeInner: React.FC<HomeProps> = ({ onOpenImage, onScan, progress }) => {
   const { t } = useStrings();
   const toast = useToast();
   const {
@@ -54,7 +69,7 @@ export const Home: React.FC<HomeProps> = ({ onOpenImage, onScan, progress }) => 
     handleResumeSync,
     lastDocSyncTime,
     handleDocumentSync,
-  } = usePinpointerShared();
+  } = usePinpointerShared(selectHome);
   const { items: pinned, toggle } = usePinnedItems();
   // The queue itself says what is running: a check started by the first run
   // or while charging shows here too, not only one started from this screen.
@@ -135,3 +150,7 @@ export const Home: React.FC<HomeProps> = ({ onOpenImage, onScan, progress }) => 
     />
   );
 };
+
+/** Memoized: the search screen above it re-renders while typing; Home's own props don't change. */
+export const Home = React.memo(HomeInner);
+Home.displayName = 'Home';

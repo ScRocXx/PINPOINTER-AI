@@ -3,10 +3,13 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
     indexDocument, beginTransaction, commitTransaction, rollbackTransaction, indexEmbedding,
     getImagesMissingEmbeddings, getDocumentId, noteFileSeen, markOcrDone, markEmbedDone, markStageFailed,
+    setFingerprint, findTwin, getDocumentByPath, getEmbedding, getFileState,
 } from '../database';
+import { CURRENT_EMBED_MODEL } from '../database/fileState';
+import { fingerprintOf } from './Duplicates';
 import { encodeImage } from '../services/EmbeddingService';
-import { buildIndexableContent } from './TextEnrichment';
 import { analyzeImage } from './VisionPipeline';
+import { isQuiet, waitForQuiet } from '../services/InteractionGate';
 import { AppLogger } from './AppLogger';
 
 /** Max photos processed in the quick sync pass (fast cap for UI loading). */
@@ -62,6 +65,12 @@ const mtimeOf = (edge: GalleryEdge): number | undefined => {
     return typeof t === 'number' ? t : undefined;
 };
 
+/** When the photo was taken, in ms (MediaStore gives seconds), for date searches. */
+const takenOf = (edge: GalleryEdge): number | undefined => {
+    const t = edge.node.timestamp ?? edge.node.modificationTimestamp;
+    return typeof t === 'number' && t > 0 ? Math.round(t * 1000) : undefined;
+};
+
 /**
  * Set once any image encode succeeds this session. Until then a missing
  * embedding is blamed on the encoder (models missing, still loading), not the
@@ -94,11 +103,14 @@ const recordEmbedding = (uri: string, docId: number, embedding: Float32Array | n
  * one. The ML work happens first; the DB writes then run in one short
  * transaction with no await inside, so other sync loops can't interleave.
  */
-export const indexPhoto = async (uri: string, mtime?: number): Promise<PhotoOutcome> => {
+export const indexPhoto = async (uri: string, mtime?: number, takenAt?: number): Promise<PhotoOutcome> => {
     const work = noteFileSeen(uri, 'IMAGE', mtime);
     if (!work.ocr) {
         return work.embed ? embedPhoto(uri) : 'skipped';
     }
+
+    // A byte-identical copy of a photo already read: take its words and vector.
+    if (await copyFromTwin(uri, takenAt)) return 'indexed';
 
     let content: string;
     let detection: 'TEXT' | 'OBJECT';
@@ -106,7 +118,8 @@ export const indexPhoto = async (uri: string, mtime?: number): Promise<PhotoOutc
     try {
         const vision = await analyzeImage(uri);
         const rawText = vision.content ?? '';
-        content = rawText.trim().length === 0 ? 'image' : await buildIndexableContent(rawText);
+        // Only the words read; indexDocument adds the search keys (SearchKeys).
+        content = rawText.trim() || 'image';
         detection = vision.detection_type as 'TEXT' | 'OBJECT';
         embedding = vision.embedding;
     } catch (e) {
@@ -117,7 +130,7 @@ export const indexPhoto = async (uri: string, mtime?: number): Promise<PhotoOutc
 
     beginTransaction();
     try {
-        const docId = indexDocument(null, content || 'image', uri, 'IMAGE', detection);
+        const docId = indexDocument(null, content || 'image', uri, 'IMAGE', detection, takenAt ?? null);
         if (docId == null) throw new Error('indexDocument did not write a row');
         markOcrDone(uri);
         recordEmbedding(uri, docId, embedding);
@@ -129,6 +142,39 @@ export const indexPhoto = async (uri: string, mtime?: number): Promise<PhotoOutc
         markStageFailed(uri, 'ocr', e);
         AppLogger.warn('GallerySync', `Failed to save ${uri}`, e);
         return 'failed';
+    }
+};
+
+/**
+ * When `uri` has the same bytes as a photo already read (WhatsApp keeps copies
+ * in several folders), gives it that photo's words and vector and returns
+ * true; otherwise records its fingerprint and returns false.
+ */
+const copyFromTwin = async (uri: string, takenAt?: number): Promise<boolean> => {
+    const fingerprint = await fingerprintOf(uri);
+    if (!fingerprint) return false;
+    setFingerprint(uri, fingerprint);
+    const twinUri = findTwin(fingerprint, uri);
+    const twin = twinUri ? getDocumentByPath(twinUri) : null;
+    if (!twinUri || !twin) return false;
+    // The vector too, when it is from the current model (an older one is re-encoded by the backfill).
+    const twinState = getFileState(twinUri);
+    const twinId = getDocumentId(twinUri);
+    const vectorIsCurrent = twinState?.embed_status === 'done' && twinState.embed_model === CURRENT_EMBED_MODEL;
+    const vector = twinId != null && vectorIsCurrent ? getEmbedding(twinId) : null;
+    beginTransaction();
+    try {
+        const docId = indexDocument(twin.title ?? null, twin.content || 'image', uri, 'IMAGE', twin.detection_type, takenAt ?? null);
+        if (docId == null) throw new Error('indexDocument did not write a row');
+        markOcrDone(uri);
+        if (vector && indexEmbedding(docId, vector)) markEmbedDone(uri);
+        commitTransaction();
+        AppLogger.info('GallerySync', `Copy of an indexed photo, read once: ${uri}`);
+        return true;
+    } catch (e) {
+        rollbackTransaction();
+        AppLogger.warn('GallerySync', `Could not copy from ${twinUri}`, e);
+        return false;
     }
 };
 
@@ -144,8 +190,6 @@ const embedPhoto = async (uri: string, knownDocId?: number): Promise<PhotoOutcom
     return recordEmbedding(uri, docId, embedding) ? 'embedded' : 'failed';
 };
 
-/** Maximum photos the gallery sync will process (-1 = stub, not yet implemented). */
-export const getGallerySyncLimit = async (): Promise<number> => -1;
 /**
  * How many photos Pinpointer can see, for "120 of 2,400" progress. Android
  * groups every photo into one album (its folder), so the album counts add up
@@ -193,8 +237,11 @@ export const performQuickSync = async (
             if (totalProcessed >= QUICK_SYNC_LIMIT || cancelRef?.current) {
                 break;
             }
+            // Someone is scrolling or typing: let them have the phone first.
+            if (!isQuiet()) await waitForQuiet(() => !!cancelRef?.current);
+            if (cancelRef?.current) break;
 
-            await indexPhoto(edge.node.image.uri, mtimeOf(edge));
+            await indexPhoto(edge.node.image.uri, mtimeOf(edge), takenOf(edge));
 
             totalProcessed++;
             onProgress(totalProcessed);
@@ -244,7 +291,9 @@ export const performQuickSyncBackground = async (
             if (bgProcessed >= SILENT_BACKGROUND_LIMIT || cancelRef?.current) {
                 break;
             }
-            await indexPhoto(edge.node.image.uri, mtimeOf(edge));
+            if (!isQuiet()) await waitForQuiet(() => !!cancelRef?.current);
+            if (cancelRef?.current) break;
+            await indexPhoto(edge.node.image.uri, mtimeOf(edge), takenOf(edge));
             bgProcessed++;
         }
 
@@ -291,8 +340,16 @@ export const performFullGallerySync = async (
                     return { processed: totalProcessed, wasCancelled: true };
                 }
 
+                if (!isQuiet()) {
+                    await waitForQuiet(() => !!cancelRef?.current);
+                    if (cancelRef?.current) {
+                        await saveCursor(after);
+                        return { processed: totalProcessed, wasCancelled: true };
+                    }
+                }
+
                 const uri = edge.node.image.uri;
-                await indexPhoto(uri, mtimeOf(edge));
+                await indexPhoto(uri, mtimeOf(edge), takenOf(edge));
 
                 totalProcessed++;
                 onProgress(totalProcessed, uri);
@@ -338,11 +395,14 @@ export const backfillEmbeddings = async (
     let added = 0;
     let beforeId = Number.MAX_SAFE_INTEGER;
     let failuresBeforeFirstSuccess = 0;
+    let encoderUnavailable = false;
     try {
-        outer: while (!cancelRef?.current) {
+        while (!cancelRef?.current) {
             const batch = getImagesMissingEmbeddings(BACKFILL_BATCH_SIZE, beforeId);
             if (batch.length === 0) break;
             for (const row of batch) {
+                if (cancelRef?.current) break;
+                if (!isQuiet()) await waitForQuiet(() => !!cancelRef?.current);
                 if (cancelRef?.current) break;
                 beforeId = row.id;
                 const outcome = await embedPhoto(row.filePath, row.id);
@@ -350,9 +410,11 @@ export const backfillEmbeddings = async (
                     added++;
                 } else if (added === 0 && ++failuresBeforeFirstSuccess >= BACKFILL_GIVE_UP_AFTER) {
                     AppLogger.warn('Backfill', 'Image encoder unavailable, skipping backfill for now.');
-                    break outer;
+                    encoderUnavailable = true;
+                    break;
                 }
             }
+            if (encoderUnavailable) break;
             await sleep(BACKFILL_SLEEP_MS);
         }
         if (added > 0) AppLogger.info('Backfill', `Added embeddings to ${added} photos.`);

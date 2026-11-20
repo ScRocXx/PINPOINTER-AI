@@ -6,7 +6,7 @@
  *   Phase 2: Native Text Check    (RNFS.read + BT/ET heuristic, early exit for digital PDFs)
  *   Phase 3: Page Rasterization   (NativePdfModule.rasterizePages)
  *   Phase 4: AI Intelligence      (analyzeImage from VisionPipeline — mocked here)
- *   Phase 5: Search Indexing      (classify → mask → soundex → indexDocument)
+ *   Phase 5: Search Indexing      (classify → mask → indexDocument)
  *
  * Strategy:
  *   - NativePdfModule is stubbed in jest.setup.js; per-test behavior via mockResolvedValue.
@@ -173,14 +173,15 @@ describe('Digital PDF — early exit at Phase 2', () => {
         expect(result.smartTitle.length).toBeGreaterThan(0);
     });
 
-    test('applies soundex enrichment even on the early-exit path', async () => {
+    test('stores the words without Soundex codes (indexDocument puts those in the hidden tail)', async () => {
         rnfsRead.mockResolvedValue(digitalPdfBytes(INVOICE_TEXT));
 
         await processPDF(PDF_PATH);
 
         const indexedContent = String(indexSpy.mock.calls[0][1]);
-        expect(indexedContent).toContain(soundex('invoice'));
-        expect(indexedContent).toContain(soundex('total'));
+        expect(indexedContent.toLowerCase()).toContain('invoice');
+        expect(indexedContent).not.toContain(soundex('invoice'));
+        expect(indexedContent).not.toContain(soundex('total'));
     });
 
     test('truncates native text to the 2000-char total cap', async () => {
@@ -287,9 +288,10 @@ describe('Scanned PDF — rasterize + OCR path', () => {
         await processPDF(PDF_PATH);
 
         expect(analyzeImage).toHaveBeenCalledTimes(3);
-        expect(analyzeImage).toHaveBeenNthCalledWith(1, 'file:///tmp/p1.jpg');
-        expect(analyzeImage).toHaveBeenNthCalledWith(2, 'file:///tmp/p2.jpg');
-        expect(analyzeImage).toHaveBeenNthCalledWith(3, 'file:///tmp/p3.jpg');
+        // Words only: a PDF page never gets a CLIP vector.
+        expect(analyzeImage).toHaveBeenNthCalledWith(1, 'file:///tmp/p1.jpg', { embed: false });
+        expect(analyzeImage).toHaveBeenNthCalledWith(2, 'file:///tmp/p2.jpg', { embed: false });
+        expect(analyzeImage).toHaveBeenNthCalledWith(3, 'file:///tmp/p3.jpg', { embed: false });
     });
 
     test('combines per-page OCR content and reports OCR_COMPLETE', async () => {

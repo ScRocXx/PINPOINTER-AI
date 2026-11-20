@@ -18,7 +18,6 @@ import ImageLabeling from '@react-native-ml-kit/image-labeling';
 import ImageResizer from 'react-native-image-resizer';
 import RNFS from 'react-native-fs';
 import { analyzeImage } from '../VisionPipeline';
-import { soundexAll } from '../Soundex';
 
 // ─── Mock handles ────────────────────────────────────────────────────────────
 const recognizeMock = TextRecognition.recognize as jest.Mock;
@@ -83,13 +82,13 @@ describe('VisionPipeline — analyzeImage', () => {
             expect(labelMock).not.toHaveBeenCalled();
         });
 
-        test('search_index holds words + soundex codes, content is space-joined', async () => {
+        test('content is only the words read: no Soundex codes in what is shown or copied', async () => {
             setOCR('Hello World');
             const result = await analyzeImage(IMG);
 
-            // soundex('Hello')='H400', soundex('World')='W643' (verified against Soundex.ts)
-            expect(result.search_index).toEqual(['Hello', 'World', 'H400', 'W643']);
-            expect(result.content).toBe('Hello World H400 W643');
+            // The codes are added to the hidden search tail at index time (SearchKeys).
+            expect(result.search_index).toEqual(['Hello', 'World']);
+            expect(result.content).toBe('Hello World');
         });
 
         test('embedding is a Float32Array when MobileCLIP encoding succeeds', async () => {
@@ -126,7 +125,7 @@ describe('VisionPipeline — analyzeImage', () => {
 
             expect(result.detection_type).toBe('TEXT');
             expect(result.raw_text).toBe('Hello World');
-            expect(result.search_index).toEqual(['Hello', 'World', 'H400', 'W643']);
+            expect(result.search_index).toEqual(['Hello', 'World']);
         });
 
         test('latin + hindi texts are joined with a single space', async () => {
@@ -159,16 +158,15 @@ describe('VisionPipeline — analyzeImage', () => {
             expect(result.content).toBe('नमस्ते दुनिया');
         });
 
-        test('soundex is generated only for Latin words, not Devanagari', async () => {
+        test('Latin and Devanagari words are kept as read', async () => {
             setOCR('Hello', 'नमस्ते');
             const result = await analyzeImage(IMG);
 
-            // 'नमस्ते' must not contribute any soundex code
-            expect(result.search_index).toEqual(['Hello', 'नमस्ते', 'H400']);
-            expect(result.content).toBe('Hello नमस्ते H400');
+            expect(result.search_index).toEqual(['Hello', 'नमस्ते']);
+            expect(result.content).toBe('Hello नमस्ते');
         });
 
-        test('alphanumeric words (e.g. Invoice123) are excluded from soundex', async () => {
+        test('alphanumeric words (e.g. Invoice123) are kept as one word', async () => {
             setOCR('Invoice123');
             const result = await analyzeImage(IMG);
 
@@ -186,12 +184,11 @@ describe('VisionPipeline — analyzeImage', () => {
             expect(labelMock).not.toHaveBeenCalled();
         });
 
-        test('soundex codes in search_index match soundexAll for the latin words', async () => {
+        test('search_index is the words, in order', async () => {
             setOCR('Electricity Bill Receipt');
             const result = await analyzeImage(IMG);
-            const words = ['Electricity', 'Bill', 'Receipt'];
 
-            expect(result.search_index).toEqual([...words, ...soundexAll(words.join(' '))]);
+            expect(result.search_index).toEqual(['Electricity', 'Bill', 'Receipt']);
         });
     });
 
@@ -320,8 +317,8 @@ describe('VisionPipeline — analyzeImage', () => {
 
             expect(result.detection_type).toBe('OBJECT');
             expect(result.raw_text).toBe('Coffee, Cup');
-            expect(result.search_index).toEqual([...labels, ...soundexAll(labels.join(' '))]);
-            expect(result.content).toBe([...labels, ...soundexAll(labels.join(' '))].join(' '));
+            expect(result.search_index).toEqual(labels);
+            expect(result.content).toBe('Coffee Cup');
             expect(result.optimized_status).toBe('Object_Detection_Bypassed: False');
             expect(result.embedding).toBeInstanceOf(Float32Array);
         });
@@ -403,7 +400,17 @@ describe('VisionPipeline — analyzeImage', () => {
 
             expect(result.detection_type).toBe('TEXT');
             expect(result.embedding).toBeNull();
-            expect(result.search_index).toEqual(['Hello', 'World', 'H400', 'W643']);
+            expect(result.search_index).toEqual(['Hello', 'World']);
+        });
+
+        test('embed: false reads the words and never runs CLIP (PDF pages, Scan)', async () => {
+            setOCR('Hello World');
+            const result = await analyzeImage(IMG, { embed: false });
+
+            expect(result.detection_type).toBe('TEXT');
+            expect(result.raw_text).toBe('Hello World');
+            expect(result.embedding).toBeNull();
+            expect(encodeImageNative).not.toHaveBeenCalled();
         });
 
         test('ImageResizer rejects → soft fail: continues with original URI', async () => {
@@ -516,5 +523,64 @@ describe('VisionPipeline — analyzeImage', () => {
             expect(ra.search_index).not.toContain('Beta');
             expect(rb.search_index).not.toContain('Alpha');
         });
+    });
+});
+
+describe('analyzeImage — one decode with the native PhotoReader', () => {
+    const readText = jest.fn();
+    beforeEach(async () => {
+        jest.requireActual('../ScriptPlanner').__resetScriptPlanner();
+        (NativeModules as Record<string, unknown>).PhotoReader = { readText };
+        readText.mockReset();
+    });
+    afterEach(() => {
+        delete (NativeModules as Record<string, unknown>).PhotoReader;
+    });
+
+    it('reads the original once: no resized copy, CLIP gets the original too', async () => {
+        readText.mockResolvedValue({ results: [{ script: 'latin', text: 'Electricity bill amount 1240' }, { script: 'devanagari', text: '' }] });
+        const result = await analyzeImage(IMG);
+        expect(resizeMock).not.toHaveBeenCalled();
+        expect(recognizeMock).not.toHaveBeenCalled();
+        expect(readText).toHaveBeenCalledWith(IMG, expect.objectContaining({ scripts: ['latin', 'devanagari'], labelBelowChars: 20 }));
+        expect(encodeImageNative).toHaveBeenCalledWith(IMG);
+        expect(result.detection_type).toBe('TEXT');
+        expect(result.raw_text).toBe('Electricity bill amount 1240');
+    });
+
+    it('skips CLIP with embed: false', async () => {
+        readText.mockResolvedValue({ results: [{ script: 'latin', text: 'Electricity bill amount 1240' }] });
+        const result = await analyzeImage(IMG, { embed: false });
+        expect(encodeImageNative).not.toHaveBeenCalled();
+        expect(result.embedding).toBeNull();
+        expect(result.raw_text).toBe('Electricity bill amount 1240');
+    });
+
+    it('keeps only the Hindi lines of the Devanagari pass, so English is not stored twice', async () => {
+        readText.mockResolvedValue({
+            results: [
+                { script: 'latin', text: 'Electricity bill' },
+                { script: 'devanagari', text: 'बिजली बिल\nElectricity bill', lines: [{ text: 'बिजली बिल' }, { text: 'Electricity bill' }] },
+            ],
+        });
+        const result = await analyzeImage(IMG);
+        expect(result.raw_text).toBe('Electricity bill बिजली बिल');
+    });
+
+    it('uses the labels it made from the same bitmap, never ML Kit\'s full-size file loader', async () => {
+        readText.mockResolvedValue({ results: [{ script: 'latin', text: '' }, { script: 'devanagari', text: '' }], labels: [{ text: 'Dog', confidence: 0.9 }] });
+        const result = await analyzeImage(IMG);
+        expect(labelMock).not.toHaveBeenCalled();
+        expect(result.detection_type).toBe('OBJECT');
+        expect(result.raw_text).toBe('Dog');
+    });
+
+    it('falls back to the old path when PhotoReader fails', async () => {
+        readText.mockRejectedValue(new Error('decode failed'));
+        setResizedUri(RESIZED);
+        setOCR('Bill text here');
+        const result = await analyzeImage(IMG);
+        expect(resizeMock).toHaveBeenCalled();
+        expect(result.raw_text).toBe('Bill text here');
     });
 });

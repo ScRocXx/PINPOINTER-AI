@@ -45,6 +45,12 @@ describe('matchTermsIn', () => {
     expect(matchTermsIn('Aadhaar card front', 'aadh')).toEqual(['Aadhaar']);
   });
 
+  test('filler words and "photo of" are not marked or offered as other spellings', () => {
+    expect(matchTermsIn('Photo of the office', 'photo of biryani')).toEqual([]);
+    expect(matchTermsIn('biryani order of today', 'photo of biryani')).toEqual(['biryani']);
+    expect(alsoSearchedAs('photo of biryani')).toEqual([]);
+  });
+
   test('finds the same word in Hindi for a Roman query (sound)', () => {
     expect(matchTermsIn('भारत सरकार आधार कार्ड', 'aadhaar')).toContain('आधार');
   });
@@ -71,6 +77,32 @@ describe('matchTermsIn', () => {
   test('digits match the masked number they end', () => {
     expect(matchTermsIn('Aadhaar ****-****-4821', '4821')).toEqual(['4821']);
   });
+});
+
+describe('matchTermsIn — the English gloss of a Hindi word', () => {
+    it('marks कमल for "lotus": search found it through the gloss in the tail', () => {
+        expect(matchTermsIn('कमल का फूल', 'lotus')).toEqual(['कमल']);
+    });
+
+    it('marks nothing when the gloss does not match', () => {
+        expect(matchTermsIn('कमल', 'river')).toEqual([]);
+    });
+});
+
+describe('matchTermsIn — words OCR misread', () => {
+    it('marks the misread word when nothing matched outright', () => {
+        expect(matchTermsIn('rnedicine twice a day', 'medicine')).toEqual(['rnedicine']);
+        expect(matchTermsIn('मुगतान रसीद', 'भुगतान')).toEqual(['मुगतान']);
+        expect(matchTermsIn('मुगतान रसीद', 'bhugtan')).toEqual(['मुगतान']);
+    });
+
+    it('marks only exact, sound and meaning matches when there are any', () => {
+        expect(matchTermsIn('medicine and rnedicine', 'medicine')).toEqual(['medicine']);
+    });
+
+    it('marks nothing unrelated', () => {
+        expect(matchTermsIn('train ticket', 'medicine')).toEqual([]);
+    });
 });
 
 describe('snippetFrom', () => {

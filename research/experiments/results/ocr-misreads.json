@@ -1,0 +1,944 @@
+{
+ "recallAllHindi": {
+  "current": {
+   "matra": [
+    2137,
+    2658
+   ],
+   "lookalike": [
+    782,
+    2168
+   ],
+   "split": [
+    55,
+    2126
+   ],
+   "conjunct": [
+    734,
+    740
+   ],
+   "diacritic": [
+    258,
+    516
+   ],
+   "unknown_kha": [
+    0,
+    140
+   ]
+  },
+  "shapeKey": {
+   "matra": [
+    2140,
+    2658
+   ],
+   "lookalike": [
+    2148,
+    2168
+   ],
+   "split": [
+    55,
+    2126
+   ],
+   "conjunct": [
+    740,
+    740
+   ],
+   "diacritic": [
+    516,
+    516
+   ],
+   "unknown_kha": [
+    140,
+    140
+   ]
+  },
+  "shapeSkeleton": {
+   "matra": [
+    2651,
+    2658
+   ],
+   "lookalike": [
+    2140,
+    2168
+   ],
+   "split": [
+    55,
+    2126
+   ],
+   "conjunct": [
+    740,
+    740
+   ],
+   "diacritic": [
+    509,
+    516
+   ],
+   "unknown_kha": [
+    140,
+    140
+   ]
+  },
+  "expansion": {
+   "matra": [
+    2658,
+    2658
+   ],
+   "lookalike": [
+    2168,
+    2168
+   ],
+   "split": [
+    55,
+    2126
+   ],
+   "conjunct": [
+    740,
+    740
+   ],
+   "diacritic": [
+    516,
+    516
+   ],
+   "unknown_kha": [
+    0,
+    140
+   ]
+  },
+  "soundKeyEdit1": {
+   "matra": [
+    2471,
+    2658
+   ],
+   "lookalike": [
+    1917,
+    2168
+   ],
+   "split": [
+    306,
+    2126
+   ],
+   "conjunct": [
+    734,
+    740
+   ],
+   "diacritic": [
+    430,
+    516
+   ],
+   "unknown_kha": [
+    14,
+    140
+   ]
+  },
+  "foldedKey": {
+   "matra": [
+    2137,
+    2658
+   ],
+   "lookalike": [
+    1449,
+    2168
+   ],
+   "split": [
+    64,
+    2126
+   ],
+   "conjunct": [
+    734,
+    740
+   ],
+   "diacritic": [
+    341,
+    516
+   ],
+   "unknown_kha": [
+    0,
+    140
+   ]
+  },
+  "tolerant": {
+   "matra": [
+    2658,
+    2658
+   ],
+   "lookalike": [
+    2168,
+    2168
+   ],
+   "split": [
+    2126,
+    2126
+   ],
+   "conjunct": [
+    740,
+    740
+   ],
+   "diacritic": [
+    516,
+    516
+   ],
+   "unknown_kha": [
+    140,
+    140
+   ]
+  },
+  "current|hinglish": {
+   "matra": [
+    2137,
+    2658
+   ],
+   "lookalike": [
+    782,
+    2168
+   ],
+   "split": [
+    55,
+    2126
+   ],
+   "conjunct": [
+    734,
+    740
+   ],
+   "diacritic": [
+    258,
+    516
+   ],
+   "unknown_kha": [
+    0,
+    140
+   ]
+  },
+  "shapeKey|hinglish": {
+   "matra": [
+    2137,
+    2658
+   ],
+   "lookalike": [
+    782,
+    2168
+   ],
+   "split": [
+    55,
+    2126
+   ],
+   "conjunct": [
+    734,
+    740
+   ],
+   "diacritic": [
+    258,
+    516
+   ],
+   "unknown_kha": [
+    0,
+    140
+   ]
+  },
+  "shapeSkeleton|hinglish": {
+   "matra": [
+    2137,
+    2658
+   ],
+   "lookalike": [
+    782,
+    2168
+   ],
+   "split": [
+    55,
+    2126
+   ],
+   "conjunct": [
+    734,
+    740
+   ],
+   "diacritic": [
+    258,
+    516
+   ],
+   "unknown_kha": [
+    0,
+    140
+   ]
+  },
+  "expansion|hinglish": {
+   "matra": [
+    2137,
+    2658
+   ],
+   "lookalike": [
+    782,
+    2168
+   ],
+   "split": [
+    55,
+    2126
+   ],
+   "conjunct": [
+    734,
+    740
+   ],
+   "diacritic": [
+    258,
+    516
+   ],
+   "unknown_kha": [
+    0,
+    140
+   ]
+  },
+  "soundKeyEdit1|hinglish": {
+   "matra": [
+    2471,
+    2658
+   ],
+   "lookalike": [
+    1917,
+    2168
+   ],
+   "split": [
+    306,
+    2126
+   ],
+   "conjunct": [
+    734,
+    740
+   ],
+   "diacritic": [
+    430,
+    516
+   ],
+   "unknown_kha": [
+    14,
+    140
+   ]
+  },
+  "foldedKey|hinglish": {
+   "matra": [
+    2145,
+    2658
+   ],
+   "lookalike": [
+    1084,
+    2168
+   ],
+   "split": [
+    60,
+    2126
+   ],
+   "conjunct": [
+    734,
+    740
+   ],
+   "diacritic": [
+    286,
+    516
+   ],
+   "unknown_kha": [
+    0,
+    140
+   ]
+  },
+  "tolerant|hinglish": {
+   "matra": [
+    2145,
+    2658
+   ],
+   "lookalike": [
+    1084,
+    2168
+   ],
+   "split": [
+    2126,
+    2126
+   ],
+   "conjunct": [
+    734,
+    740
+   ],
+   "diacritic": [
+    286,
+    516
+   ],
+   "unknown_kha": [
+    0,
+    140
+   ]
+  }
+ },
+ "recallDocHindi": {
+  "current": {
+   "matra": [
+    164,
+    210
+   ],
+   "lookalike": [
+    45,
+    190
+   ],
+   "split": [
+    0,
+    174
+   ],
+   "conjunct": [
+    76,
+    76
+   ],
+   "diacritic": [
+    21,
+    44
+   ],
+   "unknown_kha": [
+    0,
+    10
+   ]
+  },
+  "shapeKey": {
+   "matra": [
+    165,
+    210
+   ],
+   "lookalike": [
+    187,
+    190
+   ],
+   "split": [
+    0,
+    174
+   ],
+   "conjunct": [
+    76,
+    76
+   ],
+   "diacritic": [
+    44,
+    44
+   ],
+   "unknown_kha": [
+    10,
+    10
+   ]
+  },
+  "shapeSkeleton": {
+   "matra": [
+    210,
+    210
+   ],
+   "lookalike": [
+    187,
+    190
+   ],
+   "split": [
+    0,
+    174
+   ],
+   "conjunct": [
+    76,
+    76
+   ],
+   "diacritic": [
+    44,
+    44
+   ],
+   "unknown_kha": [
+    10,
+    10
+   ]
+  },
+  "expansion": {
+   "matra": [
+    210,
+    210
+   ],
+   "lookalike": [
+    190,
+    190
+   ],
+   "split": [
+    0,
+    174
+   ],
+   "conjunct": [
+    76,
+    76
+   ],
+   "diacritic": [
+    44,
+    44
+   ],
+   "unknown_kha": [
+    0,
+    10
+   ]
+  },
+  "soundKeyEdit1": {
+   "matra": [
+    203,
+    210
+   ],
+   "lookalike": [
+    172,
+    190
+   ],
+   "split": [
+    18,
+    174
+   ],
+   "conjunct": [
+    76,
+    76
+   ],
+   "diacritic": [
+    37,
+    44
+   ],
+   "unknown_kha": [
+    0,
+    10
+   ]
+  },
+  "foldedKey": {
+   "matra": [
+    164,
+    210
+   ],
+   "lookalike": [
+    116,
+    190
+   ],
+   "split": [
+    0,
+    174
+   ],
+   "conjunct": [
+    76,
+    76
+   ],
+   "diacritic": [
+    35,
+    44
+   ],
+   "unknown_kha": [
+    0,
+    10
+   ]
+  },
+  "tolerant": {
+   "matra": [
+    210,
+    210
+   ],
+   "lookalike": [
+    190,
+    190
+   ],
+   "split": [
+    174,
+    174
+   ],
+   "conjunct": [
+    76,
+    76
+   ],
+   "diacritic": [
+    44,
+    44
+   ],
+   "unknown_kha": [
+    10,
+    10
+   ]
+  },
+  "current|hinglish": {
+   "matra": [
+    164,
+    210
+   ],
+   "lookalike": [
+    45,
+    190
+   ],
+   "split": [
+    0,
+    174
+   ],
+   "conjunct": [
+    76,
+    76
+   ],
+   "diacritic": [
+    21,
+    44
+   ],
+   "unknown_kha": [
+    0,
+    10
+   ]
+  },
+  "shapeKey|hinglish": {
+   "matra": [
+    164,
+    210
+   ],
+   "lookalike": [
+    45,
+    190
+   ],
+   "split": [
+    0,
+    174
+   ],
+   "conjunct": [
+    76,
+    76
+   ],
+   "diacritic": [
+    21,
+    44
+   ],
+   "unknown_kha": [
+    0,
+    10
+   ]
+  },
+  "shapeSkeleton|hinglish": {
+   "matra": [
+    164,
+    210
+   ],
+   "lookalike": [
+    45,
+    190
+   ],
+   "split": [
+    0,
+    174
+   ],
+   "conjunct": [
+    76,
+    76
+   ],
+   "diacritic": [
+    21,
+    44
+   ],
+   "unknown_kha": [
+    0,
+    10
+   ]
+  },
+  "expansion|hinglish": {
+   "matra": [
+    164,
+    210
+   ],
+   "lookalike": [
+    45,
+    190
+   ],
+   "split": [
+    0,
+    174
+   ],
+   "conjunct": [
+    76,
+    76
+   ],
+   "diacritic": [
+    21,
+    44
+   ],
+   "unknown_kha": [
+    0,
+    10
+   ]
+  },
+  "soundKeyEdit1|hinglish": {
+   "matra": [
+    203,
+    210
+   ],
+   "lookalike": [
+    172,
+    190
+   ],
+   "split": [
+    18,
+    174
+   ],
+   "conjunct": [
+    76,
+    76
+   ],
+   "diacritic": [
+    37,
+    44
+   ],
+   "unknown_kha": [
+    0,
+    10
+   ]
+  },
+  "foldedKey|hinglish": {
+   "matra": [
+    164,
+    210
+   ],
+   "lookalike": [
+    76,
+    190
+   ],
+   "split": [
+    0,
+    174
+   ],
+   "conjunct": [
+    76,
+    76
+   ],
+   "diacritic": [
+    24,
+    44
+   ],
+   "unknown_kha": [
+    0,
+    10
+   ]
+  },
+  "tolerant|hinglish": {
+   "matra": [
+    164,
+    210
+   ],
+   "lookalike": [
+    76,
+    190
+   ],
+   "split": [
+    174,
+    174
+   ],
+   "conjunct": [
+    76,
+    76
+   ],
+   "diacritic": [
+    24,
+    44
+   ],
+   "unknown_kha": [
+    0,
+    10
+   ]
+  }
+ },
+ "recallEnglish": {
+  "current": {
+   "glyph": [
+    8,
+    204
+   ],
+   "split": [
+    0,
+    186
+   ]
+  },
+  "shapeKey": {
+   "glyph": [
+    203,
+    204
+   ],
+   "split": [
+    0,
+    186
+   ]
+  },
+  "shapeSkeleton": {
+   "glyph": [
+    203,
+    204
+   ],
+   "split": [
+    0,
+    186
+   ]
+  },
+  "expansion": {
+   "glyph": [
+    204,
+    204
+   ],
+   "split": [
+    0,
+    186
+   ]
+  },
+  "soundKeyEdit1": {
+   "glyph": [
+    102,
+    204
+   ],
+   "split": [
+    46,
+    186
+   ]
+  },
+  "foldedKey": {
+   "glyph": [
+    188,
+    204
+   ],
+   "split": [
+    2,
+    186
+   ]
+  },
+  "tolerant": {
+   "glyph": [
+    204,
+    204
+   ],
+   "split": [
+    186,
+    186
+   ]
+  }
+ },
+ "falseMatches": {
+  "current": {
+   "hiMean": 6.401709401709402,
+   "hiAny": 0.8290598290598291,
+   "enMean": 3.463768115942029,
+   "enAny": 0.9420289855072463
+  },
+  "shapeKey": {
+   "hiMean": 6.487179487179487,
+   "hiAny": 0.8290598290598291,
+   "enMean": 3.5217391304347827,
+   "enAny": 0.9420289855072463
+  },
+  "shapeSkeleton": {
+   "hiMean": 11.2991452991453,
+   "hiAny": 0.9145299145299145,
+   "enMean": 3.5217391304347827,
+   "enAny": 0.9420289855072463
+  },
+  "expansion": {
+   "hiMean": 6.564102564102564,
+   "hiAny": 0.8461538461538461,
+   "enMean": 3.4782608695652173,
+   "enAny": 0.9420289855072463
+  },
+  "soundKeyEdit1": {
+   "hiMean": 47.11965811965812,
+   "hiAny": 0.9914529914529915,
+   "enMean": 16.63768115942029,
+   "enAny": 0.9855072463768116
+  },
+  "foldedKey": {
+   "hiMean": 7.435897435897436,
+   "hiAny": 0.8547008547008547,
+   "enMean": 5.681159420289855,
+   "enAny": 0.9420289855072463
+  },
+  "tolerant": {
+   "hiMean": 7.6068376068376065,
+   "hiAny": 0.8717948717948718,
+   "enMean": 5.72463768115942,
+   "enAny": 0.9420289855072463
+  }
+ },
+ "joinFalsePer1000Docs": 0.002849002849002849,
+ "sizes": {
+  "hiTargets": 1463,
+  "docHi": 117,
+  "docEn": 69,
+  "hiVocab": 23914,
+  "enVocab": 20000
+ },
+ "examples": [
+  {
+   "w": "बिजली",
+   "roman": "bijalee",
+   "key": "bijli",
+   "shape": "बिजलि",
+   "skeleton": "बजल"
+  },
+  {
+   "w": "बिल",
+   "roman": "bil",
+   "key": "bil",
+   "shape": "बिल",
+   "skeleton": "बल"
+  },
+  {
+   "w": "राशि",
+   "roman": "raashi",
+   "key": "rsi",
+   "shape": "राशि",
+   "skeleton": "रश"
+  },
+  {
+   "w": "भुगतान",
+   "roman": "bhugataan",
+   "key": "bugtn",
+   "shape": "मुगतान",
+   "skeleton": "मगतन"
+  },
+  {
+   "w": "देय",
+   "roman": "dey",
+   "key": "di",
+   "shape": "देय",
+   "skeleton": "दय"
+  },
+  {
+   "w": "तिथि",
+   "roman": "tithi",
+   "key": "titi",
+   "shape": "तियि",
+   "skeleton": "तय"
+  },
+  {
+   "w": "उपभोक्ता",
+   "roman": "upabhoktaa",
+   "key": "upbokt",
+   "shape": "उपमोकता",
+   "skeleton": "उपमकत"
+  },
+  {
+   "w": "संख्या",
+   "roman": "sankhyaa",
+   "key": "snky",
+   "shape": "सखया",
+   "skeleton": "सखय"
+  },
+  {
+   "w": "मीटर",
+   "roman": "meetar",
+   "key": "mitr",
+   "shape": "मितर",
+   "skeleton": "मतर"
+  },
+  {
+   "w": "यूनिट",
+   "roman": "yoonit",
+   "key": "yunit",
+   "shape": "युनित",
+   "skeleton": "यनत"
+  },
+  {
+   "w": "खपत",
+   "roman": "khapat",
+   "key": "kpt",
+   "shape": "खपत",
+   "skeleton": "खपत"
+  },
+  {
+   "w": "शुल्क",
+   "roman": "shulk",
+   "key": "sulk",
+   "shape": "शुलक",
+   "skeleton": "शलक"
+  }
+ ]
+}

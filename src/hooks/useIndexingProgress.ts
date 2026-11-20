@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { IndexingService, IndexingSnapshot, JobKind } from '../services/IndexingService';
 import { getReadyCounts, ReadyCounts } from '../database';
 import { getGalleryTotalCount } from '../utils/GallerySync';
@@ -145,5 +145,7 @@ export const useIndexingProgress = (recountKey?: unknown): IndexingProgress => {
       .catch(e => AppLogger.warn('IndexingProgress', 'Could not count photos', e));
   }, [galleryBusy, recountKey]);
 
-  return toIndexingProgress(snapshot, counts, photoTotal);
+  // One object while nothing shown changes, so memoized screens (Home,
+  // the Photos header) skip renders between ticks.
+  return useMemo(() => toIndexingProgress(snapshot, counts, photoTotal), [snapshot, counts, photoTotal]);
 };

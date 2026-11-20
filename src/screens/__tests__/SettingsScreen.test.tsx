@@ -6,7 +6,15 @@ import { LanguageProvider, LANGUAGE_STORAGE_KEY, en, hi } from '../../i18n';
 import { version } from '../../../package.json';
 import { DocumentAccessApi, PhotoAccessApi } from '../../hooks/useStorageAccess';
 
-const mockModels = { isSTTLoaded: true, isSTTLoading: false, downloadAndLoadSTT: jest.fn(async () => {}) };
+// `voice` is what the screens read; the two flags describe the model behind it.
+const mockModels = {
+  isSTTLoaded: true,
+  isSTTLoading: false,
+  downloadAndLoadSTT: jest.fn(async () => {}),
+  get voice(): 'ready' | 'loading' | 'off' {
+    return this.isSTTLoaded ? 'ready' : this.isSTTLoading ? 'loading' : 'off';
+  },
+};
 jest.mock('../../services/ModelService', () => ({ useModelService: () => mockModels }));
 
 const mockPhotos: PhotoAccessApi = {
@@ -48,6 +56,13 @@ beforeEach(() => {
 });
 
 describe('SettingsScreen', () => {
+  it('credits the speech models and the font', async () => {
+    await renderSettings();
+    expect(screen.getByText(en['settings.credits'])).toBeTruthy();
+    expect(screen.getByText(en['settings.creditsBody'])).toBeTruthy();
+    expect(en['settings.creditsBody']).toMatch(/indic-lekhan.*CC BY 4\.0/);
+  });
+
   it('shows privacy and the version in plain words', async () => {
     await renderSettings();
     expect(screen.getByRole('header', { name: en['settings.title'] })).toBeTruthy();

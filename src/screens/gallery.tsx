@@ -32,12 +32,13 @@ import { PhotoViewer, ViewerItem } from '../components/PhotoViewer';
 import { Colors, GUTTER, Radius, Space } from '../theme';
 import { StringKey, formatDay, formatMonth, formatWhen, useStrings } from '../i18n';
 import { RootStackParamList } from '../navigation/types';
-import { usePinpointerShared } from '../hooks/PinpointerContext';
+import { type PinpointerState, usePinpointerShared } from '../hooks/PinpointerContext';
 import { usePinnedItems } from '../hooks/usePinnedItems';
 import { useScreenFocus } from '../hooks/useScreenFocus';
 import { useIndexingProgress } from '../hooks/useIndexingProgress';
 import { usePhotoAccess } from '../hooks/useStorageAccess';
 import { addRecentPhoto } from '../utils/RecentPhotos';
+import { noteInteraction } from '../services/InteractionGate';
 import { AppLogger } from '../utils/AppLogger';
 import {
   DateFilter,
@@ -48,7 +49,7 @@ import {
   groupIntoSections,
   inWindow,
 } from '../utils/PhotoDates';
-import { ensurePhotoAccess } from '../utils/StoragePermissions';
+import { type PhotoAccess, ensurePhotoAccess } from '../utils/StoragePermissions';
 
 /** The chips above the grid. */
 export type PhotoFilter = DateFilter | 'screenshots' | 'important';
@@ -99,6 +100,180 @@ interface GridSection {
   data: GalleryPhoto[][];
 }
 
+/** What the Photos header needs from shared state: pause and resume. */
+const selectGallerySync = (s: PinpointerState) => ({
+  isPaused: s.isPaused,
+  handlePauseSync: s.handlePauseSync,
+  handleResumeSync: s.handleResumeSync,
+});
+
+/** The screen itself only opens search; it never redraws for indexing. */
+const selectGalleryScreen = (s: PinpointerState) => ({
+  setIsSearching: s.setIsSearching,
+});
+
+interface GalleryHeaderProps {
+  filter: PhotoFilter;
+  access: PhotoAccess | null;
+  onFilter: (filter: PhotoFilter) => void;
+  onAllowAll: () => void;
+  onSearch: () => void;
+}
+
+/**
+ * Title, indexing progress, the "only some photos" note and the chips. It
+ * reads indexing progress itself, so a photo finishing redraws this header
+ * and not the grid under it.
+ */
+const GalleryHeader: React.FC<GalleryHeaderProps> = React.memo(({ filter, access, onFilter, onAllowAll, onSearch }) => {
+  const { t } = useStrings();
+  const { isPaused, handlePauseSync, handleResumeSync } = usePinpointerShared(selectGallerySync);
+  // How many photos are ready, and whether more are being got ready now,
+  // whoever started that (this app, the first run, the charging-time job).
+  const progress = useIndexingProgress(access);
+  const running = progress.photos.running;
+  const ready = progress.photos.done;
+  const total = progress.photos.total;
+  const readyText =
+    total !== null && total > ready
+      ? t('progress.countShort', { done: ready, total })
+      : t('gallery.readyCount', { n: ready });
+  return (
+    <View>
+      <ScreenHeader
+        title={t('gallery.title')}
+        subtitle={ready > 0 ? t('gallery.readyCount', { n: ready }) : undefined}
+        actions={
+          <IconButton
+            icon="search"
+            label={t('gallery.search')}
+            variant="tonal"
+            onPress={onSearch}
+            testID="gallery-search"
+          />
+        }
+      />
+
+      {running || isPaused ? (
+        <ProgressCard
+          title={t('progress.photosTitle')}
+          detail={readyText}
+          value={total !== null && total > 0 ? Math.min(1, ready / total) : undefined}
+          state={running ? 'running' : 'paused'}
+          actionLabel={t(running ? 'progress.pause' : 'progress.resume')}
+          onAction={running ? handlePauseSync : handleResumeSync}
+          note={t('progress.keepsGoing')}
+          style={styles.gutter}
+          testID="gallery-progress"
+        />
+      ) : null}
+
+      {access === 'limited' ? (
+        <Card style={[styles.gutter, styles.banner]} testID="gallery-limited">
+          <View style={styles.bannerRow}>
+            <View style={styles.bannerIcon}>
+              <Icon name="photos" size={24} color={Colors.importantInk} strokeWidth={2} />
+            </View>
+            <View style={styles.flex}>
+              <AppText variant="bodyStrong">{t('perm.limitedTitle')}</AppText>
+              <AppText variant="small" color="textSecondary">
+                {t('perm.limitedBody')}
+              </AppText>
+            </View>
+          </View>
+          <Button
+            label={t('perm.allowAll')}
+            onPress={onAllowAll}
+            variant="secondary"
+            size="compact"
+            style={styles.bannerAction}
+            testID="gallery-allow-all"
+          />
+        </Card>
+      ) : null}
+
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.chips}
+        accessibilityLabel={t('gallery.filters')}
+        testID="gallery-filters"
+      >
+        {FILTERS.map(f => (
+          <Chip
+            key={f.value}
+            label={t(f.label)}
+            icon={f.icon}
+            selected={filter === f.value}
+            onPress={() => onFilter(f.value)}
+            testID={`gallery-filter-${f.value}`}
+          />
+        ))}
+      </ScrollView>
+    </View>
+  );
+});
+GalleryHeader.displayName = 'GalleryHeader';
+
+interface GalleryRowProps {
+  row: GalleryPhoto[];
+  /** Each photo's place in the whole grid (viewer, stagger, test ids). */
+  indices: number[];
+  pinned: boolean[];
+  tile: number;
+  playKey: PhotoFilter;
+  onOpen: (uri: string) => void;
+  /** Spoken name for a photo taken at `takenAt`. */
+  label: (takenAt: number) => string;
+}
+
+/**
+ * Rows compare by what they show. SectionList hands its cells a new
+ * renderItem on every render, so without this every visible photo redrew
+ * whenever a page of photos arrived.
+ */
+export const sameGalleryRow = (a: GalleryRowProps, b: GalleryRowProps): boolean =>
+  a.tile === b.tile &&
+  a.playKey === b.playKey &&
+  a.onOpen === b.onOpen &&
+  a.label === b.label &&
+  a.row.length === b.row.length &&
+  a.row.every(
+    (p, i) =>
+      p.uri === b.row[i].uri &&
+      p.takenAt === b.row[i].takenAt &&
+      a.indices[i] === b.indices[i] &&
+      a.pinned[i] === b.pinned[i],
+  );
+
+const GalleryRow: React.FC<GalleryRowProps> = React.memo(({ row, indices, pinned, tile, playKey, onOpen, label }) => (
+  <View style={styles.row}>
+    {row.map((photo, k) => {
+      const i = indices[k];
+      return (
+        <Reveal key={photo.uri} index={i} playKey={playKey} distance={8}>
+          <PressableScale
+            onPress={() => onOpen(photo.uri)}
+            pressedScale={0.95}
+            accessibilityRole="button"
+            accessibilityLabel={label(photo.takenAt)}
+            style={{ width: tile, height: tile }}
+            testID={`gallery-photo-${i}`}
+          >
+            <Thumbnail uri={photo.uri} size={tile} radius={Radius.xs} iconWhileLoading={false} testID={`gallery-thumb-${i}`} />
+            {pinned[k] ? (
+              <View style={styles.starBadge} testID={`gallery-star-${i}`}>
+                <Icon name="star" size={16} color={Colors.important} fillColor={Colors.importantStar} filled strokeWidth={1.6} />
+              </View>
+            ) : null}
+          </PressableScale>
+        </Reveal>
+      );
+    })}
+  </View>
+), sameGalleryRow);
+GalleryRow.displayName = 'GalleryRow';
+
 /**
  * Photos: every photo on the phone, newest first, under Today, Yesterday,
  * the days of this week and then months. Chips narrow it to Today,
@@ -113,13 +288,10 @@ export const GalleryScreen: React.FC = () => {
   const focused = useScreenFocus();
   const { width } = useWindowDimensions();
   const { items: pinnedItems, isPinned } = usePinnedItems();
-  const { isPaused, handlePauseSync, handleResumeSync, setIsSearching } = usePinpointerShared();
+  const { setIsSearching } = usePinpointerShared(selectGalleryScreen);
   // Kept current: checked again whenever the person comes back to the app
   // (they may have just allowed photos in Settings).
   const { access, refresh: refreshAccess, openSettings } = usePhotoAccess();
-  // How many photos are ready, and whether more are being got ready now,
-  // whoever started that (this app, the first run, the charging-time job).
-  const progress = useIndexingProgress(access);
 
   const [filter, setFilter] = useState<PhotoFilter>('all');
   const [photos, setPhotos] = useState<GalleryPhoto[]>([]);
@@ -277,16 +449,21 @@ export const GalleryScreen: React.FC = () => {
   const indexOf = useMemo(() => new Map(shown.map((p, i) => [p.uri, i])), [shown]);
   const tile = Math.floor((width - GUTTER * 2 - GAP * (COLUMNS - 1)) / COLUMNS);
 
-  const openPhoto = useCallback(
-    (uri: string) => {
-      const i = indexOf.get(uri);
-      if (i === undefined) {
-        return;
-      }
-      setViewerIndex(i);
-      addRecentPhoto(uri);
-    },
-    [indexOf],
+  // Read through a ref, so every row keeps one onOpen while pages arrive.
+  const indexOfRef = useRef(indexOf);
+  indexOfRef.current = indexOf;
+  const openPhoto = useCallback((uri: string) => {
+    const i = indexOfRef.current.get(uri);
+    if (i === undefined) {
+      return;
+    }
+    setViewerIndex(i);
+    addRecentPhoto(uri);
+  }, []);
+
+  const photoLabel = useCallback(
+    (takenAt: number) => t('gallery.photoFrom', { when: formatWhen(t, ago, takenAt) }),
+    [ago, t],
   );
 
   const readText = useCallback(
@@ -313,13 +490,6 @@ export const GalleryScreen: React.FC = () => {
     navigation.navigate('Pinpointer');
   }, [navigation, setIsSearching]);
 
-  const ready = progress.photos.done;
-  const total = progress.photos.total;
-  const readyText =
-    total !== null && total > ready
-      ? t('progress.countShort', { done: ready, total })
-      : t('gallery.readyCount', { n: ready });
-
   const onRefresh = useCallback(() => {
     if (filter === 'important') {
       return;
@@ -332,107 +502,21 @@ export const GalleryScreen: React.FC = () => {
 
   const renderRow = useCallback(
     ({ item: row }: SectionListRenderItemInfo<GalleryPhoto[], GridSection>) => (
-      <View style={styles.row}>
-        {row.map(photo => {
-          const i = indexOf.get(photo.uri) ?? 0;
-          return (
-            <Reveal key={photo.uri} index={i} playKey={filter} distance={8}>
-              <PressableScale
-                onPress={() => openPhoto(photo.uri)}
-                pressedScale={0.95}
-                accessibilityRole="button"
-                accessibilityLabel={t('gallery.photoFrom', { when: formatWhen(t, ago, photo.takenAt) })}
-                style={{ width: tile, height: tile }}
-                testID={`gallery-photo-${i}`}
-              >
-                <Thumbnail uri={photo.uri} size={tile} radius={Radius.xs} testID={`gallery-thumb-${i}`} />
-                {isPinned(photo.uri) ? (
-                  <View style={styles.starBadge} testID={`gallery-star-${i}`}>
-                    <Icon name="star" size={16} color={Colors.important} fillColor={Colors.importantStar} filled strokeWidth={1.6} />
-                  </View>
-                ) : null}
-              </PressableScale>
-            </Reveal>
-          );
-        })}
-      </View>
+      <GalleryRow
+        row={row}
+        indices={row.map(p => indexOf.get(p.uri) ?? 0)}
+        pinned={row.map(p => isPinned(p.uri))}
+        tile={tile}
+        playKey={filter}
+        onOpen={openPhoto}
+        label={photoLabel}
+      />
     ),
-    [ago, filter, indexOf, isPinned, openPhoto, t, tile],
+    [filter, indexOf, isPinned, openPhoto, photoLabel, tile],
   );
 
   const header = (
-    <View>
-      <ScreenHeader
-        title={t('gallery.title')}
-        subtitle={ready > 0 ? t('gallery.readyCount', { n: ready }) : undefined}
-        actions={
-          <IconButton
-            icon="search"
-            label={t('gallery.search')}
-            variant="tonal"
-            onPress={openSearch}
-            testID="gallery-search"
-          />
-        }
-      />
-
-      {progress.photos.running || isPaused ? (
-        <ProgressCard
-          title={t('progress.photosTitle')}
-          detail={readyText}
-          value={total !== null && total > 0 ? Math.min(1, ready / total) : undefined}
-          state={progress.photos.running ? 'running' : 'paused'}
-          actionLabel={t(progress.photos.running ? 'progress.pause' : 'progress.resume')}
-          onAction={progress.photos.running ? handlePauseSync : handleResumeSync}
-          note={t('progress.keepsGoing')}
-          style={styles.gutter}
-          testID="gallery-progress"
-        />
-      ) : null}
-
-      {access === 'limited' ? (
-        <Card style={[styles.gutter, styles.banner]} testID="gallery-limited">
-          <View style={styles.bannerRow}>
-            <View style={styles.bannerIcon}>
-              <Icon name="photos" size={24} color={Colors.importantInk} strokeWidth={2} />
-            </View>
-            <View style={styles.flex}>
-              <AppText variant="bodyStrong">{t('perm.limitedTitle')}</AppText>
-              <AppText variant="small" color="textSecondary">
-                {t('perm.limitedBody')}
-              </AppText>
-            </View>
-          </View>
-          <Button
-            label={t('perm.allowAll')}
-            onPress={allowAllPhotos}
-            variant="secondary"
-            size="compact"
-            style={styles.bannerAction}
-            testID="gallery-allow-all"
-          />
-        </Card>
-      ) : null}
-
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.chips}
-        accessibilityLabel={t('gallery.filters')}
-        testID="gallery-filters"
-      >
-        {FILTERS.map(f => (
-          <Chip
-            key={f.value}
-            label={t(f.label)}
-            icon={f.icon}
-            selected={filter === f.value}
-            onPress={() => setFilter(f.value)}
-            testID={`gallery-filter-${f.value}`}
-          />
-        ))}
-      </ScrollView>
-    </View>
+    <GalleryHeader filter={filter} access={access} onFilter={setFilter} onAllowAll={allowAllPhotos} onSearch={openSearch} />
   );
 
   if (access === 'denied' || access === 'blocked') {
@@ -488,6 +572,8 @@ export const GalleryScreen: React.FC = () => {
     <Screen wash testID="gallery-screen">
       <SectionList
         sections={sections}
+        // Scrolling holds indexing back for a moment (see InteractionGate).
+        onScroll={noteInteraction}
         keyExtractor={row => row.map(p => p.uri).join('|')}
         renderItem={renderRow}
         renderSectionHeader={({ section }) =>
